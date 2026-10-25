@@ -337,6 +337,15 @@ protected:
                                    fitted.width(), fitted.height());
                 bgPainter.drawImage(target, videoImage);
             }
+            // The GPU composite contains an opaque video background, so
+            // QPainter::setOpacity() cannot fade only the Spectrum after the
+            // composite has been rendered. Apply the opacity to each bar/glow
+            // color before GPU rendering; leave the video background untouched.
+            const qreal spectrumOpacity = opacityPercent / 100.0;
+            for (QColor &gpuColor : gpuColors) {
+                gpuColor.setAlphaF(qBound(0.0, gpuColor.alphaF() * spectrumOpacity, 1.0));
+            }
+
             QImage gpuComposite;
             const bool gpuRendered = GpuRenderer::instance().renderColoredRects(
                 width(), height(), gpuRects, gpuColors, &gpuComposite, &gpuBackground);
