@@ -202,6 +202,15 @@ public:
     void setVisualMode(int mode) { visualMode = qBound(0, mode, 2); update(); }
     void setPosition(int x, int y) { positionX = qBound(0, x, 100); positionY = qBound(0, y, 100); update(); }
     void setOpacityPercent(int value) { opacityPercent = qBound(0, value, 100); update(); }
+    void setForceCpuFallback(bool enabled) { forceCpuFallback = enabled; update(); }
+    QString diagnosticsText() const
+    {
+        return QStringLiteral("Preview mode: %1\\nMeasured paint rate: %2 FPS\\n\\n%3")
+            .arg(forceCpuFallback ? QStringLiteral("CPU fallback (QPainter)")
+                                  : QStringLiteral("Hybrid GPU (D3D11 composite + readback)"))
+            .arg(measuredFps, 0, 'f', 1)
+            .arg(GpuRenderer::instance().diagnostics());
+    }
     void setScalePercent(int value) { scalePercent = qBound(20, value, 100); update(); }
     void setColumnCount(int value) { columnCount = qBound(8, value, 128); update(); }
     void setHeightPercent(int value) { heightPercent = qBound(10, value, 200); update(); }
@@ -261,6 +270,13 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override
     {
+        ++diagnosticFrameCount;
+        if (!diagnosticsClock.isValid()) diagnosticsClock.start();
+        else if (diagnosticsClock.elapsed() >= 1000) {
+            measuredFps = diagnosticFrameCount * 1000.0 / diagnosticsClock.elapsed();
+            diagnosticFrameCount = 0;
+            diagnosticsClock.restart();
+        }
         // Stability fix: do not present a D3D11 swap chain directly into this
         // Qt-owned widget HWND. On some Windows/Qt Multimedia configurations,
         // Qt repaints and the native swap chain compete for the same surface,
@@ -347,7 +363,7 @@ protected:
             }
 
             QImage gpuComposite;
-            const bool gpuRendered = GpuRenderer::instance().renderColoredRects(
+            const bool gpuRendered = !forceCpuFallback && GpuRenderer::instance().renderColoredRects(
                 width(), height(), gpuRects, gpuColors, &gpuComposite, &gpuBackground);
             if (gpuRendered) {
                 p.setOpacity(1.0); // background must remain opaque
@@ -506,6 +522,10 @@ private:
 #endif
     QImage videoImage;
     QElapsedTimer frameClock;
+    QElapsedTimer diagnosticsClock;
+    int diagnosticFrameCount = 0;
+    double measuredFps = 0.0;
+    bool forceCpuFallback = false;
     QVector<float> bands;
     QString message;
     int visualMode;
@@ -938,6 +958,19 @@ MainWindow::MainWindow(QWidget *parent)
         );
 
     previewHeader->addWidget(previewTitle);
+    previewHeader->addSpacing(12);
+    QLabel *rendererLabel = new QLabel("Renderer");
+    rendererLabel->setStyleSheet("color:#9AA0A6;");
+    QComboBox *rendererModeCombo = new QComboBox;
+    rendererModeCombo->addItem("Hybrid GPU");
+    rendererModeCombo->addItem("CPU fallback");
+    rendererModeCombo->setToolTip("Hybrid GPU composites Spectrum with D3D11 then reads back to Qt. CPU fallback uses QPainter.");
+    rendererModeCombo->setMinimumWidth(125);
+    QPushButton *diagnosticsButton = new QPushButton("Diagnostics");
+    diagnosticsButton->setToolTip("Show renderer performance and Direct3D 11 diagnostics");
+    previewHeader->addWidget(rendererLabel);
+    previewHeader->addWidget(rendererModeCombo);
+    previewHeader->addWidget(diagnosticsButton);
     previewHeader->addStretch();
     previewHeader->addWidget(videoInfoLabel);
 
@@ -1201,6 +1234,19 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Local alias: class members cannot be captured directly by lambdas.
     SpectrumDisplay *overlay = spectrumOverlay;
+    connect(rendererModeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this, overlay](int index) {
+        const bool cpuFallback = (index == 1);
+        overlay->setForceCpuFallback(cpuFallback);
+        spectrumDisplay->setForceCpuFallback(cpuFallback);
+        statusBar()->showMessage(cpuFallback
+            ? "Preview renderer: CPU fallback (QPainter)"
+            : "Preview renderer: Hybrid GPU (D3D11 composite + readback)", 4000);
+    });
+    connect(diagnosticsButton, &QPushButton::clicked, this, [overlay]() {
+        QMessageBox::information(nullptr, "WaveformStudio — Renderer Diagnostics",
+                                 overlay->diagnosticsText());
+    });
 
     // Populate the Photoshop-like editable gradient-stop list.
     auto refreshGradientList = [overlay, gradientStopsList, gradientEditor, stopPosition]() {
