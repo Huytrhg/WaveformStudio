@@ -263,7 +263,10 @@ protected:
     {
         // Phase 4B.1: bars mode can bypass the Phase 4A GPU readback by
         // drawing the video texture and colored bars directly to this HWND.
-        if (visualMode == 0 && tryNativeGpuPaint())
+        // Delay native swap-chain creation until both video and spectrum data exist.
+        // This avoids initializing D3D11 during the first Qt Multimedia import frame.
+        if (visualMode == 0 && !videoImage.isNull() && !bands.isEmpty()
+            && tryNativeGpuPaint())
             return;
 
         QPainter p(this);
