@@ -1,7 +1,7 @@
 #include "nativegpupresenter.h"
 
 #include <QElapsedTimer>
-#include <QDebug>
+#include <QDebug>\n#include <QPainter>
 
 #ifdef Q_OS_WIN
 #include <algorithm>
@@ -180,18 +180,28 @@ bool NativeGpuPresenter::presentImage(const QImage &frame)
         m_error = QStringLiteral("Native presenter is not initialized or frame is empty.");
         return false;
     }
-    if (frame.size() != m_size) {
-        if (!resize(frame.width(), frame.height()))
-            return false;
-    }
-
+    // The swap chain follows the native preview widget's client size, not
+    // the decoded video's source size. CopyResource requires matching texture
+    // dimensions, so fit the frame into a widget-sized BGRA image before upload.
+    // This keeps the HWND/swap-chain size stable when source video dimensions
+    // differ from the preview panel.
     QElapsedTimer timer;
     timer.start();
+    QImage fitted(m_size, QImage::Format_ARGB32);
+    fitted.fill(Qt::black);
+    const QImage source = frame.convertToFormat(QImage::Format_ARGB32);
+    const QSize drawSize = source.size().scaled(m_size, Qt::KeepAspectRatio);
+    const QRect drawRect((m_size.width() - drawSize.width()) / 2,
+                         (m_size.height() - drawSize.height()) / 2,
+                         drawSize.width(), drawSize.height());
+    {
+        QPainter painter(&fitted);
+        painter.drawImage(drawRect, source);
+    }
     // The only CPU->GPU transfer is this upload. There is deliberately no
     // staging texture, Map(READ), or GPU->CPU readback in this presentation path.
-    const QImage bgra = frame.convertToFormat(QImage::Format_ARGB32);
     m_context->UpdateSubresource(m_uploadTexture.Get(), 0, nullptr,
-        bgra.constBits(), UINT(bgra.bytesPerLine()), 0);
+        fitted.constBits(), UINT(fitted.bytesPerLine()), 0);
 
     Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
     HRESULT hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.GetAddressOf()));
