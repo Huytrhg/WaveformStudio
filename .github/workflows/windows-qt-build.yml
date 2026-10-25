@@ -43,3 +43,30 @@ jobs:
 
       - name: Build Release
         run: cmake --build build --config Release --parallel
+
+      - name: Package Release application
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD "build/Release/WaveformStudio.exe"
+          if (-not (Test-Path $exe)) {
+            throw "Release executable not found: $exe"
+          }
+          $package = Join-Path $PWD "build/package"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          & "$env:QT_ROOT_DIR/bin/windeployqt.exe" --release --multimedia --dir $package $exe
+          if ($LASTEXITCODE -ne 0) {
+            throw "windeployqt failed with exit code $LASTEXITCODE"
+          }
+          Copy-Item $exe $package
+          Copy-Item "PHASE4B1_TEST_GUIDE.txt" $package
+          if (-not (Test-Path (Join-Path $package "WaveformStudio.exe"))) {
+            throw "Packaged executable was not created."
+          }
+
+      - name: Upload runnable Release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: WaveformStudio-Phase4B1-Windows-x64
+          path: build/package/
+          if-no-files-found: error
+          retention-days: 14
