@@ -58,8 +58,8 @@ bool NativeGpuPresenter::initialize(void *nativeWindow, int width, int height)
     }
 
     Microsoft::WRL::ComPtr<IDXGIFactory> factory;
-    if (FAILED(adapter->GetParent(IID_PPV_ARGS(factory.GetAddressOf())))) {
-        m_error = QStringLiteral("Could not obtain DXGI factory.");
+    if (!adapter || FAILED(adapter->GetParent(IID_PPV_ARGS(factory.GetAddressOf())))) {
+        m_error = QStringLiteral("Could not obtain DXGI adapter/factory.");
         shutdown();
         return false;
     }
