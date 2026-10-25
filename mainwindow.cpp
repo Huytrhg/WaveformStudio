@@ -172,8 +172,10 @@ public:
         connect(videoSink, &QVideoSink::videoFrameChanged, this,
                 [this](const QVideoFrame &frame) {
                     if (!frame.isValid()) return;
-                    // Limit CPU video-frame conversions to about 24 FPS.
-                    if (frameClock.isValid() && frameClock.elapsed() < 41) return;
+                    // Keep the preview video close to 30 FPS when frames are available.
+                    // A 41 ms gate capped the video near 24 FPS and could look choppy
+                    // even while Spectrum continued repainting smoothly.
+                    if (frameClock.isValid() && frameClock.elapsed() < 33) return;
                     frameClock.restart();
                     QImage image = frame.toImage();
                     if (image.isNull()) return;
