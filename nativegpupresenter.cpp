@@ -2,7 +2,7 @@
 
 #include <QElapsedTimer>
 #include <QPainter>
-#include <algorithm>
+#include <algorithm>\n#include <cstring>
 
 #ifdef Q_OS_WIN
 namespace {
@@ -172,11 +172,18 @@ bool NativeGpuPresenter::presentFrame(const QImage &frame,const QVector<QRectF> 
 {
 #ifdef Q_OS_WIN
     if(!m_ready||frame.isNull()){m_error=QStringLiteral("Presenter not ready or frame empty.");return false;}
-    if(m_size!=QSize(width(),height())) {}
-    if(frame.size()!=m_size && !resize(frame.width(),frame.height()))return false;
     QElapsedTimer timer;timer.start();
-    const QImage bgra=frame.convertToFormat(QImage::Format_ARGB32);
-    m_context->UpdateSubresource(m_uploadTexture.Get(),0,nullptr,bgra.constBits(),UINT(bgra.bytesPerLine()),0);
+    // Keep the swap chain at the native widget size. Letterbox source frames
+    // into that size so source-video dimensions never trigger a swap-chain resize.
+    QImage fitted(m_size,QImage::Format_ARGB32);
+    fitted.fill(QColor(16,17,20));
+    const QImage source=frame.convertToFormat(QImage::Format_ARGB32);
+    const QSize drawSize=source.size().scaled(m_size,Qt::KeepAspectRatio);
+    const QRect drawRect((m_size.width()-drawSize.width())/2,
+                         (m_size.height()-drawSize.height())/2,
+                         drawSize.width(),drawSize.height());
+    { QPainter painter(&fitted); painter.drawImage(drawRect,source); }
+    m_context->UpdateSubresource(m_uploadTexture.Get(),0,nullptr,fitted.constBits(),UINT(fitted.bytesPerLine()),0);
     m_context->OMSetRenderTargets(1,m_renderTarget.GetAddressOf(),nullptr);
     D3D11_VIEWPORT vp{};vp.Width=float(m_size.width());vp.Height=float(m_size.height());vp.MinDepth=0;vp.MaxDepth=1;
     m_context->RSSetViewports(1,&vp);
