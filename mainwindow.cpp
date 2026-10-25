@@ -181,6 +181,7 @@ public:
                     if (image.width() > limit.width() || image.height() > limit.height())
                         image = image.scaled(limit, Qt::KeepAspectRatio, Qt::FastTransformation);
                     videoImage = std::move(image);
+                    gpuBackgroundDirty = true;
                     update();
                 });
         gradientStops = {
@@ -343,15 +344,24 @@ protected:
             // Phase 4A hybrid compositing: prepare a correctly letterboxed,
             // opaque background, upload it to D3D11 and draw bars on the same
             // render target. The final readback remains until native presentation.
-            QImage gpuBackground(size(), QImage::Format_ARGB32);
-            gpuBackground.fill(QColor("#101114"));
-            if (!videoImage.isNull()) {
-                QPainter bgPainter(&gpuBackground);
-                const QSize fitted = videoImage.size().scaled(size(), Qt::KeepAspectRatio);
-                const QRect target((width() - fitted.width()) / 2,
-                                   (height() - fitted.height()) / 2,
-                                   fitted.width(), fitted.height());
-                bgPainter.drawImage(target, videoImage);
+            // Phase 4B.3: cache the CPU-prepared background. Spectrum/audio
+            // updates repaint frequently, but the video image and stage size often
+            // stay unchanged between video frames. Avoid allocating and repainting
+            // this full-size image on every Spectrum tick.
+            if (gpuBackgroundDirty || cachedGpuBackground.size() != size()
+                || cachedGpuBackground.format() != QImage::Format_ARGB32) {
+                cachedGpuBackground = QImage(size(), QImage::Format_ARGB32);
+                cachedGpuBackground.fill(QColor("#101114"));
+                if (!videoImage.isNull()) {
+                    QPainter bgPainter(&cachedGpuBackground);
+                    const QSize fitted = videoImage.size().scaled(size(), Qt::KeepAspectRatio);
+                    const QRect target((width() - fitted.width()) / 2,
+                                       (height() - fitted.height()) / 2,
+                                       fitted.width(), fitted.height());
+                    bgPainter.drawImage(target, videoImage);
+                }
+                gpuBackgroundDirty = false;
+                ++gpuBackgroundBuilds;
             }
             // The GPU composite contains an opaque video background, so
             // QPainter::setOpacity() cannot fade only the Spectrum after the
@@ -364,7 +374,7 @@ protected:
 
             QImage gpuComposite;
             const bool gpuRendered = !forceCpuFallback && GpuRenderer::instance().renderColoredRects(
-                width(), height(), gpuRects, gpuColors, &gpuComposite, &gpuBackground);
+                width(), height(), gpuRects, gpuColors, &gpuComposite, &cachedGpuBackground);
             if (gpuRendered) {
                 p.setOpacity(1.0); // background must remain opaque
                 p.drawImage(QPoint(0, 0), gpuComposite);
@@ -521,6 +531,9 @@ private:
     bool nativeGpuReady = false;
 #endif
     QImage videoImage;
+    QImage cachedGpuBackground;
+    bool gpuBackgroundDirty = true;
+    quint64 gpuBackgroundBuilds = 0;
     QElapsedTimer frameClock;
     QElapsedTimer diagnosticsClock;
     int diagnosticFrameCount = 0;
