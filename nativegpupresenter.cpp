@@ -2,7 +2,8 @@
 
 #include <QElapsedTimer>
 #include <QPainter>
-#include <algorithm>\n#include <cstring>
+#include <algorithm>
+#include <cstring>
 
 #ifdef Q_OS_WIN
 namespace {
