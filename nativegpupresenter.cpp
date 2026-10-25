@@ -112,7 +112,7 @@ bool NativeGpuPresenter::createPipeline()
     };
     hr=m_device->CreateInputLayout(layout,3,vs->GetBufferPointer(),vs->GetBufferSize(),m_inputLayout.GetAddressOf());
     if(FAILED(hr)){m_error=QStringLiteral("CreateInputLayout failed.");return false;}
-    D3D11_BUFFER_DESC vb{}; vb.ByteWidth=sizeof(Vertex)*6*260; vb.Usage=D3D11_USAGE_DYNAMIC;
+    D3D11_BUFFER_DESC vb{}; vb.ByteWidth=sizeof(Vertex)*6*520; vb.Usage=D3D11_USAGE_DYNAMIC;
     vb.BindFlags=D3D11_BIND_VERTEX_BUFFER; vb.CPUAccessFlags=D3D11_CPU_ACCESS_WRITE;
     hr=m_device->CreateBuffer(&vb,nullptr,m_vertexBuffer.GetAddressOf());
     if(FAILED(hr)){m_error=QStringLiteral("Create vertex buffer failed.");return false;}
@@ -203,10 +203,11 @@ bool NativeGpuPresenter::presentFrame(const QImage &frame,const QVector<QRectF> 
     m_context->PSSetShader(m_textureShader.Get(),nullptr,0);
     m_context->PSSetShaderResources(0,1,m_videoView.GetAddressOf());
     m_context->PSSetSamplers(0,1,m_sampler.GetAddressOf());m_context->Draw(6,0);
-    m_context->PSSetShaderResources(0,0,nullptr);
-    QVector<Vertex> vertices;vertices.reserve(qMin(rects.size(),256)*6);
+    ID3D11ShaderResourceView *nullView = nullptr;
+    m_context->PSSetShaderResources(0,1,&nullView);
+    QVector<Vertex> vertices;vertices.reserve(qMin(rects.size(),512)*6);
     const int n=qMin(rects.size(),colors.size());
-    for(int i=0;i<n&&vertices.size()+6<=1560;++i){
+    for(int i=0;i<n&&vertices.size()+6<=3120;++i){
         const QRectF r=rects[i].normalized().intersected(QRectF(0,0,m_size.width(),m_size.height()));
         if(r.isEmpty())continue;
         const float l=float(2*r.left()/m_size.width()-1), rr=float(2*r.right()/m_size.width()-1);
