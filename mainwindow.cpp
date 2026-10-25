@@ -439,14 +439,18 @@ protected:
             }
         }
         if (visualMode == 0) {
-            const QString firstLine = GpuRenderer::instance().runtimeStats().section('\n', 0, 0);
+            const QString gpuFrameLine = GpuRenderer::instance().runtimeStats().section('\n', 0, 0);
+            const QString fpsLine = QStringLiteral("Preview FPS: %1")
+                .arg(measuredFps, 0, 'f', 1);
+            const QString hudText = gpuFrameLine + QStringLiteral("  |  ") + fpsLine;
             p.save();
             p.setOpacity(0.92);
+            p.setFont(QFont(QStringLiteral("Consolas"), 9));
             p.setPen(QColor(230, 240, 245));
             p.setBrush(QColor(10, 14, 20, 205));
-            const QRect hudRect(8, 8, qMin(width() - 16, 430), 26);
+            const QRect hudRect(8, 8, qMin(width() - 16, 640), 28);
             p.drawRoundedRect(hudRect, 5, 5);
-            p.drawText(hudRect.adjusted(8, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft, firstLine);
+            p.drawText(hudRect.adjusted(8, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft, hudText);
             p.restore();
         }
         p.restore();
