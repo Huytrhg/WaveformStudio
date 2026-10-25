@@ -60,6 +60,8 @@ private:
 
 #ifdef Q_OS_WIN
     struct Vertex { float x, y, r, g, b, a; };
+    // Reuse CPU-side vertex storage across frames to avoid repeated allocations.
+    QVector<Vertex> cachedVertices;
     Microsoft::WRL::ComPtr<ID3D11Device> device;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     Microsoft::WRL::ComPtr<ID3D11VertexShader> vertexShader;
