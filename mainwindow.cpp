@@ -2,6 +2,7 @@
 #include "ui_mainwindow.h"
 #include "spectrumanalyzer.h"
 #include "gpurenderer.h"
+#include "nativegpupresenter.h"
 
 #include <QPainter>
 #include <QLinearGradient>
@@ -157,6 +158,9 @@ public:
           gradientSpeed(0), gradientPhase(0.0)
     {
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+#ifdef Q_OS_WIN
+        setAttribute(Qt::WA_NativeWindow, true);
+#endif
         setAttribute(Qt::WA_TransparentForMouseEvents, true);
         setAttribute(Qt::WA_TranslucentBackground, false);
         setAttribute(Qt::WA_AlwaysStackOnTop, false);
@@ -256,6 +260,11 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override
     {
+        // Phase 4B.1: bars mode can bypass the Phase 4A GPU readback by
+        // drawing the video texture and colored bars directly to this HWND.
+        if (visualMode == 0 && tryNativeGpuPaint())
+            return;
+
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
         p.setCompositionMode(QPainter::CompositionMode_SourceOver);
@@ -405,7 +414,78 @@ protected:
     }
 
 private:
+    bool tryNativeGpuPaint()
+    {
+#ifdef Q_OS_WIN
+        if (!nativeGpuAttempted) {
+            nativeGpuAttempted = true;
+            nativeGpuReady = nativeGpuPresenter.initialize(
+                reinterpret_cast<void *>(winId()), qMax(1, width()), qMax(1, height()));
+            if (!nativeGpuReady)
+                qWarning() << "Native GPU preview unavailable; keeping Phase 4A fallback:"
+                           << nativeGpuPresenter.lastError();
+        }
+        if (!nativeGpuReady || width() < 2 || height() < 2)
+            return false;
+        if (!nativeGpuPresenter.resize(width(), height()))
+            return false;
+
+        const int count = columnCount;
+        const qreal maxW = width() * (scalePercent / 100.0);
+        const qreal maxH = height() * 0.42 * (scalePercent / 72.0) * (heightPercent / 100.0);
+        const qreal cx = width() * positionX / 100.0;
+        const qreal cy = height() * positionY / 100.0;
+        const qreal cellW = maxW / count;
+        const qreal barW = qMax(0.6, cellW * thicknessPercent / 100.0);
+        const qreal startX = cx - maxW / 2.0;
+        QVector<QRectF> rects;
+        QVector<QColor> colors;
+        rects.reserve(count * (glowPercent > 0 ? 2 : 1));
+        colors.reserve(rects.capacity());
+        for (int i = 0; i < count; ++i) {
+            const qreal sourceIndex = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
+            const int lo = qBound(0, int(sourceIndex), bands.size() - 1);
+            const int hi = qMin(lo + 1, bands.size() - 1);
+            const qreal frac = sourceIndex - lo;
+            const qreal value = qBound(0.0, qreal(bands[lo]) * (1.0 - frac)
+                                              + qreal(bands[hi]) * frac, 1.0);
+            const qreal h = qMax(1.0, value * maxH);
+            const QRectF bar(startX + i * cellW + (cellW - barW) / 2.0,
+                             cy - h, barW, h);
+            const QColor color = colorForBand(i, count);
+            if (glowPercent > 0) {
+                QColor halo = color;
+                halo.setAlpha(qBound(0, glowPercent * 55 / 100, 55));
+                rects.push_back(bar.adjusted(-2.5, -2.5, 2.5, 2.5));
+                colors.push_back(halo);
+            }
+            rects.push_back(bar);
+            colors.push_back(color);
+        }
+        QImage background = videoImage;
+        if (background.isNull()) {
+            background = QImage(size(), QImage::Format_ARGB32);
+            background.fill(QColor("#101114"));
+        }
+        if (!nativeGpuPresenter.presentFrame(background, rects, colors, opacityPercent / 100.0)) {
+            qWarning() << "Native GPU present failed; switching to Phase 4A:"
+                       << nativeGpuPresenter.lastError();
+            nativeGpuReady = false;
+            nativeGpuPresenter.shutdown();
+            return false;
+        }
+        return true;
+#else
+        return false;
+#endif
+    }
+
     QVideoSink *videoSink = nullptr;
+#ifdef Q_OS_WIN
+    NativeGpuPresenter nativeGpuPresenter;
+    bool nativeGpuAttempted = false;
+    bool nativeGpuReady = false;
+#endif
     QImage videoImage;
     QElapsedTimer frameClock;
     QVector<float> bands;
