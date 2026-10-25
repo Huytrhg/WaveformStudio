@@ -1,6 +1,7 @@
 name: Windows Qt build
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - phase4b-native-gpu-preview
@@ -22,8 +23,20 @@ jobs:
           arch: win64_msvc2022_64
           modules: qtmultimedia
 
+      - name: Verify Qt installation
+        shell: pwsh
+        run: |
+          if (-not $env:QT_ROOT_DIR) {
+            throw "install-qt-action did not set QT_ROOT_DIR."
+          }
+          if (-not (Test-Path $env:QT_ROOT_DIR)) {
+            throw "Qt root does not exist: $env:QT_ROOT_DIR"
+          }
+          Write-Host "Qt root: $env:QT_ROOT_DIR"
+
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+        shell: pwsh
+        run: cmake -S . -B build "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
 
       - name: Build
         run: cmake --build build --config Debug --parallel
