@@ -428,8 +428,13 @@ private:
         }
         if (!nativeGpuReady || width() < 2 || height() < 2)
             return false;
-        if (!nativeGpuPresenter.resize(width(), height()))
+        if (!nativeGpuPresenter.resize(width(), height())) {
+            qWarning() << "Native GPU resize failed; switching to Phase 4A:"
+                       << nativeGpuPresenter.lastError();
+            nativeGpuReady = false;
+            nativeGpuPresenter.shutdown();
             return false;
+        }
 
         const int count = columnCount;
         const qreal maxW = width() * (scalePercent / 100.0);
