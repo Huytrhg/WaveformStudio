@@ -5,6 +5,7 @@
 #include "nativegpupresenter.h"
 
 #include <QPainter>
+#include <QFont>
 #include <QDebug>
 #include <QLinearGradient>
 #include <QAbstractItemView>
