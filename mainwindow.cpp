@@ -1,0 +1,1908 @@
+#include "mainwindow.h"
+#include "ui_mainwindow.h"
+#include "spectrumanalyzer.h"
+#include "gpurenderer.h"
+
+#include <QPainter>
+#include <QLinearGradient>
+#include <QAbstractItemView>
+#include <algorithm>
+#include <QTimer>
+#include <QScrollArea>
+#include <cmath>
+#include <QPaintEvent>
+#include <QResizeEvent>
+#include <QElapsedTimer>
+
+#include <QAudioOutput>
+#include <QVideoWidget>
+#include <QVideoSink>
+#include <QVideoFrame>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QSlider>
+#include <QLabel>
+#include <QFrame>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QGridLayout>
+#include <QSplitter>
+#include <QListWidget>
+#include <QMenuBar>
+#include <QMenu>
+#include <QAction>
+#include <QStatusBar>
+#include <QSizePolicy>
+#include <QStyle>
+#include <QUrl>
+#include <QSignalBlocker>
+#include <QDir>
+#include <QColor>
+#include <QColorDialog>
+#include <QComboBox>
+#include <QStackedLayout>
+#include <QPolygonF>
+#include <QtMath>
+#include <QMouseEvent>
+#include <QSettings>
+#include <QInputDialog>
+#include <QScrollArea>
+#include <QSpinBox>
+#include <functional>
+
+// Interactive Photoshop-inspired gradient bar: click to add, drag stops,
+// double-click a stop to choose its color. Keeps rendering independent of FFT.
+class GradientEditor : public QWidget
+{
+public:
+    using Stops = QVector<QPair<qreal, QColor>>;
+    explicit GradientEditor(QWidget *parent = nullptr) : QWidget(parent)
+    {
+        setMinimumHeight(77);
+        setMaximumHeight(77);
+        setMouseTracking(true);
+        setToolTip("Click below the gradient to add a stop; drag to move; double-click to edit color");
+    }
+    Stops stops;
+    int selected = 0;
+    std::function<void()> changed;
+    std::function<void(int)> selectionChanged;
+    std::function<void(int)> editColor;
+    void refresh() { update(); }
+    void setStops(const Stops &v) { stops = v; selected = 0; update(); if (changed) changed(); }
+
+protected:
+    QRectF bar() const { return QRectF(12, 10, qMax(1, width()-24), 28); }
+    qreal positionAt(qreal x) const { const auto r = bar(); return qBound(0.0, (x-r.left())/r.width(), 1.0); }
+    int hitStop(const QPointF &point) const
+    {
+        const auto r = bar();
+        if (point.y() < 35 || point.y() > 73) return -1;
+        for (int i = stops.size()-1; i >= 0; --i)
+            if (qAbs(point.x() - (r.left() + stops[i].first*r.width())) < 10) return i;
+        return -1;
+    }
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        auto r = bar();
+        QLinearGradient grad(r.topLeft(), r.topRight());
+        for (const auto &stop : stops) grad.setColorAt(qBound(0.0,stop.first,1.0),stop.second);
+        painter.setPen(QPen(QColor("#70757A"), 1));
+        painter.setBrush(grad);
+        painter.drawRoundedRect(r, 3, 3);
+        for (int i=0;i<stops.size();++i) {
+            const qreal x = r.left()+stops[i].first*r.width();
+            QPolygonF triangle;
+            triangle << QPointF(x,40) << QPointF(x-7,49) << QPointF(x+7,49);
+            painter.setPen(QPen(i==selected ? QColor("#FFFFFF") : QColor("#A0A5AA"),i==selected?2:1));
+            painter.setBrush(stops[i].second);
+            painter.drawPolygon(triangle);
+            painter.drawRect(QRectF(x-7,49,14,12));
+        }
+    }
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button()!=Qt::LeftButton) return;
+        int hit=hitStop(event->position());
+        if (hit<0 && event->position().y() >= 38 && event->position().y() <= 73) {
+            const qreal pos=positionAt(event->position().x());
+            QColor c = stops.isEmpty()? QColor("#FFFFFF") : stops.first().second;
+            for(int i=1;i<stops.size();++i) if(stops[i].first>=pos) {
+                const auto &a=stops[i-1], &b=stops[i];
+                const qreal t=(pos-a.first)/qMax(0.00001,b.first-a.first);
+                c=QColor::fromRgbF(a.second.redF()*(1-t)+b.second.redF()*t,
+                    a.second.greenF()*(1-t)+b.second.greenF()*t,
+                    a.second.blueF()*(1-t)+b.second.blueF()*t); break;
+            }
+            stops.append({pos,c});
+            std::sort(stops.begin(),stops.end(),[](const auto &a,const auto &b){return a.first<b.first;});
+            for(int i=0;i<stops.size();++i) if(qAbs(stops[i].first-pos)<0.00001){hit=i;break;}
+            if(changed) changed();
+        }
+        if(hit>=0) {selected=hit; dragging=true; if(selectionChanged) selectionChanged(selected); update();}
+    }
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if(!dragging || selected<0 || selected>=stops.size()) return;
+        qreal pos=positionAt(event->position().x());
+        const qreal lo=selected>0?stops[selected-1].first+0.001:0.0;
+        const qreal hi=selected+1<stops.size()?stops[selected+1].first-0.001:1.0;
+        stops[selected].first=qBound(lo,pos,hi);
+        update(); if(changed) changed();
+    }
+    void mouseReleaseEvent(QMouseEvent *) override {dragging=false;}
+    void mouseDoubleClickEvent(QMouseEvent *event) override
+    {
+        const int i=hitStop(event->position());
+        if(i>=0) { selected=i; update(); if(selectionChanged) selectionChanged(i); if(editColor) editColor(i); }
+    }
+private:
+    bool dragging=false;
+};
+
+// Audio-reactive overlay supporting bars, waveform and circular styles.
+// Position values are percentages of the video stage.
+class SpectrumDisplay : public QWidget
+{
+public:
+    explicit SpectrumDisplay(QWidget *parent = nullptr)
+        : QWidget(parent), bands(64, 0.0f), visualMode(0),
+          positionX(50), positionY(78), opacityPercent(92), scalePercent(72),
+          solidColor(QColor("#35B8FF")), useGradient(true),
+          columnCount(64), heightPercent(100), thicknessPercent(75), glowPercent(0),
+          gradientSpeed(0), gradientPhase(0.0)
+    {
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        setAttribute(Qt::WA_TranslucentBackground, false);
+        setAttribute(Qt::WA_AlwaysStackOnTop, false);
+        setAutoFillBackground(false);
+        setToolTip("Spectrum Overlay — Bars / Waveform / Circular");
+        videoSink = new QVideoSink(this);
+        connect(videoSink, &QVideoSink::videoFrameChanged, this,
+                [this](const QVideoFrame &frame) {
+                    if (!frame.isValid()) return;
+                    // Limit CPU video-frame conversions to about 24 FPS.
+                    if (frameClock.isValid() && frameClock.elapsed() < 41) return;
+                    frameClock.restart();
+                    QImage image = frame.toImage();
+                    if (image.isNull()) return;
+                    // Preview only: cap image size to reduce CPU painting cost.
+                    const QSize limit(960, 540);
+                    if (image.width() > limit.width() || image.height() > limit.height())
+                        image = image.scaled(limit, Qt::KeepAspectRatio, Qt::FastTransformation);
+                    videoImage = std::move(image);
+                    update();
+                });
+        gradientStops = {
+            {0.0, QColor("#00D5FF")},
+            {0.5, QColor("#376BFF")},
+            {1.0, QColor("#D64DFF")}
+        };
+    }
+
+    QVideoSink *getVideoSink() const { return videoSink; }
+
+    void setBands(const QVector<float> &values)
+    {
+        bands = values;
+        if (bands.size() > 64) bands.resize(64);
+        update();
+    }
+    void setMessage(const QString &text) { message = text; update(); }
+    void setVisualMode(int mode) { visualMode = qBound(0, mode, 2); update(); }
+    void setPosition(int x, int y) { positionX = qBound(0, x, 100); positionY = qBound(0, y, 100); update(); }
+    void setOpacityPercent(int value) { opacityPercent = qBound(0, value, 100); update(); }
+    void setScalePercent(int value) { scalePercent = qBound(20, value, 100); update(); }
+    void setColumnCount(int value) { columnCount = qBound(8, value, 128); update(); }
+    void setHeightPercent(int value) { heightPercent = qBound(10, value, 200); update(); }
+    void setThicknessPercent(int value) { thicknessPercent = qBound(10, value, 100); update(); }
+    void setGlowPercent(int value) { glowPercent = qBound(0, value, 100); update(); }
+    void setGradientSpeed(int value) { gradientSpeed = qBound(0, value, 100); update(); }
+    void advanceGradient(qreal seconds)
+    {
+        if (!useGradient || gradientSpeed == 0) return;
+        gradientPhase = std::fmod(gradientPhase + seconds * gradientSpeed / 100.0 * 0.45, 2.0);
+        update();
+    }
+    void setSolidColor(const QColor &color) { if (color.isValid()) solidColor = color; update(); }
+    void setUseGradient(bool enabled) { useGradient = enabled; update(); }
+    bool isGradientEnabled() const { return useGradient; }
+    QColor getSolidColor() const { return solidColor; }
+    QVector<QPair<qreal, QColor>> getGradientStops() const { return gradientStops; }
+    void setGradientStops(const QVector<QPair<qreal,QColor>> &v) {
+        if(v.size()<2) return;
+        gradientStops=v; selectedStopIndex=qBound(0,selectedStopIndex,v.size()-1); update();
+    }
+    void setInterpolation(int mode) { interpolation=qBound(0,mode,2); update(); }
+
+    void addGradientStop()
+    {
+        qreal newPos = 0.5;
+        if (gradientStops.size() >= 2) {
+            int index = qBound(0, selectedStopIndex, gradientStops.size() - 2);
+            newPos = (gradientStops[index].first + gradientStops[index + 1].first) / 2.0;
+        }
+        QColor c = colorAt(newPos);
+        gradientStops.push_back({newPos, c});
+        std::sort(gradientStops.begin(), gradientStops.end(),
+                  [](const auto &a, const auto &b) { return a.first < b.first; });
+        selectedStopIndex = 0;
+        for (int i = 0; i < gradientStops.size(); ++i)
+            if (qAbs(gradientStops[i].first - newPos) < 0.0001) selectedStopIndex = i;
+        update();
+    }
+    bool removeGradientStop(int index)
+    {
+        if (gradientStops.size() <= 2 || index < 0 || index >= gradientStops.size()) return false;
+        gradientStops.removeAt(index);
+        selectedStopIndex = qBound(0, index, gradientStops.size() - 1);
+        update();
+        return true;
+    }
+    void setGradientStopColor(int index, const QColor &color)
+    {
+        if (color.isValid() && index >= 0 && index < gradientStops.size()) {
+            gradientStops[index].second = color;
+            update();
+        }
+    }
+    int selectedStopIndex = 0;
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+        p.fillRect(rect(), QColor("#101114"));
+        // Paint the video frame and the audio visualization in the SAME widget.
+        // This avoids QVideoWidget's native surface covering the overlay.
+        if (!videoImage.isNull()) {
+            const QSize fitted = videoImage.size().scaled(size(), Qt::KeepAspectRatio);
+            const QRect target((width() - fitted.width()) / 2,
+                               (height() - fitted.height()) / 2,
+                               fitted.width(), fitted.height());
+            p.drawImage(target, videoImage);
+        }
+        if (!message.isEmpty()) {
+            p.setPen(QColor(235, 238, 242, 210));
+            p.drawText(rect().adjusted(10, 10, -10, -10), Qt::AlignCenter, message);
+        }
+        if (bands.isEmpty() || width() < 2 || height() < 2) return;
+
+        p.save();
+        p.setOpacity(opacityPercent / 100.0);
+        const qreal cx = width() * positionX / 100.0;
+        const qreal cy = height() * positionY / 100.0;
+        const qreal maxW = width() * (scalePercent / 100.0);
+        const qreal maxH = height() * 0.42 * (scalePercent / 72.0) * (heightPercent / 100.0);
+
+        if (visualMode == 0) { // A: vertical bars; attempt D3D11 shader rendering first.
+            const int count = columnCount;
+            const qreal cellW = maxW / count;
+            const qreal barW = qMax(0.6, cellW * thicknessPercent / 100.0);
+            const qreal startX = cx - maxW / 2.0;
+            const qreal baseline = cy;
+            QVector<QRectF> gpuRects;
+            QVector<QColor> gpuColors;
+            gpuRects.reserve(count * (glowPercent > 0 ? 2 : 1));
+            gpuColors.reserve(gpuRects.capacity());
+            for (int i = 0; i < count; ++i) {
+                const qreal sourceIndex = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
+                const int lo = qBound(0, int(sourceIndex), bands.size() - 1);
+                const int hi = qMin(lo + 1, bands.size() - 1);
+                const qreal v = qBound(0.0, qreal(bands[lo]) * (1.0 - (sourceIndex - lo))
+                                              + qreal(bands[hi]) * (sourceIndex - lo), 1.0);
+                const qreal h = qMax(1.0, v * maxH);
+                const QRectF bar(startX + i * cellW + (cellW - barW) / 2.0,
+                                 baseline - h, barW, h);
+                const QColor color = colorForBand(i, count);
+                if (glowPercent > 0) {
+                    QColor halo = color;
+                    halo.setAlpha(qBound(0, glowPercent * 55 / 100, 55));
+                    gpuRects.push_back(bar.adjusted(-2.5, -2.5, 2.5, 2.5));
+                    gpuColors.push_back(halo);
+                }
+                gpuRects.push_back(bar);
+                gpuColors.push_back(color);
+            }
+            // Phase 4A hybrid compositing: prepare a correctly letterboxed,
+            // opaque background, upload it to D3D11 and draw bars on the same
+            // render target. The final readback remains until native presentation.
+            QImage gpuBackground(size(), QImage::Format_ARGB32);
+            gpuBackground.fill(QColor("#101114"));
+            if (!videoImage.isNull()) {
+                QPainter bgPainter(&gpuBackground);
+                const QSize fitted = videoImage.size().scaled(size(), Qt::KeepAspectRatio);
+                const QRect target((width() - fitted.width()) / 2,
+                                   (height() - fitted.height()) / 2,
+                                   fitted.width(), fitted.height());
+                bgPainter.drawImage(target, videoImage);
+            }
+            QImage gpuComposite;
+            const bool gpuRendered = GpuRenderer::instance().renderColoredRects(
+                width(), height(), gpuRects, gpuColors, &gpuComposite, &gpuBackground);
+            if (gpuRendered) {
+                p.setOpacity(1.0); // background must remain opaque
+                p.drawImage(QPoint(0, 0), gpuComposite);
+            } else {
+                // Reliable CPU fallback preserves the original rounded-bar appearance.
+                p.setPen(Qt::NoPen);
+                for (int i = 0; i < count; ++i) {
+                    const qreal sourceIndex = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
+                    const int lo = qBound(0, int(sourceIndex), bands.size() - 1);
+                    const int hi = qMin(lo + 1, bands.size() - 1);
+                    const qreal v = qBound(0.0, qreal(bands[lo]) * (1.0 - (sourceIndex - lo))
+                                                  + qreal(bands[hi]) * (sourceIndex - lo), 1.0);
+                    const qreal h = qMax(1.0, v * maxH);
+                    const QRectF bar(startX + i * cellW + (cellW - barW) / 2.0,
+                                     baseline - h, barW, h);
+                    const QColor color = colorForBand(i, count);
+                    if (glowPercent > 0) {
+                        QColor halo = color;
+                        halo.setAlpha(qBound(0, glowPercent * 55 / 100, 55));
+                        p.setBrush(halo);
+                        p.drawRoundedRect(bar.adjusted(-2.5, -2.5, 2.5, 2.5), 3, 3);
+                    }
+                    p.setBrush(color);
+                    p.drawRoundedRect(bar, qMin(2.5, barW / 2.0), qMin(2.5, barW / 2.0));
+                }
+            }
+        } else if (visualMode == 1) { // B: horizontal waveform-like spectrum
+            QPolygonF upper, lower;
+            const qreal startX = cx - maxW / 2.0;
+            for (int i = 0; i < bands.size(); ++i) {
+                const qreal x = startX + maxW * i / qMax(1, bands.size() - 1);
+                const qreal amp = qBound(0.0, qreal(bands[i]), 1.0) * maxH * 0.52;
+                upper << QPointF(x, cy - amp);
+                lower.prepend(QPointF(x, cy + amp));
+            }
+            QPolygonF shape = upper;
+            for (const QPointF &pt : lower) shape << pt;
+            QLinearGradient grad(startX, cy, startX + maxW, cy);
+            if (useGradient) {
+                for (int j = 0; j <= 32; ++j) {
+                    const qreal t = j / 32.0;
+                    grad.setColorAt(t, colorAt(gradientCoordinate(t + gradientPhase)));
+                }
+            } else {
+                grad.setColorAt(0.0, solidColor); grad.setColorAt(1.0, solidColor);
+            }
+            p.setPen(Qt::NoPen); p.setBrush(grad); p.drawPolygon(shape);
+        } else { // C: circular spectrum
+            const qreal radius = qMin(width(), height()) * 0.17 * (scalePercent / 72.0);
+            const qreal barMax = qMin(width(), height()) * 0.12 * (scalePercent / 72.0) * (heightPercent / 100.0);
+            p.setPen(QPen(QColor(255, 255, 255, 35), 1));
+            p.setBrush(Qt::NoBrush);
+            p.drawEllipse(QPointF(cx, cy), radius, radius);
+            for (int i = 0; i < bands.size(); ++i) {
+                const qreal angle = qDegreesToRadians((360.0 * i / bands.size()) - 90.0);
+                const qreal v = qBound(0.0, qreal(bands[i]), 1.0);
+                const qreal outer = radius + qMax(1.0, v * barMax);
+                const QPointF a(cx + qCos(angle) * radius, cy + qSin(angle) * radius);
+                const QPointF b(cx + qCos(angle) * outer, cy + qSin(angle) * outer);
+                p.setPen(QPen(colorForBand(i, bands.size()), qMax(1.0, width() * 0.004 * thicknessPercent / 100.0), Qt::SolidLine, Qt::RoundCap));
+                p.drawLine(a, b);
+            }
+        }
+        if (visualMode == 0) {
+            const QString firstLine = GpuRenderer::instance().runtimeStats().section('\n', 0, 0);
+            p.save();
+            p.setOpacity(0.92);
+            p.setPen(QColor(230, 240, 245));
+            p.setBrush(QColor(10, 14, 20, 205));
+            const QRect hudRect(8, 8, qMin(width() - 16, 430), 26);
+            p.drawRoundedRect(hudRect, 5, 5);
+            p.drawText(hudRect.adjusted(8, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft, firstLine);
+            p.restore();
+        }
+        p.restore();
+    }
+
+private:
+    QVideoSink *videoSink = nullptr;
+    QImage videoImage;
+    QElapsedTimer frameClock;
+    QVector<float> bands;
+    QString message;
+    int visualMode;
+    int positionX, positionY, opacityPercent, scalePercent;
+    QColor solidColor;
+    bool useGradient;
+    int columnCount, heightPercent, thicknessPercent, glowPercent, gradientSpeed;
+    int interpolation = 1;
+    qreal gradientPhase;
+    QVector<QPair<qreal, QColor>> gradientStops;
+
+    QColor colorAt(qreal t) const
+    {
+        if (!useGradient || gradientStops.isEmpty()) return solidColor;
+        if (t <= gradientStops.first().first) return gradientStops.first().second;
+        if (t >= gradientStops.last().first) return gradientStops.last().second;
+        for (int i = 0; i < gradientStops.size() - 1; ++i) {
+            const auto a = gradientStops[i]; const auto b = gradientStops[i + 1];
+            if (t >= a.first && t <= b.first) {
+                const qreal span = qMax<qreal>(0.0001, b.first - a.first);
+                qreal u=(t-a.first)/span;
+                if(interpolation==1) u=u*u*(3.0-2.0*u);
+                if(interpolation==2) {
+                    const QColor ah=a.second.toHsv(), bh=b.second.toHsv();
+                    qreal h1=ah.hueF(),h2=bh.hueF();
+                    if(h1<0) h1=0; if(h2<0) h2=0;
+                    qreal dh=h2-h1;
+                    if(dh>0.5) dh-=1.0; if(dh< -0.5) dh+=1.0;
+                    qreal h=std::fmod(h1+dh*u+1.0,1.0);
+                    return QColor::fromHsvF(h, ah.saturationF()+(bh.saturationF()-ah.saturationF())*u,
+                       ah.valueF()+(bh.valueF()-ah.valueF())*u,
+                       a.second.alphaF()+(b.second.alphaF()-a.second.alphaF())*u);
+                }
+                return QColor::fromRgbF(
+                    a.second.redF()+(b.second.redF()-a.second.redF())*u,
+                    a.second.greenF()+(b.second.greenF()-a.second.greenF())*u,
+                    a.second.blueF()+(b.second.blueF()-a.second.blueF())*u,
+                    a.second.alphaF()+(b.second.alphaF()-a.second.alphaF())*u);
+            }
+        }
+        return gradientStops.last().second;
+    }
+    // Reflect the gradient at its endpoints instead of jumping from last color
+    // to first color. This keeps neighboring bars continuous while animating.
+    static qreal gradientCoordinate(qreal phase)
+    {
+        qreal t = std::fmod(phase, 2.0);
+        if (t < 0.0) t += 2.0;
+        return t <= 1.0 ? t : 2.0 - t;
+    }
+
+    QColor colorForBand(int index, int count) const
+    {
+        const qreal t = count <= 1 ? 0.0 : qreal(index) / (count - 1);
+        return useGradient ? colorAt(gradientCoordinate(t + gradientPhase)) : solidColor;
+    }
+};
+// Keep the actual preview canvas at 16:9 within the available center panel.
+// Empty space outside the canvas belongs to the workspace, not the video.
+class PreviewAspectContainer : public QWidget
+{
+public:
+    explicit PreviewAspectContainer(QWidget *parent = nullptr) : QWidget(parent)
+    {
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        setStyleSheet("background:transparent;");
+    }
+
+    void setCanvas(QWidget *widget)
+    {
+        canvas = widget;
+        if (canvas) {
+            canvas->setParent(this);
+            canvas->show();
+        }
+        layoutCanvas();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QWidget::resizeEvent(event);
+        layoutCanvas();
+    }
+
+private:
+    QWidget *canvas = nullptr;
+
+    void layoutCanvas()
+    {
+        if (!canvas || width() <= 0 || height() <= 0) return;
+        int w = qMin(width(), int(qint64(height()) * 16 / 9));
+        int h = qMin(height(), int(qint64(w) * 9 / 16));
+        w = int(qint64(h) * 16 / 9);
+        canvas->setGeometry((width() - w) / 2, (height() - h) / 2, w, h);
+    }
+};
+
+MainWindow::MainWindow(QWidget *parent)
+    : QMainWindow(parent)
+    , ui(new Ui::MainWindow)
+    , player(new QMediaPlayer(this))
+    , audioOutput(new QAudioOutput(this))
+    , videoWidget(new QVideoWidget(this))
+    , playButton(nullptr)
+    , positionSlider(nullptr)
+    , timeLabel(nullptr)
+    , videoInfoLabel(nullptr)
+    , spectrumAnalyzer(new SpectrumAnalyzer(this))
+    , spectrumDisplay(nullptr)
+    , spectrumOverlay(nullptr)
+    , spectrumTimer(new QTimer(this))
+    , analyzerStatusLabel(nullptr)
+    , isSeeking(false)
+{
+    ui->setupUi(this);
+
+    setWindowTitle("WaveformStudio");
+    resize(1440, 900);
+    setMinimumSize(1100, 700);
+
+    player->setAudioOutput(audioOutput);
+    // Video output is connected to SpectrumDisplay's QVideoSink below, after
+    // the preview stage has been created. Do not use QVideoWidget here.
+
+    audioOutput->setVolume(0.8);
+
+    setStyleSheet(R"(
+        QMainWindow, QWidget {
+            background-color: #202124;
+            color: #E8EAED;
+            font-family: "Segoe UI";
+            font-size: 10pt;
+        }
+
+        QMenuBar {
+            background-color: #292A2D;
+            border-bottom: 1px solid #3C4043;
+        }
+
+        QMenuBar::item {
+            padding: 6px 12px;
+        }
+
+        QMenuBar::item:selected {
+            background-color: #3C4043;
+        }
+
+        QMenu {
+            background-color: #292A2D;
+            border: 1px solid #45474C;
+        }
+
+        QMenu::item {
+            padding: 7px 24px;
+        }
+
+        QMenu::item:selected {
+            background-color: #234A83;
+        }
+
+        QPushButton {
+            background-color: #35363A;
+            color: #F1F3F4;
+            border: 1px solid #4A4C50;
+            border-radius: 5px;
+            padding: 7px 12px;
+        }
+
+        QPushButton:hover {
+            background-color: #45474C;
+        }
+
+        QPushButton:pressed {
+            background-color: #2D6CDF;
+        }
+
+        QLabel#sectionTitle {
+            color: #9AA0A6;
+            font-weight: bold;
+            font-size: 9pt;
+        }
+
+        QFrame#panel {
+            background-color: #292A2D;
+            border: 1px solid #3C4043;
+            border-radius: 6px;
+        }
+
+        QListWidget {
+            background-color: #202124;
+            border: 1px solid #3C4043;
+            border-radius: 4px;
+            padding: 4px;
+            outline: none;
+        }
+
+        QListWidget::item {
+            padding: 9px 6px;
+            border-radius: 4px;
+        }
+
+        QListWidget::item:selected {
+            background-color: #234A83;
+        }
+
+        QSlider::groove:horizontal {
+            height: 5px;
+            background: #4A4C50;
+            border-radius: 2px;
+        }
+
+        QSlider::handle:horizontal {
+            background: #8AB4F8;
+            width: 13px;
+            margin: -4px 0;
+            border-radius: 6px;
+        }
+
+        QStatusBar {
+            background-color: #292A2D;
+            border-top: 1px solid #3C4043;
+        }
+    )");
+
+    // =========================================================
+    // MENU BAR
+    // =========================================================
+
+    QMenu *fileMenu = menuBar()->addMenu("File");
+
+    QAction *newAction =
+        fileMenu->addAction("New Project");
+
+    QAction *openAction =
+        fileMenu->addAction("Import Video...");
+
+    QAction *importAudioAction =
+        fileMenu->addAction("Import Audio...");
+
+    fileMenu->addSeparator();
+
+    QAction *exportAction =
+        fileMenu->addAction("Export Video...");
+
+    fileMenu->addSeparator();
+
+    QAction *exitAction =
+        fileMenu->addAction("Exit");
+
+    QMenu *editMenu = menuBar()->addMenu("Edit");
+    editMenu->addAction("Undo");
+    editMenu->addAction("Redo");
+
+    QMenu *viewMenu = menuBar()->addMenu("View");
+    viewMenu->addAction("Reset Workspace");
+
+    QMenu *helpMenu = menuBar()->addMenu("Help");
+    helpMenu->addAction("About WaveformStudio");
+
+    // =========================================================
+    // CENTRAL WIDGET
+    // =========================================================
+
+    QWidget *central = new QWidget(this);
+    setCentralWidget(central);
+
+    QVBoxLayout *rootLayout = new QVBoxLayout(central);
+    rootLayout->setContentsMargins(8, 8, 8, 8);
+    rootLayout->setSpacing(8);
+
+    // =========================================================
+    // TOP TOOLBAR
+    // =========================================================
+
+    QFrame *toolbarPanel = new QFrame;
+    toolbarPanel->setObjectName("panel");
+
+    QHBoxLayout *toolbarLayout =
+        new QHBoxLayout(toolbarPanel);
+
+    toolbarLayout->setContentsMargins(10, 7, 10, 7);
+    toolbarLayout->setSpacing(8);
+
+    QLabel *appLogo = new QLabel("W");
+    appLogo->setAlignment(Qt::AlignCenter);
+    appLogo->setFixedSize(34, 34);
+
+    appLogo->setStyleSheet(
+        "background-color:#2D6CDF;"
+        "border-radius:7px;"
+        "font-size:18pt;"
+        "font-weight:bold;"
+        );
+
+    QLabel *appName =
+        new QLabel("WaveformStudio");
+
+    appName->setStyleSheet(
+        "font-size:14pt;font-weight:bold;"
+        );
+
+    toolbarLayout->addWidget(appLogo);
+    toolbarLayout->addWidget(appName);
+    toolbarLayout->addSpacing(16);
+
+    QPushButton *importVideoButton =
+        new QPushButton("Import Video");
+
+    QPushButton *importAudioButton =
+        new QPushButton("Import Audio");
+
+    QPushButton *saveProjectButton =
+        new QPushButton("Save Project");
+
+    toolbarLayout->addWidget(importVideoButton);
+    toolbarLayout->addWidget(importAudioButton);
+    toolbarLayout->addWidget(saveProjectButton);
+
+    toolbarLayout->addStretch();
+
+    QLabel *resolutionLabel =
+        new QLabel("1920 × 1080  |  60 FPS");
+
+    resolutionLabel->setStyleSheet(
+        "color:#8AB4F8;font-weight:bold;"
+        );
+
+    toolbarLayout->addWidget(resolutionLabel);
+
+    QPushButton *exportButton =
+        new QPushButton("Export Video");
+
+    exportButton->setStyleSheet(
+        "QPushButton {"
+        "background-color:#2D6CDF;"
+        "border:1px solid #4A83E8;"
+        "font-weight:bold;"
+        "padding:8px 16px;"
+        "}"
+        "QPushButton:hover {"
+        "background-color:#4285F4;"
+        "}"
+        );
+
+    toolbarLayout->addWidget(exportButton);
+
+    rootLayout->addWidget(toolbarPanel);
+
+    // =========================================================
+    // MAIN WORKSPACE
+    // =========================================================
+
+    QSplitter *workspaceSplitter =
+        new QSplitter(Qt::Horizontal);
+
+    workspaceSplitter->setChildrenCollapsible(false);
+
+    // ---------------------------------------------------------
+    // LEFT: EFFECT LIBRARY
+    // ---------------------------------------------------------
+
+    QFrame *effectsPanel = new QFrame;
+    effectsPanel->setObjectName("panel");
+    effectsPanel->setMinimumWidth(175);
+    effectsPanel->setMaximumWidth(260);
+
+    QVBoxLayout *effectsLayout =
+        new QVBoxLayout(effectsPanel);
+
+    effectsLayout->setContentsMargins(10, 12, 10, 12);
+    effectsLayout->setSpacing(8);
+
+    QLabel *effectsTitle =
+        new QLabel("EFFECT LIBRARY");
+
+    effectsTitle->setObjectName("sectionTitle");
+
+    effectsLayout->addWidget(effectsTitle);
+
+    QListWidget *effectsList =
+        new QListWidget;
+
+    effectsList->addItem("Audio Waveform");
+    effectsList->addItem("Spectrum Analyzer");
+    effectsList->addItem("Circular Waveform");
+    effectsList->addItem("Audio Bars");
+    effectsList->addItem("Bokeh Overlay");
+    effectsList->addItem("Rain Glass");
+    effectsList->addItem("Glow");
+    effectsList->addItem("Particles");
+
+    effectsList->setCurrentRow(0);
+
+    effectsLayout->addWidget(effectsList, 1);
+
+    QPushButton *addEffectButton =
+        new QPushButton("+ Add Effect Layer");
+
+    effectsLayout->addWidget(addEffectButton);
+
+    workspaceSplitter->addWidget(effectsPanel);
+
+    // ---------------------------------------------------------
+    // CENTER: VIDEO PREVIEW
+    // ---------------------------------------------------------
+
+    QFrame *previewPanel = new QFrame;
+    previewPanel->setObjectName("panel");
+
+    QVBoxLayout *previewLayout =
+        new QVBoxLayout(previewPanel);
+
+    previewLayout->setContentsMargins(12, 12, 12, 12);
+    previewLayout->setSpacing(10);
+
+    QHBoxLayout *previewHeader =
+        new QHBoxLayout;
+
+    QLabel *previewTitle =
+        new QLabel("PREVIEW");
+
+    previewTitle->setObjectName("sectionTitle");
+
+    videoInfoLabel =
+        new QLabel("No video loaded");
+
+    videoInfoLabel->setStyleSheet(
+        "color:#9AA0A6;"
+        );
+
+    previewHeader->addWidget(previewTitle);
+    previewHeader->addStretch();
+    previewHeader->addWidget(videoInfoLabel);
+
+    previewLayout->addLayout(previewHeader);
+
+    // Composite video and Spectrum Overlay in one QWidget. QVideoWidget can
+    // use a native surface that sits above ordinary child widgets on Windows.
+    // QVideoSink gives us frames so SpectrumDisplay paints video + effect itself.
+    PreviewAspectContainer *stageContainer = new PreviewAspectContainer(previewPanel);
+    QFrame *videoStage = new QFrame(stageContainer);
+    videoStage->setStyleSheet("background:#101114;border:1px solid #45474C;border-radius:4px;");
+    QVBoxLayout *stageLayout = new QVBoxLayout(videoStage);
+    stageLayout->setContentsMargins(0, 0, 0, 0);
+    stageLayout->setSpacing(0);
+
+    spectrumOverlay = new SpectrumDisplay(videoStage);
+    stageLayout->addWidget(spectrumOverlay);
+    stageContainer->setCanvas(videoStage);
+    player->setVideoOutput(spectrumOverlay->getVideoSink());
+    previewLayout->addWidget(stageContainer, 1);
+
+    // The separate 64-band monitor is unnecessary while the effect is already
+    // rendered on the video preview. Keep its data object for compatibility,
+    // but hide the monitor to reclaim preview space.
+    QHBoxLayout *spectrumHeader = new QHBoxLayout;
+    QLabel *spectrumTitle = new QLabel("SPECTRUM ANALYZER · 64 BANDS");
+    spectrumTitle->setObjectName("sectionTitle");
+    analyzerStatusLabel = new QLabel("Waiting for media");
+    analyzerStatusLabel->setStyleSheet("color:#9AA0A6;font-size:8pt;");
+    spectrumHeader->addWidget(spectrumTitle);
+    spectrumHeader->addStretch();
+    spectrumHeader->addWidget(analyzerStatusLabel);
+    // Do not add spectrumHeader to the visible preview layout.
+    // Analyzer state continues to be reported in the status bar.
+    spectrumTitle->setParent(previewPanel);
+    analyzerStatusLabel->setParent(previewPanel);
+    spectrumTitle->hide();
+    analyzerStatusLabel->hide();
+    delete spectrumHeader;
+
+    spectrumDisplay = new SpectrumDisplay(previewPanel);
+    spectrumDisplay->hide();
+
+    // ---------------------------------------------------------
+    // PLAYBACK CONTROLS
+    // ---------------------------------------------------------
+
+    QHBoxLayout *playbackLayout =
+        new QHBoxLayout;
+
+    QPushButton *openPreviewButton =
+        new QPushButton("Open Video");
+
+    QPushButton *startButton =
+        new QPushButton("|◀");
+
+    QPushButton *previousButton =
+        new QPushButton("◀");
+
+    playButton =
+        new QPushButton("▶ Play");
+
+    QPushButton *nextButton =
+        new QPushButton("▶|");
+
+    timeLabel =
+        new QLabel("00:00:00 / 00:00:00");
+
+    timeLabel->setStyleSheet(
+        "font-family:Consolas;"
+        "font-size:9pt;"
+        "color:#8AB4F8;"
+        );
+
+    playbackLayout->addWidget(openPreviewButton);
+    playbackLayout->addWidget(startButton);
+    playbackLayout->addWidget(previousButton);
+    playbackLayout->addWidget(playButton);
+    playbackLayout->addWidget(nextButton);
+    playbackLayout->addSpacing(8);
+    playbackLayout->addWidget(timeLabel);
+    playbackLayout->addStretch();
+
+    previewLayout->addLayout(playbackLayout);
+
+    // ---------------------------------------------------------
+    // VIDEO POSITION SLIDER
+    // ---------------------------------------------------------
+
+    positionSlider = new QSlider(Qt::Horizontal);
+
+    positionSlider->setRange(0, 0);
+    positionSlider->setSingleStep(1000);
+    positionSlider->setPageStep(5000);
+    positionSlider->setEnabled(false);
+
+    previewLayout->addWidget(positionSlider);
+
+    workspaceSplitter->addWidget(previewPanel);
+
+    // ---------------------------------------------------------
+    // RIGHT: PROPERTIES
+    // ---------------------------------------------------------
+
+    QFrame *propertiesPanel = new QFrame;
+    propertiesPanel->setObjectName("panel");
+    propertiesPanel->setMinimumWidth(230);
+    propertiesPanel->setMaximumWidth(340);
+
+    QVBoxLayout *propertiesLayout =
+        new QVBoxLayout(propertiesPanel);
+
+    propertiesLayout->setContentsMargins(12, 12, 12, 12);
+    propertiesLayout->setSpacing(12);
+
+    QLabel *propertiesTitle =
+        new QLabel("PROPERTIES");
+
+    propertiesTitle->setObjectName("sectionTitle");
+
+    propertiesLayout->addWidget(propertiesTitle);
+
+    QLabel *selectedEffectLabel = new QLabel("Spectrum Overlay");
+    selectedEffectLabel->setStyleSheet("font-size:12pt;font-weight:bold;");
+    propertiesLayout->addWidget(selectedEffectLabel);
+
+    QLabel *styleLabel = new QLabel("Visualization Style");
+    propertiesLayout->addWidget(styleLabel);
+    QComboBox *visualModeCombo = new QComboBox;
+    visualModeCombo->addItems({"A · Vertical Bars", "B · Horizontal Wave", "C · Circular"});
+    visualModeCombo->setCurrentIndex(0);
+    propertiesLayout->addWidget(visualModeCombo);
+
+    QLabel *colorModeLabel = new QLabel("Color Mode");
+    propertiesLayout->addWidget(colorModeLabel);
+    QComboBox *colorModeCombo = new QComboBox;
+    colorModeCombo->addItems({"Gradient", "Single Color"});
+    propertiesLayout->addWidget(colorModeCombo);
+
+    QPushButton *colorButton = new QPushButton("Choose Single Color…");
+    propertiesLayout->addWidget(colorButton);
+
+    QLabel *gradientTitle = new QLabel("Gradient Color Stops");
+    gradientTitle->setStyleSheet("font-weight:bold;");
+    propertiesLayout->addWidget(gradientTitle);
+    GradientEditor *gradientEditor = new GradientEditor;
+    gradientEditor->stops = spectrumOverlay->getGradientStops();
+    propertiesLayout->addWidget(gradientEditor);
+    QHBoxLayout *stopPositionRow = new QHBoxLayout;
+    stopPositionRow->addWidget(new QLabel("Stop position"));
+    QSpinBox *stopPosition = new QSpinBox;
+    stopPosition->setRange(0,100); stopPosition->setSuffix("%");
+    stopPositionRow->addWidget(stopPosition);
+    propertiesLayout->addLayout(stopPositionRow);
+    propertiesLayout->addWidget(new QLabel("Interpolation"));
+    QComboBox *interpolationCombo = new QComboBox;
+    interpolationCombo->addItems({"Linear", "Smooth", "HSV (shortest hue)"});
+    interpolationCombo->setCurrentIndex(1);
+    propertiesLayout->addWidget(interpolationCombo);
+    propertiesLayout->addWidget(new QLabel("Gradient Presets"));
+    QComboBox *presetCombo = new QComboBox;
+    presetCombo->addItems({"Ocean Blue", "Sunset", "Neon", "Rainbow"});
+    propertiesLayout->addWidget(presetCombo);
+    QPushButton *savePresetButton = new QPushButton("Save Current Preset…");
+    propertiesLayout->addWidget(savePresetButton);
+    QListWidget *gradientStopsList = new QListWidget;
+    gradientStopsList->setMaximumHeight(112);
+    gradientStopsList->setSelectionMode(QAbstractItemView::SingleSelection);
+    gradientStopsList->hide(); // Internal selection mirror; editor is the visible UI.
+
+    QHBoxLayout *gradientButtons = new QHBoxLayout;
+    QPushButton *addStopButton = new QPushButton("+ Add");
+    QPushButton *removeStopButton = new QPushButton("− Remove");
+    QPushButton *changeStopColorButton = new QPushButton("Change Color…");
+    gradientButtons->addWidget(addStopButton);
+    gradientButtons->addWidget(removeStopButton);
+    propertiesLayout->addLayout(gradientButtons);
+    propertiesLayout->addWidget(changeStopColorButton);
+
+    auto addPercentSlider = [propertiesLayout](const QString &title, int value,
+                                                QLabel **valueLabelOut = nullptr) {
+        QHBoxLayout *row = new QHBoxLayout;
+        QLabel *label = new QLabel(title);
+        QLabel *valueLabel = new QLabel(QString::number(value) + "%");
+        valueLabel->setMinimumWidth(38);
+        valueLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        row->addWidget(label);
+        row->addStretch();
+        row->addWidget(valueLabel);
+        propertiesLayout->addLayout(row);
+        QSlider *slider = new QSlider(Qt::Horizontal);
+        slider->setRange(0, 100);
+        slider->setValue(value);
+        propertiesLayout->addWidget(slider);
+        if (valueLabelOut) *valueLabelOut = valueLabel;
+        return slider;
+    };
+
+    QLabel *xValueLabel = nullptr;
+    QLabel *yValueLabel = nullptr;
+    QLabel *scaleValueLabel = nullptr;
+    QLabel *opacityValueLabel = nullptr;
+    QLabel *positionTitle = new QLabel("Position (video frame)");
+    positionTitle->setStyleSheet("font-weight:bold;");
+    propertiesLayout->addWidget(positionTitle);
+    QSlider *xPositionSlider = addPercentSlider("Horizontal · X", 50, &xValueLabel);
+    QSlider *yPositionSlider = addPercentSlider("Vertical · Y", 78, &yValueLabel);
+    QSlider *scaleSlider = addPercentSlider("Size", 72, &scaleValueLabel);
+    scaleSlider->setMinimum(20);
+    QSlider *opacitySlider = addPercentSlider("Opacity", 92, &opacityValueLabel);
+
+    // Waveform geometry and animated gradient controls.
+    QLabel *waveTitle = new QLabel("WAVEFORM SETTINGS");
+    waveTitle->setObjectName("sectionTitle");
+    propertiesLayout->addWidget(waveTitle);
+
+    auto addWaveSlider = [propertiesLayout](const QString &name, int min, int max,
+                                            int initial, const QString &suffix,
+                                            auto callback) {
+        QHBoxLayout *row = new QHBoxLayout;
+        QLabel *label = new QLabel(name);
+        QLabel *value = new QLabel(QString::number(initial) + suffix);
+        value->setMinimumWidth(50);
+        value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        row->addWidget(label);
+        row->addStretch();
+        row->addWidget(value);
+        propertiesLayout->addLayout(row);
+        QSlider *slider = new QSlider(Qt::Horizontal);
+        slider->setRange(min, max);
+        slider->setValue(initial);
+        propertiesLayout->addWidget(slider);
+        QObject::connect(slider, &QSlider::valueChanged, slider,
+                         [value, suffix, callback](int v) {
+                             value->setText(QString::number(v) + suffix);
+                             callback(v);
+                         });
+        return slider;
+    };
+
+    addWaveSlider("Number of Bars", 8, 128, 64, "", [this](int v) {
+        spectrumOverlay->setColumnCount(v);
+        spectrumDisplay->setColumnCount(v);
+    });
+    addWaveSlider("Bar Height", 10, 200, 100, "%", [this](int v) {
+        spectrumOverlay->setHeightPercent(v);
+        spectrumDisplay->setHeightPercent(v);
+    });
+    addWaveSlider("Bar Thickness", 10, 100, 75, "%", [this](int v) {
+        spectrumOverlay->setThicknessPercent(v);
+        spectrumDisplay->setThicknessPercent(v);
+    });
+    addWaveSlider("Glow", 0, 100, 0, "%", [this](int v) {
+        spectrumOverlay->setGlowPercent(v);
+        spectrumDisplay->setGlowPercent(v);
+    });
+    addWaveSlider("Gradient Speed", 0, 100, 0, "%", [this](int v) {
+        spectrumOverlay->setGradientSpeed(v);
+        spectrumDisplay->setGradientSpeed(v);
+    });
+
+    // Local alias: class members cannot be captured directly by lambdas.
+    SpectrumDisplay *overlay = spectrumOverlay;
+
+    // Populate the Photoshop-like editable gradient-stop list.
+    auto refreshGradientList = [overlay, gradientStopsList, gradientEditor, stopPosition]() {
+        gradientStopsList->clear();
+        const auto stops = overlay->getGradientStops();
+        for (int i = 0; i < stops.size(); ++i) {
+            const QColor c = stops[i].second;
+            auto *item = new QListWidgetItem(
+                QString("%1%   %2").arg(qRound(stops[i].first * 100)).arg(c.name().toUpper()),
+                gradientStopsList);
+            item->setBackground(c);
+            item->setForeground((c.lightness() > 140) ? QColor("#202124") : QColor("#FFFFFF"));
+            item->setData(Qt::UserRole, i);
+        }
+        const int selected = qBound(0, overlay->selectedStopIndex, gradientStopsList->count() - 1);
+        if (gradientStopsList->count() > 0) gradientStopsList->setCurrentRow(selected);
+        gradientEditor->stops=stops;
+        gradientEditor->selected=selected;
+        gradientEditor->refresh();
+        QSignalBlocker block(stopPosition);
+        if(!stops.isEmpty()) stopPosition->setValue(qRound(stops[selected].first*100));
+    };
+    refreshGradientList();
+
+    auto updateColorControls = [colorModeCombo, colorButton, gradientTitle,
+                                 gradientStopsList, gradientEditor, stopPosition, interpolationCombo, presetCombo, savePresetButton, addStopButton, removeStopButton,
+                                 changeStopColorButton]() {
+        const bool gradient = (colorModeCombo->currentIndex() == 0);
+        colorButton->setVisible(!gradient);
+        gradientTitle->setVisible(gradient);
+        gradientStopsList->setVisible(false);
+        gradientEditor->setVisible(gradient);
+        stopPosition->setVisible(gradient);
+        interpolationCombo->setVisible(gradient);
+        presetCombo->setVisible(gradient);
+        savePresetButton->setVisible(gradient);
+        addStopButton->setVisible(gradient);
+        removeStopButton->setVisible(gradient);
+        changeStopColorButton->setVisible(gradient);
+    };
+    updateColorControls();
+
+    // Live gradient editor: synchronize drag, selection and color edits.
+    gradientEditor->changed = [overlay, gradientEditor, gradientStopsList, stopPosition]() {
+        overlay->setGradientStops(gradientEditor->stops);
+        overlay->selectedStopIndex=gradientEditor->selected;
+        QSignalBlocker block1(gradientStopsList);
+        QSignalBlocker block2(stopPosition);
+        gradientStopsList->setCurrentRow(gradientEditor->selected);
+        if(gradientEditor->selected>=0 && gradientEditor->selected<gradientEditor->stops.size())
+            stopPosition->setValue(qRound(gradientEditor->stops[gradientEditor->selected].first*100));
+    };
+    gradientEditor->selectionChanged = [overlay, gradientStopsList, stopPosition, gradientEditor](int index) {
+        overlay->selectedStopIndex=index;
+        QSignalBlocker block(gradientStopsList);
+        gradientStopsList->setCurrentRow(index);
+        if(index>=0 && index<gradientEditor->stops.size()) stopPosition->setValue(qRound(gradientEditor->stops[index].first*100));
+    };
+    gradientEditor->editColor = [this, gradientEditor](int) {
+        const int i=gradientEditor->selected;
+        if(i<0 || i>=gradientEditor->stops.size()) return;
+        const QColor c=QColorDialog::getColor(gradientEditor->stops[i].second,this,"Gradient Stop Color");
+        if(c.isValid()) {gradientEditor->stops[i].second=c; gradientEditor->refresh(); if(gradientEditor->changed) gradientEditor->changed();}
+    };
+    connect(stopPosition,qOverload<int>(&QSpinBox::valueChanged),this,[gradientEditor](int v){
+        const int i=gradientEditor->selected;
+        if(i<0 || i>=gradientEditor->stops.size()) return;
+        const qreal lo=i>0?gradientEditor->stops[i-1].first+0.001:0;
+        const qreal hi=i+1<gradientEditor->stops.size()?gradientEditor->stops[i+1].first-0.001:1;
+        gradientEditor->stops[i].first=qBound(lo,v/100.0,hi);
+        gradientEditor->refresh(); if(gradientEditor->changed) gradientEditor->changed();
+    });
+    connect(interpolationCombo,qOverload<int>(&QComboBox::currentIndexChanged),overlay,&SpectrumDisplay::setInterpolation);
+    auto applyPreset = [gradientEditor](const QString &name) {
+        GradientEditor::Stops stops;
+        if(name=="Ocean Blue") stops={{0,QColor("#00D5FF")},{0.5,QColor("#376BFF")},{1,QColor("#D64DFF")}};
+        else if(name=="Sunset") stops={{0,QColor("#FFCB52")},{0.5,QColor("#FF5368")},{1,QColor("#8A2BE2")}};
+        else if(name=="Neon") stops={{0,QColor("#39FF14")},{0.5,QColor("#00D9FF")},{1,QColor("#FF20C5")}};
+        else if(name=="Rainbow") stops={{0,QColor("#FF3030")},{0.25,QColor("#FFD500")},{0.5,QColor("#00DD77")},{0.75,QColor("#307BFF")},{1,QColor("#C03CFF")}};
+        else {
+            QSettings settings("WaveformStudio","WaveformStudio");
+            const QVariantList stored=settings.value("gradients/"+name).toList();
+            for(const QVariant &v:stored) {
+                const QVariantMap m=v.toMap();
+                const QColor c(m.value("color").toString());
+                if(c.isValid()) stops.append({m.value("position").toDouble(),c});
+            }
+        }
+        if(stops.size()>=2) gradientEditor->setStops(stops);
+    };
+    {
+        QSettings settings("WaveformStudio","WaveformStudio");
+        settings.beginGroup("gradients");
+        for(const QString &name:settings.childKeys()) if(presetCombo->findText(name)<0) presetCombo->addItem(name);
+        settings.endGroup();
+    }
+    connect(presetCombo,&QComboBox::currentTextChanged,this,applyPreset);
+    connect(savePresetButton,&QPushButton::clicked,this,[this,gradientEditor,presetCombo](){
+        bool ok=false;
+        const QString name=QInputDialog::getText(this,"Save Gradient Preset","Preset name:",QLineEdit::Normal,QString(),&ok).trimmed();
+        if(!ok || name.isEmpty() || name.contains('/')) return;
+        QVariantList saved;
+        for(const auto &stop:gradientEditor->stops) {
+            QVariantMap m; m.insert("position",stop.first); m.insert("color",stop.second.name(QColor::HexArgb)); saved.append(m);
+        }
+        QSettings settings("WaveformStudio","WaveformStudio");
+        settings.setValue("gradients/"+name,saved);
+        if(presetCombo->findText(name)<0) presetCombo->addItem(name);
+        presetCombo->setCurrentText(name);
+    });
+    connect(visualModeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            overlay, &SpectrumDisplay::setVisualMode);
+    connect(colorModeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [overlay, updateColorControls](int index) {
+        overlay->setUseGradient(index == 0);
+        updateColorControls();
+    });
+    connect(colorButton, &QPushButton::clicked, this, [this, overlay]() {
+        const QColor color = QColorDialog::getColor(overlay->getSolidColor(), this,
+                                                      "Choose Spectrum Color");
+        if (color.isValid()) overlay->setSolidColor(color);
+    });
+    connect(addStopButton, &QPushButton::clicked, this,
+            [overlay, refreshGradientList]() {
+        overlay->addGradientStop(); refreshGradientList();
+    });
+    connect(removeStopButton, &QPushButton::clicked, this,
+            [overlay, gradientStopsList, refreshGradientList]() {
+        const int row = gradientStopsList->currentRow();
+        if (!overlay->removeGradientStop(row)) return;
+        refreshGradientList();
+    });
+    connect(changeStopColorButton, &QPushButton::clicked, this,
+            [this, overlay, gradientStopsList, refreshGradientList]() {
+        const int row = gradientStopsList->currentRow();
+        const auto stops = overlay->getGradientStops();
+        if (row < 0 || row >= stops.size()) return;
+        const QColor color = QColorDialog::getColor(stops[row].second, this,
+                                                      "Change Gradient Stop Color");
+        if (color.isValid()) { overlay->setGradientStopColor(row, color); refreshGradientList(); }
+    });
+    connect(gradientStopsList, &QListWidget::currentRowChanged,
+            overlay, [overlay](int row) {
+        if (row >= 0) overlay->selectedStopIndex = row;
+    });
+    connect(xPositionSlider, &QSlider::valueChanged, this,
+            [overlay, xPositionSlider, yPositionSlider, xValueLabel](int value) {
+        xValueLabel->setText(QString::number(value) + "%");
+        overlay->setPosition(value, yPositionSlider->value());
+    });
+    connect(yPositionSlider, &QSlider::valueChanged, this,
+            [overlay, xPositionSlider, yValueLabel](int value) {
+        yValueLabel->setText(QString::number(value) + "%");
+        overlay->setPosition(xPositionSlider->value(), value);
+    });
+    connect(scaleSlider, &QSlider::valueChanged, this, [overlay, scaleValueLabel](int value) {
+        scaleValueLabel->setText(QString::number(value) + "%"); overlay->setScalePercent(value);
+    });
+    connect(opacitySlider, &QSlider::valueChanged, this, [overlay, opacityValueLabel](int value) {
+        opacityValueLabel->setText(QString::number(value) + "%"); overlay->setOpacityPercent(value);
+    });
+
+    propertiesLayout->addStretch();
+
+    QScrollArea *propertiesScroll = new QScrollArea;
+    propertiesScroll->setWidgetResizable(true);
+    propertiesScroll->setFrameShape(QFrame::NoFrame);
+    propertiesScroll->setMinimumWidth(230);
+    propertiesScroll->setMaximumWidth(340);
+    propertiesScroll->setWidget(propertiesPanel);
+    workspaceSplitter->addWidget(propertiesScroll);
+
+    workspaceSplitter->setStretchFactor(0, 0);
+    workspaceSplitter->setStretchFactor(1, 1);
+    workspaceSplitter->setStretchFactor(2, 0);
+
+    workspaceSplitter->setSizes(
+        {210, 800, 240}
+        );
+
+    rootLayout->addWidget(workspaceSplitter, 1);
+
+    // =========================================================
+    // TIMELINE
+    // =========================================================
+
+    QFrame *timelinePanel = new QFrame;
+    timelinePanel->setObjectName("panel");
+    timelinePanel->setMinimumHeight(190);
+    timelinePanel->setMaximumHeight(260);
+
+    QVBoxLayout *timelineLayout =
+        new QVBoxLayout(timelinePanel);
+
+    timelineLayout->setContentsMargins(10, 8, 10, 10);
+    timelineLayout->setSpacing(8);
+
+    QHBoxLayout *timelineHeader =
+        new QHBoxLayout;
+
+    QLabel *timelineTitle =
+        new QLabel("TIMELINE");
+
+    timelineTitle->setObjectName("sectionTitle");
+
+    QPushButton *addTrackButton =
+        new QPushButton("+ Add Track");
+
+    QPushButton *zoomOutButton =
+        new QPushButton("−");
+
+    QPushButton *zoomInButton =
+        new QPushButton("+");
+
+    timelineHeader->addWidget(timelineTitle);
+    timelineHeader->addStretch();
+    timelineHeader->addWidget(addTrackButton);
+    timelineHeader->addWidget(zoomOutButton);
+    timelineHeader->addWidget(zoomInButton);
+
+    timelineLayout->addLayout(timelineHeader);
+
+    // Timeline ruler
+    QHBoxLayout *rulerLayout =
+        new QHBoxLayout;
+
+    rulerLayout->setSpacing(0);
+
+    QLabel *rulerLabel =
+        new QLabel("TRACK");
+
+    rulerLabel->setFixedWidth(110);
+
+    rulerLabel->setStyleSheet(
+        "color:#9AA0A6;font-size:8pt;"
+        );
+
+    rulerLayout->addWidget(rulerLabel);
+
+    QWidget *ruler = new QWidget;
+
+    QHBoxLayout *rulerTicks =
+        new QHBoxLayout(ruler);
+
+    rulerTicks->setContentsMargins(0, 0, 0, 0);
+    rulerTicks->setSpacing(0);
+
+    for (int i = 0; i <= 10; ++i) {
+        QLabel *tick =
+            new QLabel(QString("%1 s").arg(i * 5));
+
+        tick->setAlignment(
+            Qt::AlignLeft | Qt::AlignVCenter
+            );
+
+        tick->setStyleSheet(
+            "color:#9AA0A6;"
+            "font-size:8pt;"
+            "border-left:1px solid #45474C;"
+            "padding-left:3px;"
+            );
+
+        rulerTicks->addWidget(tick, 1);
+    }
+
+    rulerLayout->addWidget(ruler, 1);
+
+    timelineLayout->addLayout(rulerLayout);
+
+    auto createTrack =
+        [](const QString &name, const QString &color) {
+            QWidget *track = new QWidget;
+
+            QHBoxLayout *layout =
+                new QHBoxLayout(track);
+
+            layout->setContentsMargins(0, 0, 0, 0);
+            layout->setSpacing(5);
+
+            QLabel *trackName =
+                new QLabel(name);
+
+            trackName->setFixedWidth(105);
+
+            trackName->setStyleSheet(
+                "color:#E8EAED;font-size:9pt;"
+                );
+
+            layout->addWidget(trackName);
+
+            QFrame *clip = new QFrame;
+            clip->setMinimumHeight(27);
+
+            clip->setStyleSheet(
+                QString(
+                    "background-color:%1;"
+                    "border:1px solid #55585E;"
+                    "border-radius:3px;"
+                    ).arg(color)
+                );
+
+            QLabel *clipLabel =
+                new QLabel(name);
+
+            clipLabel->setAlignment(Qt::AlignCenter);
+
+            clipLabel->setStyleSheet(
+                "color:white;"
+                "background:transparent;"
+                "border:none;"
+                "font-size:8pt;"
+                );
+
+            QHBoxLayout *clipLayout =
+                new QHBoxLayout(clip);
+
+            clipLayout->setContentsMargins(4, 0, 4, 0);
+            clipLayout->addWidget(clipLabel);
+
+            layout->addWidget(clip, 1);
+
+            return track;
+        };
+
+    timelineLayout->addWidget(
+        createTrack("Video 1", "#345B78")
+        );
+
+    timelineLayout->addWidget(
+        createTrack("Audio 1", "#386B55")
+        );
+
+    timelineLayout->addWidget(
+        createTrack("Waveform 1", "#59478A")
+        );
+
+    timelineLayout->addWidget(
+        createTrack("Overlay 1", "#805A35")
+        );
+
+    rootLayout->addWidget(timelinePanel);
+
+    statusBar()->showMessage(
+        "Ready | WaveformStudio | Import a video to begin"
+        );
+
+    // =========================================================
+    // CONNECT VIDEO CONTROLS
+    // =========================================================
+
+    connect(
+        importVideoButton,
+        &QPushButton::clicked,
+        this,
+        &MainWindow::openVideo
+        );
+
+    connect(
+        openPreviewButton,
+        &QPushButton::clicked,
+        this,
+        &MainWindow::openVideo
+        );
+
+    connect(
+        openAction,
+        &QAction::triggered,
+        this,
+        &MainWindow::openVideo
+        );
+
+    connect(
+        playButton,
+        &QPushButton::clicked,
+        this,
+        &MainWindow::togglePlayback
+        );
+
+    connect(
+        startButton,
+        &QPushButton::clicked,
+        this,
+        [this]() {
+            player->setPosition(0);
+        }
+        );
+
+    connect(
+        previousButton,
+        &QPushButton::clicked,
+        this,
+        [this]() {
+            player->setPosition(
+                qMax(qint64(0), player->position() - 5000)
+                );
+        }
+        );
+
+    connect(
+        nextButton,
+        &QPushButton::clicked,
+        this,
+        [this]() {
+            const qint64 duration = player->duration();
+
+            if (duration > 0) {
+                player->setPosition(
+                    qMin(duration, player->position() + 5000)
+                    );
+            }
+        }
+        );
+
+    connect(
+        positionSlider,
+        &QSlider::sliderPressed,
+        this,
+        [this]() {
+            isSeeking = true;
+        }
+        );
+
+    connect(
+        positionSlider,
+        &QSlider::sliderReleased,
+        this,
+        [this]() {
+            player->setPosition(positionSlider->value());
+            isSeeking = false;
+        }
+        );
+
+    connect(
+        player,
+        &QMediaPlayer::positionChanged,
+        this,
+        &MainWindow::updatePosition
+        );
+
+    connect(
+        player,
+        &QMediaPlayer::durationChanged,
+        this,
+        &MainWindow::updateDuration
+        );
+
+    connect(
+        player,
+        &QMediaPlayer::playbackStateChanged,
+        this,
+        &MainWindow::updatePlaybackState
+        );
+
+    connect(
+        player,
+        &QMediaPlayer::errorOccurred,
+        this,
+        [this](QMediaPlayer::Error error,
+               const QString &errorString) {
+            Q_UNUSED(error);
+
+            if (!errorString.isEmpty()) {
+                statusBar()->showMessage(
+                    "Playback error: " + errorString,
+                    10000
+                    );
+            }
+        }
+        );
+
+    // Spectrum analysis runs asynchronously through FFmpeg.
+    spectrumTimer->setInterval(50); // 20 spectrum updates per second
+    connect(spectrumTimer, &QTimer::timeout, this, [this]() {
+        if (spectrumAnalyzer->isReady() &&
+            player->playbackState() == QMediaPlayer::PlayingState) {
+            const QVector<float> values = spectrumAnalyzer->spectrumAt(
+                static_cast<int>(player->position()), 64);
+            spectrumOverlay->setBands(values);
+            spectrumOverlay->advanceGradient(0.05);
+        }
+    });
+
+    connect(spectrumAnalyzer, &SpectrumAnalyzer::analysisStarted,
+            this, [this]() {
+        analyzerStatusLabel->setText("Analyzing audio…");
+        spectrumDisplay->setBands(QVector<float>());
+        spectrumOverlay->setBands(QVector<float>());
+        spectrumDisplay->setMessage("Extracting audio for spectrum analysis…");
+        spectrumOverlay->setMessage("Analyzing audio spectrum…");
+        statusBar()->showMessage("Spectrum Analyzer: extracting audio with FFmpeg…");
+    });
+
+    connect(spectrumAnalyzer, &SpectrumAnalyzer::analysisProgress,
+            this, [this](int percentage) {
+        analyzerStatusLabel->setText(QString("Analyzing %1%").arg(percentage));
+        statusBar()->showMessage(QString("Spectrum Analyzer: %1%").arg(percentage));
+    });
+
+    connect(spectrumAnalyzer, &SpectrumAnalyzer::analysisFinished,
+            this, [this]() {
+        analyzerStatusLabel->setText("Ready · 64 bands");
+        spectrumDisplay->setMessage(QString());
+        spectrumOverlay->setMessage(QString());
+        const QVector<float> values = spectrumAnalyzer->spectrumAt(
+            static_cast<int>(player->position()), 64);
+        spectrumDisplay->setBands(values);
+        spectrumOverlay->setBands(values);
+        spectrumTimer->start();
+        statusBar()->showMessage("Spectrum Analyzer ready — 64 frequency bands", 5000);
+    });
+
+    connect(spectrumAnalyzer, &SpectrumAnalyzer::analysisError,
+            this, [this](const QString &message) {
+        analyzerStatusLabel->setText("Analysis unavailable");
+        spectrumDisplay->setBands(QVector<float>());
+        spectrumOverlay->setBands(QVector<float>());
+        spectrumDisplay->setMessage("Audio analysis failed — see status bar");
+        spectrumOverlay->setMessage("Audio analysis failed");
+        statusBar()->showMessage("Spectrum Analyzer: " + message, 10000);
+    });
+
+    connect(
+        exitAction,
+        &QAction::triggered,
+        this,
+        &QWidget::close
+        );
+
+    // Reserved controls for future development.
+    connect(
+        importAudioButton,
+        &QPushButton::clicked,
+        this,
+        [this]() {
+            QMessageBox::information(
+                this,
+                "Import Audio",
+                "Audio import and waveform analysis "
+                "will be implemented in a later step."
+                );
+        }
+        );
+
+    connect(
+        importAudioAction,
+        &QAction::triggered,
+        importAudioButton,
+        &QPushButton::click
+        );
+
+    connect(
+        exportButton,
+        &QPushButton::clicked,
+        this,
+        [this]() {
+            QMessageBox::information(
+                this,
+                "Export Video",
+                "Video compositing and MP4 export "
+                "will be implemented in a later step."
+                );
+        }
+        );
+
+    connect(
+        exportAction,
+        &QAction::triggered,
+        exportButton,
+        &QPushButton::click
+        );
+
+    connect(
+        newAction,
+        &QAction::triggered,
+        this,
+        [this]() {
+            player->stop();
+            player->setSource(QUrl());
+            spectrumAnalyzer->stop();
+            spectrumDisplay->setBands(QVector<float>());
+            spectrumOverlay->setBands(QVector<float>());
+            spectrumDisplay->setMessage("Import a video to analyze its audio spectrum");
+            spectrumOverlay->setMessage("Import a video to preview Spectrum Overlay");
+            analyzerStatusLabel->setText("Waiting for media");
+
+            videoInfoLabel->setText("No video loaded");
+            positionSlider->setRange(0, 0);
+            positionSlider->setEnabled(false);
+
+            updateTimeLabel(0, 0);
+
+            statusBar()->showMessage(
+                "New project started",
+                3000
+                );
+        }
+        );
+
+    connect(
+        saveProjectButton,
+        &QPushButton::clicked,
+        this,
+        [this]() {
+            QMessageBox::information(
+                this,
+                "Save Project",
+                "Project saving will be implemented "
+                "in a later step."
+                );
+        }
+        );
+
+    connect(
+        addEffectButton,
+        &QPushButton::clicked,
+        this,
+        [this, effectsList]() {
+            const QString effectName =
+                effectsList->currentItem()
+                    ? effectsList->currentItem()->text()
+                    : QString("Audio Waveform");
+
+            statusBar()->showMessage(
+                effectName +
+                    " selected. Effect processing "
+                    "will be implemented next.",
+                4000
+                );
+        }
+        );
+
+    Q_UNUSED(addTrackButton);
+    Q_UNUSED(zoomOutButton);
+    Q_UNUSED(zoomInButton);
+    Q_UNUSED(editMenu);
+    Q_UNUSED(viewMenu);
+    // GPU foundation diagnostics; existing CPU video/Spectrum rendering stays intact.
+    QAction *gpuDiagnosticsAction = helpMenu->addAction("GPU Renderer Diagnostics...");
+    connect(gpuDiagnosticsAction, &QAction::triggered, this, [this]() {
+        GpuRenderer &gpu = GpuRenderer::instance();
+        gpu.initialize();
+        QMessageBox::information(this, "Direct3D 11 Diagnostics", gpu.diagnostics());
+    });
+    QTimer::singleShot(0, this, [this]() {
+        GpuRenderer &gpu = GpuRenderer::instance();
+        gpu.initialize();
+        statusBar()->showMessage(gpu.isHardwareAccelerated()
+            ? "Direct3D 11 hardware device ready | Spectrum Bars: GPU test (Phase 2)"
+            : "GPU diagnostics available in Help > GPU Renderer Diagnostics", 9000);
+    });
+    Q_UNUSED(helpMenu);
+}
+
+MainWindow::~MainWindow()
+{
+    spectrumTimer->stop();
+    spectrumAnalyzer->stop();
+    player->stop();
+    delete ui;
+}
+
+// =============================================================
+// OPEN VIDEO
+// =============================================================
+
+void MainWindow::openVideo()
+{
+    const QString fileName = QFileDialog::getOpenFileName(
+        this,
+        "Import Video",
+        QDir::homePath(),
+        "Video Files (*.mp4 *.m4v *.mov *.mkv *.avi *.wmv);;"
+        "All Files (*.*)"
+        );
+
+    if (fileName.isEmpty()) {
+        return;
+    }
+
+    player->stop();
+
+    videoInfoLabel->setText(
+        QFileInfo(fileName).fileName()
+        );
+
+    player->setSource(QUrl::fromLocalFile(fileName));
+
+    spectrumTimer->stop();
+    spectrumAnalyzer->analyzeFile(fileName);
+
+    positionSlider->setValue(0);
+    positionSlider->setEnabled(true);
+
+    updateTimeLabel(0, 0);
+
+    statusBar()->showMessage(
+        "Loading video: " + QFileInfo(fileName).fileName(),
+        5000
+        );
+
+    player->play();
+}
+
+// =============================================================
+// PLAY / PAUSE
+// =============================================================
+
+void MainWindow::togglePlayback()
+{
+    if (player->source().isEmpty()) {
+        openVideo();
+        return;
+    }
+
+    if (player->playbackState()
+        == QMediaPlayer::PlayingState) {
+        player->pause();
+    } else {
+        player->play();
+    }
+}
+
+// =============================================================
+// UPDATE PLAYBACK POSITION
+// =============================================================
+
+void MainWindow::updatePosition(qint64 position)
+{
+    if (!isSeeking) {
+        QSignalBlocker blocker(positionSlider);
+
+        positionSlider->setValue(
+            static_cast<int>(position)
+            );
+    }
+
+    updateTimeLabel(position, player->duration());
+}
+
+// =============================================================
+// UPDATE VIDEO DURATION
+// =============================================================
+
+void MainWindow::updateDuration(qint64 duration)
+{
+    positionSlider->setRange(
+        0,
+        static_cast<int>(
+            qMin(duration, qint64(2147483647))
+            )
+        );
+
+    positionSlider->setEnabled(duration > 0);
+
+    updateTimeLabel(player->position(), duration);
+}
+
+// =============================================================
+// UPDATE PLAY BUTTON
+// =============================================================
+
+void MainWindow::updatePlaybackState(
+    QMediaPlayer::PlaybackState state)
+{
+    if (state == QMediaPlayer::PlayingState) {
+        playButton->setText("⏸ Pause");
+    } else {
+        playButton->setText("▶ Play");
+    }
+}
+
+// =============================================================
+// TIME DISPLAY
+// =============================================================
+
+QString MainWindow::formatTime(qint64 milliseconds) const
+{
+    if (milliseconds < 0) {
+        milliseconds = 0;
+    }
+
+    const qint64 totalSeconds = milliseconds / 1000;
+
+    const qint64 hours = totalSeconds / 3600;
+    const qint64 minutes = (totalSeconds % 3600) / 60;
+    const qint64 seconds = totalSeconds % 60;
+
+    return QString("%1:%2:%3")
+        .arg(hours, 2, 10, QChar('0'))
+        .arg(minutes, 2, 10, QChar('0'))
+        .arg(seconds, 2, 10, QChar('0'));
+}
+
+void MainWindow::updateTimeLabel(
+    qint64 position,
+    qint64 duration)
+{
+    timeLabel->setText(
+        formatTime(position) +
+        " / " +
+        formatTime(duration)
+        );
+}
