@@ -241,6 +241,7 @@ void NativeGpuPresenter::shutdown()
     m_ready = false;
     m_nativeWindow = nullptr;
     m_size = QSize();
+    m_adapterName.clear();
 }
 
 bool NativeGpuPresenter::isReady() const { return m_ready; }
