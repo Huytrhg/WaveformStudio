@@ -261,13 +261,13 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override
     {
-        // Phase 4B.1: bars mode can bypass the Phase 4A GPU readback by
-        // drawing the video texture and colored bars directly to this HWND.
-        // Delay native swap-chain creation until both video and spectrum data exist.
-        // This avoids initializing D3D11 during the first Qt Multimedia import frame.
-        if (visualMode == 0 && !videoImage.isNull() && !bands.isEmpty()
-            && tryNativeGpuPaint())
-            return;
+        // Stability fix: do not present a D3D11 swap chain directly into this
+        // Qt-owned widget HWND. On some Windows/Qt Multimedia configurations,
+        // Qt repaints and the native swap chain compete for the same surface,
+        // causing the preview to flash while audio continues normally.
+        // Keep the native presenter implementation available for a future
+        // integration using a dedicated native child window, but use the
+        // stable Qt paint path for all preview modes for now.
 
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
