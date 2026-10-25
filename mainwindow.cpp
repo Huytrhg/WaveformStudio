@@ -205,7 +205,7 @@ public:
     void setForceCpuFallback(bool enabled) { forceCpuFallback = enabled; update(); }
     QString diagnosticsText() const
     {
-        return QStringLiteral("Preview mode: %1\\nMeasured paint rate: %2 FPS\\n\\n%3")
+        return QStringLiteral("Preview mode: %1\nMeasured paint rate: %2 FPS\n\n%3")
             .arg(forceCpuFallback ? QStringLiteral("CPU fallback (QPainter)")
                                   : QStringLiteral("Hybrid GPU (D3D11 composite + readback)"))
             .arg(measuredFps, 0, 'f', 1)
