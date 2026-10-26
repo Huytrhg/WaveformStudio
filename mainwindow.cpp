@@ -2229,10 +2229,9 @@ MainWindow::MainWindow(QWidget *parent)
                     QMessageBox::information(
                         this,
                         "Export Complete",
-                        "The MP4 video was exported successfully to:\n" +
+                        "The MP4 video with an audio-reactive Spectrum Bars overlay was exported successfully to:\n" +
                             finalOutputPath +
-                            "\n\nNote: this initial export step encodes the source video and audio. "
-                            "Spectrum overlay compositing will be added in the next stage."
+                            "\n\nPhase 1 uses FFmpeg's Spectrum Bars renderer. Its appearance is an initial preset; matching Preview styles and color controls will be added later."
                         );
                 } else {
                     const QString errorText = QString::fromLocal8Bit(
@@ -2273,20 +2272,48 @@ MainWindow::MainWindow(QWidget *parent)
                 }
             });
 
+            // Phase 1 visualizer export: generate an audio-reactive bar spectrum
+            // from the source audio and composite it over the source video.
+            if (!spectrumAnalyzer->isReady()) {
+                QMessageBox::warning(
+                    this,
+                    "Spectrum Analysis Not Ready",
+                    "Wait until Spectrum Analyzer finishes analyzing the video's audio, then export again."
+                );
+                if (resumePreviewAfterExport)
+                    player->play();
+                if (resumeSpectrumTimerAfterExport)
+                    spectrumTimer->start();
+                process->deleteLater();
+                progress->deleteLater();
+                return;
+            }
+
+            const QString filterGraph =
+                "[0:a:0]showfreqs=s=960x400:mode=bar:ascale=log:fscale=log:"
+                "win_size=2048:rate=30:colors=0x35B8FF,"
+                "format=rgba,colorkey=0x000000:0.08:0.0[spec];"
+                "[0:v:0]setpts=PTS-STARTPTS[base];"
+                "[base][spec]overlay=x=(W-w)/2:y=H*0.78-h/2:shortest=1[outv]";
+
+            progress->setLabelText("Rendering video with audio-reactive Spectrum Bars...");
+
             QStringList arguments = {
                 "-y",
                 "-hide_banner",
                 "-nostats",
                 "-progress", "pipe:1",
                 "-i", inputPath,
-                "-map", "0:v:0",
-                "-map", "0:a?",
+                "-filter_complex", filterGraph,
+                "-map", "[outv]",
+                "-map", "0:a:0",
                 "-c:v", "libx264",
                 "-preset", "veryfast",
                 "-crf", QString::number(crf),
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac",
                 "-b:a", "192k",
+                "-shortest",
                 "-movflags", "+faststart",
                 finalOutputPath
             };
