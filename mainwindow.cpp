@@ -1366,6 +1366,7 @@ MainWindow::MainWindow(QWidget *parent)
     propertiesLayout->addWidget(peakHoldToggle);
     connect(peakHoldToggle, &QCheckBox::toggled, this, [this](bool enabled) {
         spectrumDisplay->setPeakHoldEnabled(enabled);
+        spectrumOverlay->setPeakHoldEnabled(enabled);
     });
     addWaveSlider("Gradient Speed", 0, 100, 0, "%", [this](int v) {
         spectrumOverlay->setGradientSpeed(v);
