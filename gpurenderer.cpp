@@ -114,7 +114,7 @@ bool GpuRenderer::createPipeline()
     };
     hr = device->CreateInputLayout(layout, ARRAYSIZE(layout), vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), inputLayout.GetAddressOf());
     if (FAILED(hr)) { renderError = QStringLiteral("CreateInputLayout failed: %1").arg(hexResult(hr)); return false; }
-    D3D11_BUFFER_DESC bd{}; bd.ByteWidth = UINT(sizeof(Vertex) * 6 * 128 * 5); bd.Usage = D3D11_USAGE_DYNAMIC;
+    D3D11_BUFFER_DESC bd{}; bd.ByteWidth = UINT(sizeof(Vertex) * 6 * 128 * 6); bd.Usage = D3D11_USAGE_DYNAMIC;
     bd.BindFlags = D3D11_BIND_VERTEX_BUFFER; bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     hr = device->CreateBuffer(&bd, nullptr, vertexBuffer.GetAddressOf());
     if (FAILED(hr)) { renderError = QStringLiteral("CreateBuffer failed: %1").arg(hexResult(hr)); return false; }
@@ -144,7 +144,7 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     }
     if (!initialize() || !createPipeline()) { ++failedFrames; return false; }
     if (topColors && topColors->size() != rects.size()) { ++failedFrames; renderError = QStringLiteral("Gradient color count mismatch."); return false; }
-    if (rects.size() > 128 * 5) { ++failedFrames; renderError = QStringLiteral("Too many rectangles for current vertex buffer (maximum 5 per spectrum column)."); return false; }
+    if (rects.size() > 128 * 6) { ++failedFrames; renderError = QStringLiteral("Too many rectangles for current vertex buffer (maximum 6 per spectrum column)."); return false; }
     // Phase 3: retain the render target, view and staging texture across frames.
     // Rebuild only when the preview size changes. No cross-frame GPU readback is queued.
     QElapsedTimer resourceTimer; resourceTimer.start();
