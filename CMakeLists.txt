@@ -20,6 +20,7 @@ qt_add_executable(WaveformStudio
     mainwindow.ui
     spectrumanalyzer.cpp
     spectrumanalyzer.h
+    spectrumrenderer.h
     gpurenderer.cpp
     gpurenderer.h
     nativegpupresenter.cpp
