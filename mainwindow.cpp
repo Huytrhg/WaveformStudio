@@ -422,10 +422,12 @@ protected:
                     const int hiPeak = qMin(loPeak + 1, peakLevels.size() - 1);
                     const qreal peak = qBound(0.0, qreal(peakLevels[loPeak]) * (1.0 - (idx - loPeak))
                         + qreal(peakLevels[hiPeak]) * (idx - loPeak), 1.0);
-                    const qreal markerH = qMax(4.0, height() * 0.008);
-                    const qreal markerGap = qMax(3.0, height() * 0.006);
+                    // A slim peak cap, colored like the Spectrum instead of a white block.
+                    const qreal markerH = 1.6;
+                    const qreal markerGap = 1.5;
                     gpuRects.push_back(QRectF(bar.left(), baseline - qMax(1.0, peak * maxH) - markerGap - markerH, barW, markerH));
-                    const QColor marker(255, 255, 255, 255);
+                    QColor marker = useGradient ? topColor : color;
+                    marker.setAlpha(qMin(marker.alpha(), 220));
                     gpuColors.push_back(marker);
                     gpuTopColors.push_back(marker);
                 }
@@ -499,8 +501,11 @@ protected:
                         const int hiPeak = qMin(loPeak + 1, peakLevels.size() - 1);
                         const qreal peak = qBound(0.0, qreal(peakLevels[loPeak]) * (1.0 - (idx - loPeak))
                             + qreal(peakLevels[hiPeak]) * (idx - loPeak), 1.0);
-                        p.setBrush(QColor(245, 250, 255, 235));
-                        p.drawRect(QRectF(bar.left(), baseline - qMax(1.0, peak * maxH) - 8.0, barW, 4.0));
+                        QColor marker = useGradient ? colorAt(gradientCoordinate(
+                            (count <= 1 ? 0.0 : qreal(i) / (count - 1)) + gradientPhase + 0.18)) : color;
+                        marker.setAlpha(220);
+                        p.setBrush(marker);
+                        p.drawRect(QRectF(bar.left(), baseline - qMax(1.0, peak * maxH) - 3.0, barW, 1.6));
                     }
                 }
             }
