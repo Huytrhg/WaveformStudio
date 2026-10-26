@@ -132,7 +132,8 @@ bool GpuRenderer::createPipeline()
 }
 
 bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF> &rects,
-                                     const QVector<QColor> &colors, QImage *output, const QImage *background)
+                                     const QVector<QColor> &colors, QImage *output, const QImage *background,
+                                     const QVector<QColor> *topColors)
 {
 #ifdef Q_OS_WIN
     QElapsedTimer totalTimer; totalTimer.start();
@@ -142,7 +143,8 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
         renderError = QStringLiteral("Invalid render dimensions or rectangle/color arrays."); return false;
     }
     if (!initialize() || !createPipeline()) { ++failedFrames; return false; }
-    if (rects.size() > 128 * 3) { ++failedFrames; renderError = QStringLiteral("Too many rectangles for current vertex buffer."); return false; }
+    if (topColors && topColors->size() != rects.size()) { ++failedFrames; renderError = QStringLiteral("Gradient color count mismatch."); return false; }
+    if (rects.size() > 128 * 4) { ++failedFrames; renderError = QStringLiteral("Too many rectangles for current vertex buffer."); return false; }
     // Phase 3: retain the render target, view and staging texture across frames.
     // Rebuild only when the preview size changes. No cross-frame GPU readback is queued.
     QElapsedTimer resourceTimer; resourceTimer.start();
@@ -194,9 +196,10 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     };
     for (int i = 0; i < rects.size(); ++i) {
         const QRectF r = rects[i].normalized(); const QColor c = colors[i];
+        const QColor top = topColors ? (*topColors)[i] : c;
         const float x1 = float(r.left()), y1 = float(r.top()), x2 = float(r.right()), y2 = float(r.bottom());
-        addVertex(x1,y1,c); addVertex(x2,y1,c); addVertex(x1,y2,c);
-        addVertex(x1,y2,c); addVertex(x2,y1,c); addVertex(x2,y2,c);
+        addVertex(x1,y1,top); addVertex(x2,y1,top); addVertex(x1,y2,c);
+        addVertex(x1,y2,c); addVertex(x2,y1,top); addVertex(x2,y2,c);
     }
     D3D11_MAPPED_SUBRESOURCE mapped{};
     hr = context->Map(vertexBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
