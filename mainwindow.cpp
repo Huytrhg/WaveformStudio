@@ -157,7 +157,7 @@ public:
           positionX(50), positionY(78), opacityPercent(92), scalePercent(72),
           solidColor(QColor("#35B8FF")), useGradient(true),
           columnCount(64), heightPercent(100), thicknessPercent(75), glowPercent(0),
-          gradientSpeed(0), gradientPhase(0.0)
+          glowRadius(50), glowIntensity(100), gradientSpeed(0), gradientPhase(0.0)
     {
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 #ifdef Q_OS_WIN
@@ -220,6 +220,8 @@ public:
     void setHeightPercent(int value) { heightPercent = qBound(10, value, 200); update(); }
     void setThicknessPercent(int value) { thicknessPercent = qBound(10, value, 100); update(); }
     void setGlowPercent(int value) { glowPercent = qBound(0, value, 100); update(); }
+    void setGlowRadius(int value) { glowRadius = qBound(0, value, 100); update(); }
+    void setGlowIntensity(int value) { glowIntensity = qBound(0, value, 100); update(); }
     void setGradientSpeed(int value) { gradientSpeed = qBound(0, value, 100); update(); }
     void advanceGradient(qreal seconds)
     {
@@ -343,11 +345,10 @@ protected:
                 const QColor topColor = useGradient
                     ? colorAt(gradientCoordinate(bandT + gradientPhase + 0.18)) : color;
                 if (glowPercent > 0) {
-                    // Phase 4C.3: four low-alpha layers approximate a smoother
-                    // light falloff while keeping the crisp spectrum bar on top.
-                    // This is a lightweight layered glow, not a Gaussian blur.
-                    const qreal strength = glowPercent / 100.0;
-                    const qreal spread = 1.0 + 4.0 * strength;
+                    // Phase 4C.4: radius and intensity are independent controls.
+                    // Four lightweight layers approximate falloff; this is not a Gaussian blur.
+                    const qreal strength = (glowPercent / 100.0) * (glowIntensity / 100.0);
+                    const qreal spread = 0.5 + 8.0 * (glowRadius / 100.0);
                     const qreal layerScale[] = {1.0, 0.74, 0.48, 0.24};
                     const qreal alphaScale[] = {0.07, 0.12, 0.19, 0.28};
                     for (int layer = 0; layer < 4; ++layer) {
@@ -422,9 +423,10 @@ protected:
                     const QColor color = colorForBand(i, count);
                     if (glowPercent > 0) {
                         QColor halo = color;
-                        halo.setAlpha(qBound(0, glowPercent * 55 / 100, 55));
+                        halo.setAlpha(qBound(0, qRound(55.0 * glowPercent / 100.0 * glowIntensity / 100.0), 55));
                         p.setBrush(halo);
-                        p.drawRoundedRect(bar.adjusted(-2.5, -2.5, 2.5, 2.5), 3, 3);
+                        const qreal radius = 0.5 + 4.0 * (glowRadius / 100.0);
+                        p.drawRoundedRect(bar.adjusted(-radius, -radius, radius, radius), 3, 3);
                     }
                     p.setBrush(color);
                     p.drawRoundedRect(bar, qMin(2.5, barW / 2.0), qMin(2.5, barW / 2.0));
@@ -532,8 +534,9 @@ private:
             const QColor color = colorForBand(i, count);
             if (glowPercent > 0) {
                 QColor halo = color;
-                halo.setAlpha(qBound(0, glowPercent * 55 / 100, 55));
-                rects.push_back(bar.adjusted(-2.5, -2.5, 2.5, 2.5));
+                halo.setAlpha(qBound(0, qRound(55.0 * glowPercent / 100.0 * glowIntensity / 100.0), 55));
+                const qreal radius = 0.5 + 4.0 * (glowRadius / 100.0);
+                rects.push_back(bar.adjusted(-radius, -radius, radius, radius));
                 colors.push_back(halo);
             }
             rects.push_back(bar);
@@ -578,7 +581,7 @@ private:
     int positionX, positionY, opacityPercent, scalePercent;
     QColor solidColor;
     bool useGradient;
-    int columnCount, heightPercent, thicknessPercent, glowPercent, gradientSpeed;
+    int columnCount, heightPercent, thicknessPercent, glowPercent, glowRadius, glowIntensity, gradientSpeed;
     int interpolation = 1;
     qreal gradientPhase;
     QVector<QPair<qreal, QColor>> gradientStops;
@@ -1272,6 +1275,14 @@ MainWindow::MainWindow(QWidget *parent)
     addWaveSlider("Glow", 0, 100, 0, "%", [this](int v) {
         spectrumOverlay->setGlowPercent(v);
         spectrumDisplay->setGlowPercent(v);
+    });
+    addWaveSlider("Glow Radius", 0, 100, 50, "%", [this](int v) {
+        spectrumOverlay->setGlowRadius(v);
+        spectrumDisplay->setGlowRadius(v);
+    });
+    addWaveSlider("Glow Intensity", 0, 100, 100, "%", [this](int v) {
+        spectrumOverlay->setGlowIntensity(v);
+        spectrumDisplay->setGlowIntensity(v);
     });
     addWaveSlider("Gradient Speed", 0, 100, 0, "%", [this](int v) {
         spectrumOverlay->setGradientSpeed(v);
