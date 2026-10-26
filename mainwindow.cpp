@@ -323,8 +323,10 @@ protected:
             const qreal baseline = cy;
             QVector<QRectF> gpuRects;
             QVector<QColor> gpuColors;
+            QVector<QColor> gpuTopColors;
             gpuRects.reserve(count * (glowPercent > 0 ? 4 : 1));
             gpuColors.reserve(gpuRects.capacity());
+            gpuTopColors.reserve(gpuRects.capacity());
             for (int i = 0; i < count; ++i) {
                 const qreal sourceIndex = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
                 const int lo = qBound(0, int(sourceIndex), bands.size() - 1);
@@ -335,6 +337,11 @@ protected:
                 const QRectF bar(startX + i * cellW + (cellW - barW) / 2.0,
                                  baseline - h, barW, h);
                 const QColor color = colorForBand(i, count);
+                // Phase 4C.2: top and bottom colors are interpolated by the
+                // existing D3D11 vertex-color shader across each bar.
+                const qreal bandT = count <= 1 ? 0.0 : qreal(i) / (count - 1);
+                const QColor topColor = useGradient
+                    ? colorAt(gradientCoordinate(bandT + gradientPhase + 0.18)) : color;
                 if (glowPercent > 0) {
                     // Phase 4C.1: layered, low-alpha halos produce a softer
                     // GPU glow than one hard-edged expanded rectangle.
@@ -349,10 +356,14 @@ protected:
                         const qreal radius = spread * layer;
                         gpuRects.push_back(bar.adjusted(-radius, -radius, radius, radius));
                         gpuColors.push_back(halo);
+                        QColor topHalo = topColor;
+                        topHalo.setAlpha(alpha);
+                        gpuTopColors.push_back(topHalo);
                     }
                 }
                 gpuRects.push_back(bar);
                 gpuColors.push_back(color);
+                gpuTopColors.push_back(topColor);
             }
             // Phase 4A hybrid compositing: prepare a correctly letterboxed,
             // opaque background, upload it to D3D11 and draw bars on the same
@@ -384,10 +395,14 @@ protected:
             for (QColor &gpuColor : gpuColors) {
                 gpuColor.setAlphaF(qBound(0.0, gpuColor.alphaF() * spectrumOpacity, 1.0));
             }
+            for (QColor &gpuColor : gpuTopColors) {
+                gpuColor.setAlphaF(qBound(0.0, gpuColor.alphaF() * spectrumOpacity, 1.0));
+            }
 
             QImage gpuComposite;
             const bool gpuRendered = !forceCpuFallback && GpuRenderer::instance().renderColoredRects(
-                width(), height(), gpuRects, gpuColors, &gpuComposite, &cachedGpuBackground);
+                width(), height(), gpuRects, gpuColors, &gpuComposite, &cachedGpuBackground,
+                &gpuTopColors);
             if (gpuRendered) {
                 p.setOpacity(1.0); // background must remain opaque
                 p.drawImage(QPoint(0, 0), gpuComposite);
