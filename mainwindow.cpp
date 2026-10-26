@@ -509,27 +509,86 @@ protected:
                     }
                 }
             }
-        } else if (visualMode == 1) { // B: horizontal waveform-like spectrum
-            QPolygonF upper, lower;
+        } else if (visualMode == 1) { // B: smooth, mirrored spectrum line over the video
+            // This mode is currently derived from FFT bands (frequency spectrum),
+            // not raw time-domain audio samples. Draw fine strokes rather than a
+            // filled silhouette so the background video remains clearly visible.
             const qreal startX = cx - maxW / 2.0;
-            for (int i = 0; i < bands.size(); ++i) {
-                const qreal x = startX + maxW * i / qMax(1, bands.size() - 1);
-                const qreal amp = qBound(0.0, qreal(bands[i]), 1.0) * maxH * 0.52;
-                upper << QPointF(x, cy - amp);
-                lower.prepend(QPointF(x, cy + amp));
+            const int pointCount = qMax(2, bands.size());
+            QPainterPath upperPath, lowerPath;
+            QVector<QPointF> upperPoints;
+            QVector<QPointF> lowerPoints;
+            upperPoints.reserve(pointCount);
+            lowerPoints.reserve(pointCount);
+            for (int i = 0; i < pointCount; ++i) {
+                const qreal t = qreal(i) / qMax(1, pointCount - 1);
+                const qreal x = startX + maxW * t;
+                const qreal v = qBound(0.0, qreal(bands[i]), 1.0);
+                const qreal amp = qMax(0.75, v * maxH * 0.46);
+                upperPoints.push_back(QPointF(x, cy - amp));
+                lowerPoints.push_back(QPointF(x, cy + amp));
             }
-            QPolygonF shape = upper;
-            for (const QPointF &pt : lower) shape << pt;
-            QLinearGradient grad(startX, cy, startX + maxW, cy);
+            auto buildSmoothPath = [](const QVector<QPointF> &points) {
+                QPainterPath path;
+                if (points.isEmpty()) return path;
+                path.moveTo(points.first());
+                for (int i = 1; i < points.size(); ++i) {
+                    const QPointF previous = points[i - 1];
+                    const QPointF current = points[i];
+                    const qreal midX = (previous.x() + current.x()) * 0.5;
+                    const QPointF mid(midX, (previous.y() + current.y()) * 0.5);
+                    path.quadTo(previous, mid);
+                }
+                if (points.size() > 1) path.lineTo(points.last());
+                return path;
+            };
+            upperPath = buildSmoothPath(upperPoints);
+            lowerPath = buildSmoothPath(lowerPoints);
+
+            QLinearGradient lineGradient(startX, cy, startX + maxW, cy);
             if (useGradient) {
-                for (int j = 0; j <= 32; ++j) {
-                    const qreal t = j / 32.0;
-                    grad.setColorAt(t, colorAt(gradientCoordinate(t + gradientPhase)));
+                for (int j = 0; j <= 48; ++j) {
+                    const qreal t = j / 48.0;
+                    lineGradient.setColorAt(t, colorAt(gradientCoordinate(t + gradientPhase)));
                 }
             } else {
-                grad.setColorAt(0.0, solidColor); grad.setColorAt(1.0, solidColor);
+                lineGradient.setColorAt(0.0, solidColor);
+                lineGradient.setColorAt(1.0, solidColor);
             }
-            p.setPen(Qt::NoPen); p.setBrush(grad); p.drawPolygon(shape);
+
+            // Glow is optional and intentionally subtle to preserve video detail.
+            if (glowPercent > 0 && glowIntensity > 0) {
+                const qreal strength = (glowPercent / 100.0) * (glowIntensity / 100.0);
+                const qreal spread = 1.0 + 5.0 * (glowRadius / 100.0);
+                for (int layer = 3; layer >= 1; --layer) {
+                    const qreal width = 1.2 + spread * layer * 0.55;
+                    const int alpha = qBound(0, qRound(22.0 * strength / layer), 22);
+                    QPen glowPen(lineGradient, width);
+                    glowPen.setCapStyle(Qt::RoundCap);
+                    glowPen.setJoinStyle(Qt::RoundJoin);
+                    QColor tint = useGradient ? colorAt(gradientCoordinate(0.5 + gradientPhase)) : solidColor;
+                    tint.setAlpha(alpha);
+                    glowPen.setColor(tint);
+                    p.setPen(glowPen);
+                    p.setBrush(Qt::NoBrush);
+                    p.drawPath(upperPath);
+                    p.drawPath(lowerPath);
+                }
+            }
+
+            QPen linePen(lineGradient, qMax(1.25, width() * 0.0018 * thicknessPercent / 75.0));
+            linePen.setCapStyle(Qt::RoundCap);
+            linePen.setJoinStyle(Qt::RoundJoin);
+            p.setPen(linePen);
+            p.setBrush(Qt::NoBrush);
+            p.drawPath(upperPath);
+            p.drawPath(lowerPath);
+
+            // A faint center guide helps read the symmetry without masking the clip.
+            QColor centerColor = useGradient ? colorAt(gradientCoordinate(0.5 + gradientPhase)) : solidColor;
+            centerColor.setAlpha(38);
+            p.setPen(QPen(centerColor, 0.7, Qt::DashLine));
+            p.drawLine(QPointF(startX, cy), QPointF(startX + maxW, cy));
         } else { // C: circular spectrum
             const qreal radius = qMin(width(), height()) * 0.17 * (scalePercent / 72.0);
             const qreal barMax = qMin(width(), height()) * 0.12 * (scalePercent / 72.0) * (heightPercent / 100.0);
