@@ -253,7 +253,7 @@ public:
         if (!motionTimer->isActive()) motionTimer->start();
     }
     void setMessage(const QString &text) { message = text; update(); }
-    void setVisualMode(int mode) { visualMode = qBound(0, mode, 2); update(); }
+    void setVisualMode(int mode) { visualMode = qBound(0, mode, 3); update(); }
     void setPosition(int x, int y) { positionX = qBound(0, x, 100); positionY = qBound(0, y, 100); update(); }
     void setOpacityPercent(int value) { opacityPercent = qBound(0, value, 100); update(); }
     void setForceCpuFallback(bool enabled) { forceCpuFallback = enabled; update(); }
@@ -590,7 +590,7 @@ protected:
             centerColor.setAlpha(38);
             p.setPen(QPen(centerColor, 0.7, Qt::DashLine));
             p.drawLine(QPointF(startX, cy), QPointF(startX + maxW, cy));
-        } else { // C: circular spectrum
+        } else if (visualMode == 2) { // C: circular spectrum
             const qreal radius = qMin(width(), height()) * 0.17 * (scalePercent / 72.0);
             const qreal barMax = qMin(width(), height()) * 0.12 * (scalePercent / 72.0) * (heightPercent / 100.0);
             p.setPen(QPen(QColor(255, 255, 255, 35), 1));
@@ -605,6 +605,72 @@ protected:
                 p.setPen(QPen(colorForBand(i, bands.size()), qMax(1.0, width() * 0.004 * thicknessPercent / 100.0), Qt::SolidLine, Qt::RoundCap));
                 p.drawLine(a, b);
             }
+        } else { // D: filled mirrored waveform spectrum (preserved as a separate style)
+            const qreal startX = cx - maxW / 2.0;
+            const int pointCount = qMax(2, bands.size());
+            QVector<QPointF> upperPoints;
+            QVector<QPointF> lowerPoints;
+            upperPoints.reserve(pointCount);
+            lowerPoints.reserve(pointCount);
+            for (int i = 0; i < pointCount; ++i) {
+                const qreal t = qreal(i) / qMax(1, pointCount - 1);
+                const qreal x = startX + maxW * t;
+                const qreal v = qBound(0.0, qreal(bands[i]), 1.0);
+                const qreal amp = qMax(0.75, v * maxH * 0.46);
+                upperPoints.push_back(QPointF(x, cy - amp));
+                lowerPoints.push_back(QPointF(x, cy + amp));
+            }
+            auto buildSmoothPath = [](const QVector<QPointF> &points) {
+                QPainterPath path;
+                if (points.isEmpty()) return path;
+                path.moveTo(points.first());
+                for (int i = 1; i < points.size(); ++i) {
+                    const QPointF previous = points[i - 1];
+                    const QPointF current = points[i];
+                    const QPointF mid((previous.x() + current.x()) * 0.5,
+                                      (previous.y() + current.y()) * 0.5);
+                    path.quadTo(previous, mid);
+                }
+                if (points.size() > 1) path.lineTo(points.last());
+                return path;
+            };
+            QPainterPath filledPath = buildSmoothPath(upperPoints);
+            for (int i = lowerPoints.size() - 1; i >= 0; --i)
+                filledPath.lineTo(lowerPoints[i]);
+            filledPath.closeSubpath();
+
+            QLinearGradient fillGradient(startX, cy, startX + maxW, cy);
+            if (useGradient) {
+                for (int j = 0; j <= 48; ++j) {
+                    const qreal t = j / 48.0;
+                    fillGradient.setColorAt(t, colorAt(gradientCoordinate(t + gradientPhase)));
+                }
+            } else {
+                fillGradient.setColorAt(0.0, solidColor);
+                fillGradient.setColorAt(1.0, solidColor);
+            }
+
+            // Keep the familiar solid, mirrored silhouette, with an optional
+            // restrained edge glow. The two-line Waveform mode above stays untouched.
+            if (glowPercent > 0 && glowIntensity > 0) {
+                const qreal strength = (glowPercent / 100.0) * (glowIntensity / 100.0);
+                QColor glowColor = useGradient
+                    ? colorAt(gradientCoordinate(0.5 + gradientPhase)) : solidColor;
+                glowColor.setAlpha(qBound(0, qRound(42.0 * strength), 42));
+                QPen glowPen(glowColor, 1.0 + 4.0 * (glowRadius / 100.0));
+                glowPen.setJoinStyle(Qt::RoundJoin);
+                p.setPen(glowPen);
+                p.setBrush(Qt::NoBrush);
+                p.drawPath(filledPath);
+            }
+            p.setPen(Qt::NoPen);
+            p.setBrush(fillGradient);
+            p.drawPath(filledPath);
+            QColor centerColor = useGradient
+                ? colorAt(gradientCoordinate(0.5 + gradientPhase)) : solidColor;
+            centerColor.setAlpha(34);
+            p.setPen(QPen(centerColor, 0.7));
+            p.drawLine(QPointF(startX, cy), QPointF(startX + maxW, cy));
         }
         if (visualMode == 0) {
             const QString gpuFrameLine = GpuRenderer::instance().runtimeStats().section('\n', 0, 0);
@@ -1291,7 +1357,7 @@ MainWindow::MainWindow(QWidget *parent)
     QLabel *styleLabel = new QLabel("Visualization Style");
     propertiesLayout->addWidget(styleLabel);
     QComboBox *visualModeCombo = new QComboBox;
-    visualModeCombo->addItems({"A · Vertical Bars", "B · Horizontal Wave", "C · Circular"});
+    visualModeCombo->addItems({"A · Vertical Bars", "B · Waveform Lines", "C · Circular", "D · Filled Waveform"});
     visualModeCombo->setCurrentIndex(0);
     propertiesLayout->addWidget(visualModeCombo);
 
