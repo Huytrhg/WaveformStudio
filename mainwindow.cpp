@@ -324,7 +324,7 @@ protected:
             QVector<QRectF> gpuRects;
             QVector<QColor> gpuColors;
             QVector<QColor> gpuTopColors;
-            gpuRects.reserve(count * (glowPercent > 0 ? 4 : 1));
+            gpuRects.reserve(count * (glowPercent > 0 ? 5 : 1));
             gpuColors.reserve(gpuRects.capacity());
             gpuTopColors.reserve(gpuRects.capacity());
             for (int i = 0; i < count; ++i) {
@@ -343,17 +343,18 @@ protected:
                 const QColor topColor = useGradient
                     ? colorAt(gradientCoordinate(bandT + gradientPhase + 0.18)) : color;
                 if (glowPercent > 0) {
-                    // Phase 4C.1: layered, low-alpha halos produce a softer
-                    // GPU glow than one hard-edged expanded rectangle.
-                    // Draw broad-to-narrow so the bar remains crisp on top.
+                    // Phase 4C.3: four low-alpha layers approximate a smoother
+                    // light falloff while keeping the crisp spectrum bar on top.
+                    // This is a lightweight layered glow, not a Gaussian blur.
                     const qreal strength = glowPercent / 100.0;
-                    const qreal spread = 1.0 + 5.0 * strength;
-                    for (int layer = 3; layer >= 1; --layer) {
+                    const qreal spread = 1.0 + 4.0 * strength;
+                    const qreal layerScale[] = {1.0, 0.74, 0.48, 0.24};
+                    const qreal alphaScale[] = {0.07, 0.12, 0.19, 0.28};
+                    for (int layer = 0; layer < 4; ++layer) {
                         QColor halo = color;
-                        const int alpha = qBound(0, qRound(strength * (layer == 3 ? 12.0
-                                                    : layer == 2 ? 20.0 : 30.0)), 30);
+                        const int alpha = qBound(0, qRound(255.0 * strength * alphaScale[layer]), 36);
                         halo.setAlpha(alpha);
-                        const qreal radius = spread * layer;
+                        const qreal radius = spread * layerScale[layer];
                         gpuRects.push_back(bar.adjusted(-radius, -radius, radius, radius));
                         gpuColors.push_back(halo);
                         QColor topHalo = topColor;
