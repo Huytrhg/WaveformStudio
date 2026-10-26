@@ -53,6 +53,8 @@
 #include <QMouseEvent>
 #include <QSettings>
 #include <QInputDialog>
+#include <QProcess>
+#include <QProgressDialog>
 #include <QScrollArea>
 #include <QSpinBox>
 #include <functional>
@@ -2089,12 +2091,184 @@ MainWindow::MainWindow(QWidget *parent)
         &QPushButton::clicked,
         this,
         [this]() {
-            QMessageBox::information(
+            const QString inputPath = player->source().toLocalFile();
+            if (inputPath.isEmpty() || !QFileInfo::exists(inputPath)) {
+                QMessageBox::warning(
+                    this,
+                    "Export Video",
+                    "Please import a local video before exporting."
+                    );
+                return;
+            }
+
+            const QString outputPath = QFileDialog::getSaveFileName(
                 this,
-                "Export Video",
-                "Video compositing and MP4 export "
-                "will be implemented in a later step."
+                "Export MP4 Video",
+                QDir::homePath() + "/" +
+                    QFileInfo(inputPath).completeBaseName() + "_export.mp4",
+                "MP4 Video (*.mp4)"
                 );
+            if (outputPath.isEmpty())
+                return;
+
+            QString finalOutputPath = outputPath;
+            if (QFileInfo(finalOutputPath).suffix().isEmpty())
+                finalOutputPath += ".mp4";
+
+            bool qualityAccepted = false;
+            const QStringList qualityOptions = {
+                "High quality (CRF 18)",
+                "Balanced (CRF 23)",
+                "Smaller file (CRF 28)"
+            };
+            const QString quality = QInputDialog::getItem(
+                this,
+                "Export Quality",
+                "Choose video quality:",
+                qualityOptions,
+                1,
+                false,
+                &qualityAccepted
+                );
+            if (!qualityAccepted)
+                return;
+
+            int crf = 23;
+            if (quality.startsWith("High"))
+                crf = 18;
+            else if (quality.startsWith("Smaller"))
+                crf = 28;
+
+            const QString ffmpegPath = "C:/ffmpeg/bin/ffmpeg.exe";
+            if (!QFileInfo::exists(ffmpegPath)) {
+                QMessageBox::critical(
+                    this,
+                    "FFmpeg Not Found",
+                    "FFmpeg was not found at:\n" + ffmpegPath +
+                        "\n\nPlease install FFmpeg or update its path in the source."
+                    );
+                return;
+            }
+
+            auto *progress = new QProgressDialog(
+                "Preparing video export...",
+                "Cancel",
+                0,
+                100,
+                this
+                );
+            progress->setWindowTitle("Exporting MP4");
+            progress->setWindowModality(Qt::WindowModal);
+            progress->setMinimumDuration(0);
+            progress->setValue(0);
+
+            auto *process = new QProcess(this);
+            process->setProcessChannelMode(QProcess::SeparateChannels);
+
+            connect(progress, &QProgressDialog::canceled, process, [process]() {
+                if (process->state() != QProcess::NotRunning)
+                    process->terminate();
+            });
+
+            connect(process, &QProcess::readyReadStandardOutput, this,
+                    [this, process, progress]() {
+                const QByteArray output = process->readAllStandardOutput();
+                const QList<QByteArray> lines = output.split('\n');
+                for (const QByteArray &line : lines) {
+                    if (!line.startsWith("out_time_ms="))
+                        continue;
+                    bool ok = false;
+                    const qint64 timeUs = line.mid(12).trimmed().toLongLong(&ok);
+                    const qint64 durationMs = player->duration();
+                    if (ok && durationMs > 0) {
+                        const int percent = qBound(
+                            0,
+                            static_cast<int>((timeUs / 1000.0) * 100.0 / durationMs),
+                            99
+                            );
+                        progress->setValue(percent);
+                    }
+                }
+            });
+
+            connect(process, &QProcess::readyReadStandardError, this,
+                    [process]() {
+                const QByteArray errors = process->readAllStandardError();
+                if (!errors.isEmpty())
+                    qDebug().noquote() << "FFmpeg:" << QString::fromLocal8Bit(errors);
+            });
+
+            connect(process,
+                    qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+                    this,
+                    [this, process, progress, finalOutputPath](int exitCode,
+                                                               QProcess::ExitStatus exitStatus) {
+                progress->setValue(100);
+                progress->close();
+
+                if (exitStatus == QProcess::NormalExit && exitCode == 0) {
+                    statusBar()->showMessage("MP4 export completed", 5000);
+                    QMessageBox::information(
+                        this,
+                        "Export Complete",
+                        "The MP4 video was exported successfully to:\n" +
+                            finalOutputPath +
+                            "\n\nNote: this initial export step encodes the source video and audio. "
+                            "Spectrum overlay compositing will be added in the next stage."
+                        );
+                } else {
+                    const QString errorText = QString::fromLocal8Bit(
+                        process->readAllStandardError()
+                        ).trimmed();
+                    QMessageBox::warning(
+                        this,
+                        "Export Failed",
+                        "FFmpeg could not complete the export.\n\n" +
+                            (errorText.isEmpty()
+                                 ? QString("The operation was cancelled or FFmpeg returned an error.")
+                                 : errorText.left(1800))
+                        );
+                    QFile::remove(finalOutputPath);
+                }
+
+                process->deleteLater();
+                progress->deleteLater();
+            });
+
+            connect(process, &QProcess::errorOccurred, this,
+                    [this, process, progress](QProcess::ProcessError error) {
+                if (error == QProcess::FailedToStart) {
+                    progress->close();
+                    QMessageBox::critical(
+                        this,
+                        "Could Not Start FFmpeg",
+                        "FFmpeg could not be started. Check the FFmpeg path and permissions."
+                        );
+                    process->deleteLater();
+                    progress->deleteLater();
+                }
+            });
+
+            QStringList arguments = {
+                "-y",
+                "-hide_banner",
+                "-nostats",
+                "-progress", "pipe:1",
+                "-i", inputPath,
+                "-map", "0:v:0",
+                "-map", "0:a?",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", QString::number(crf),
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+                finalOutputPath
+            };
+
+            statusBar()->showMessage("Starting MP4 export...", 3000);
+            process->start(ffmpegPath, arguments);
         }
         );
 
