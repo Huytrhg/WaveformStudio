@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "spectrumanalyzer.h"
+#include "spectrumrenderer.h" // B1: shared offscreen renderer; Preview migration follows in B2.
 #include "gpurenderer.h"
 #include "nativegpupresenter.h"
 
