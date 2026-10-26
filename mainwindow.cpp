@@ -323,7 +323,7 @@ protected:
             const qreal baseline = cy;
             QVector<QRectF> gpuRects;
             QVector<QColor> gpuColors;
-            gpuRects.reserve(count * (glowPercent > 0 ? 2 : 1));
+            gpuRects.reserve(count * (glowPercent > 0 ? 4 : 1));
             gpuColors.reserve(gpuRects.capacity());
             for (int i = 0; i < count; ++i) {
                 const qreal sourceIndex = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
@@ -336,10 +336,20 @@ protected:
                                  baseline - h, barW, h);
                 const QColor color = colorForBand(i, count);
                 if (glowPercent > 0) {
-                    QColor halo = color;
-                    halo.setAlpha(qBound(0, glowPercent * 55 / 100, 55));
-                    gpuRects.push_back(bar.adjusted(-2.5, -2.5, 2.5, 2.5));
-                    gpuColors.push_back(halo);
+                    // Phase 4C.1: layered, low-alpha halos produce a softer
+                    // GPU glow than one hard-edged expanded rectangle.
+                    // Draw broad-to-narrow so the bar remains crisp on top.
+                    const qreal strength = glowPercent / 100.0;
+                    const qreal spread = 1.0 + 5.0 * strength;
+                    for (int layer = 3; layer >= 1; --layer) {
+                        QColor halo = color;
+                        const int alpha = qBound(0, qRound(strength * (layer == 3 ? 12.0
+                                                    : layer == 2 ? 20.0 : 30.0)), 30);
+                        halo.setAlpha(alpha);
+                        const qreal radius = spread * layer;
+                        gpuRects.push_back(bar.adjusted(-radius, -radius, radius, radius));
+                        gpuColors.push_back(halo);
+                    }
                 }
                 gpuRects.push_back(bar);
                 gpuColors.push_back(color);
