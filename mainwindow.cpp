@@ -157,7 +157,7 @@ public:
           positionX(50), positionY(78), opacityPercent(92), scalePercent(72),
           solidColor(QColor("#35B8FF")), useGradient(true),
           columnCount(64), heightPercent(100), thicknessPercent(75), glowPercent(0),
-          glowRadius(50), glowIntensity(100), gradientSpeed(0), gradientPhase(0.0)
+          glowRadius(50), glowIntensity(100), gradientSpeed(0), gradientPhase(0.0), peakHoldEnabled(false)
     {
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 #ifdef Q_OS_WIN
@@ -201,6 +201,23 @@ public:
                     ? targetBands[i] : bands[i] + delta * response;
                 if (next != bands[i]) { bands[i] = next; changed = true; }
             }
+            if (peakHoldEnabled && !bands.isEmpty()) {
+                if (peakLevels.size() != bands.size()) {
+                    peakLevels = bands;
+                    peakTicks.fill(0, bands.size());
+                }
+                for (int i = 0; i < bands.size(); ++i) {
+                    if (bands[i] >= peakLevels[i]) {
+                        peakLevels[i] = bands[i];
+                        peakTicks[i] = 8; // About 264 ms at 33 ms/tick.
+                    } else if (peakTicks[i] > 0) {
+                        --peakTicks[i];
+                    } else {
+                        peakLevels[i] = qMax(bands[i], peakLevels[i] - 0.014f);
+                    }
+                }
+                changed = true;
+            }
             if (changed) update();
         });
         gradientStops = {
@@ -218,6 +235,8 @@ public:
             motionTimer->stop();
             targetBands.clear();
             bands.clear();
+            peakLevels.clear();
+            peakTicks.clear();
             update();
             return;
         }
@@ -225,6 +244,8 @@ public:
         if (targetBands.size() > 64) targetBands.resize(64);
         if (bands.size() != targetBands.size()) {
             bands = targetBands; // First sample: no ramp from stale values.
+            peakLevels = bands;
+            peakTicks.fill(0, bands.size());
             update();
         }
         if (!motionTimer->isActive()) motionTimer->start();
@@ -249,6 +270,7 @@ public:
     void setGlowPercent(int value) { glowPercent = qBound(0, value, 100); update(); }
     void setGlowRadius(int value) { glowRadius = qBound(0, value, 100); update(); }
     void setGlowIntensity(int value) { glowIntensity = qBound(0, value, 100); update(); }
+    void setPeakHoldEnabled(bool enabled) { peakHoldEnabled = enabled; peakLevels = bands; peakTicks.fill(0, bands.size()); update(); }
     void setGradientSpeed(int value) { gradientSpeed = qBound(0, value, 100); update(); }
     void advanceGradient(qreal seconds)
     {
@@ -353,7 +375,7 @@ protected:
             QVector<QRectF> gpuRects;
             QVector<QColor> gpuColors;
             QVector<QColor> gpuTopColors;
-            gpuRects.reserve(count * (glowPercent > 0 ? 5 : 1));
+            gpuRects.reserve(count * ((glowPercent > 0 ? 5 : 1) + (peakHoldEnabled ? 1 : 0)));
             gpuColors.reserve(gpuRects.capacity());
             gpuTopColors.reserve(gpuRects.capacity());
             for (int i = 0; i < count; ++i) {
@@ -393,6 +415,18 @@ protected:
                 gpuRects.push_back(bar);
                 gpuColors.push_back(color);
                 gpuTopColors.push_back(topColor);
+                if (peakHoldEnabled && !peakLevels.isEmpty()) {
+                    const qreal idx = qreal(i) * (peakLevels.size() - 1) / qMax(1, count - 1);
+                    const int loPeak = qBound(0, int(idx), peakLevels.size() - 1);
+                    const int hiPeak = qMin(loPeak + 1, peakLevels.size() - 1);
+                    const qreal peak = qBound(0.0, qreal(peakLevels[loPeak]) * (1.0 - (idx - loPeak))
+                        + qreal(peakLevels[hiPeak]) * (idx - loPeak), 1.0);
+                    const qreal markerH = qMax(2.0, height() * 0.004);
+                    gpuRects.push_back(QRectF(bar.left(), baseline - qMax(1.0, peak * maxH) - markerH, barW, markerH));
+                    const QColor marker(245, 250, 255, 235);
+                    gpuColors.push_back(marker);
+                    gpuTopColors.push_back(marker);
+                }
             }
             // Phase 4A hybrid compositing: prepare a correctly letterboxed,
             // opaque background, upload it to D3D11 and draw bars on the same
@@ -457,6 +491,15 @@ protected:
                     }
                     p.setBrush(color);
                     p.drawRoundedRect(bar, qMin(2.5, barW / 2.0), qMin(2.5, barW / 2.0));
+                    if (peakHoldEnabled && !peakLevels.isEmpty()) {
+                        const qreal idx = qreal(i) * (peakLevels.size() - 1) / qMax(1, count - 1);
+                        const int loPeak = qBound(0, int(idx), peakLevels.size() - 1);
+                        const int hiPeak = qMin(loPeak + 1, peakLevels.size() - 1);
+                        const qreal peak = qBound(0.0, qreal(peakLevels[loPeak]) * (1.0 - (idx - loPeak))
+                            + qreal(peakLevels[hiPeak]) * (idx - loPeak), 1.0);
+                        p.setBrush(QColor(245, 250, 255, 235));
+                        p.drawRect(QRectF(bar.left(), baseline - qMax(1.0, peak * maxH) - 2.0, barW, 2.0));
+                    }
                 }
             }
         } else if (visualMode == 1) { // B: horizontal waveform-like spectrum
@@ -604,7 +647,10 @@ private:
     bool forceCpuFallback = false;
     QVector<float> bands;
     QVector<float> targetBands;
+    QVector<float> peakLevels;
+    QVector<int> peakTicks;
     QTimer *motionTimer = nullptr;
+    bool peakHoldEnabled;
     QString message;
     int visualMode;
     int positionX, positionY, opacityPercent, scalePercent;
@@ -1312,6 +1358,12 @@ MainWindow::MainWindow(QWidget *parent)
     addWaveSlider("Glow Intensity", 0, 100, 100, "%", [this](int v) {
         spectrumOverlay->setGlowIntensity(v);
         spectrumDisplay->setGlowIntensity(v);
+    });
+    QCheckBox *peakHoldToggle = new QCheckBox("Peak Hold (GPU Bars)");
+    peakHoldToggle->setChecked(false);
+    propertiesLayout->addWidget(peakHoldToggle);
+    connect(peakHoldToggle, &QCheckBox::toggled, this, [this](bool enabled) {
+        spectrumDisplay->setPeakHoldEnabled(enabled);
     });
     addWaveSlider("Gradient Speed", 0, 100, 0, "%", [this](int v) {
         spectrumOverlay->setGradientSpeed(v);
