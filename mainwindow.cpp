@@ -2151,6 +2151,17 @@ MainWindow::MainWindow(QWidget *parent)
                 return;
             }
 
+            // Pause live preview during encoding to reduce GPU/CPU load.
+            const bool resumePreviewAfterExport =
+                player->playbackState() == QMediaPlayer::PlayingState;
+            const bool resumeSpectrumTimerAfterExport = spectrumTimer->isActive();
+            player->pause();
+            spectrumTimer->stop();
+            statusBar()->showMessage(
+                "Preview paused while exporting to reduce system load.",
+                5000
+                );
+
             auto *progress = new QProgressDialog(
                 "Preparing video export...",
                 "Cancel",
@@ -2202,10 +2213,16 @@ MainWindow::MainWindow(QWidget *parent)
             connect(process,
                     qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
                     this,
-                    [this, process, progress, finalOutputPath](int exitCode,
-                                                               QProcess::ExitStatus exitStatus) {
+                    [this, process, progress, finalOutputPath,
+                     resumePreviewAfterExport, resumeSpectrumTimerAfterExport](
+                        int exitCode, QProcess::ExitStatus exitStatus) {
                 progress->setValue(100);
                 progress->close();
+
+                if (resumePreviewAfterExport)
+                    player->play();
+                if (resumeSpectrumTimerAfterExport)
+                    spectrumTimer->start();
 
                 if (exitStatus == QProcess::NormalExit && exitCode == 0) {
                     statusBar()->showMessage("MP4 export completed", 5000);
@@ -2237,9 +2254,15 @@ MainWindow::MainWindow(QWidget *parent)
             });
 
             connect(process, &QProcess::errorOccurred, this,
-                    [this, process, progress](QProcess::ProcessError error) {
+                    [this, process, progress,
+                     resumePreviewAfterExport, resumeSpectrumTimerAfterExport](
+                        QProcess::ProcessError error) {
                 if (error == QProcess::FailedToStart) {
                     progress->close();
+                    if (resumePreviewAfterExport)
+                        player->play();
+                    if (resumeSpectrumTimerAfterExport)
+                        spectrumTimer->start();
                     QMessageBox::critical(
                         this,
                         "Could Not Start FFmpeg",
