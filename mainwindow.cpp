@@ -479,217 +479,17 @@ protected:
                 p.setOpacity(1.0); // background must remain opaque
                 p.drawImage(QPoint(0, 0), gpuComposite);
             } else {
-                // Reliable CPU fallback preserves the original rounded-bar appearance.
-                p.setPen(Qt::NoPen);
-                for (int i = 0; i < count; ++i) {
-                    const qreal sourceIndex = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
-                    const int lo = qBound(0, int(sourceIndex), bands.size() - 1);
-                    const int hi = qMin(lo + 1, bands.size() - 1);
-                    const qreal v = qBound(0.0, qreal(bands[lo]) * (1.0 - (sourceIndex - lo))
-                                                  + qreal(bands[hi]) * (sourceIndex - lo), 1.0);
-                    const qreal h = qMax(1.0, v * maxH);
-                    const QRectF bar(startX + i * cellW + (cellW - barW) / 2.0,
-                                     baseline - h, barW, h);
-                    const QColor color = colorForBand(i, count);
-                    if (glowPercent > 0) {
-                        QColor halo = color;
-                        halo.setAlpha(qBound(0, qRound(55.0 * glowPercent / 100.0 * glowIntensity / 100.0), 55));
-                        p.setBrush(halo);
-                        const qreal radius = 0.5 + 4.0 * (glowRadius / 100.0);
-                        p.drawRoundedRect(bar.adjusted(-radius, -radius, radius, radius), 3, 3);
-                    }
-                    p.setBrush(color);
-                    p.drawRoundedRect(bar, qMin(2.5, barW / 2.0), qMin(2.5, barW / 2.0));
-                    if (peakHoldEnabled && !peakLevels.isEmpty()) {
-                        const qreal idx = qreal(i) * (peakLevels.size() - 1) / qMax(1, count - 1);
-                        const int loPeak = qBound(0, int(idx), peakLevels.size() - 1);
-                        const int hiPeak = qMin(loPeak + 1, peakLevels.size() - 1);
-                        const qreal peak = qBound(0.0, qreal(peakLevels[loPeak]) * (1.0 - (idx - loPeak))
-                            + qreal(peakLevels[hiPeak]) * (idx - loPeak), 1.0);
-                        QColor marker = useGradient ? colorAt(gradientCoordinate(
-                            (count <= 1 ? 0.0 : qreal(i) / (count - 1)) + gradientPhase + 0.18)) : color;
-                        marker.setAlpha(220);
-                        p.setBrush(marker);
-                        p.drawRect(QRectF(bar.left(), baseline - qMax(1.0, peak * maxH) - 3.0, barW, 1.6));
-                    }
-                }
+                // B2: CPU Bars fallback shares the same drawing engine as export.
+                // Reset opacity: SpectrumRenderer applies its own opacity once.
+                p.setOpacity(1.0);
+                SpectrumRenderer::paint(p, QRectF(rect()), bands,
+                                        currentRenderSettings(), peakLevels);
             }
-        } else if (visualMode == 1) { // B: smooth, mirrored spectrum line over the video
-            // This mode is currently derived from FFT bands (frequency spectrum),
-            // not raw time-domain audio samples. Draw fine strokes rather than a
-            // filled silhouette so the background video remains clearly visible.
-            const qreal startX = cx - maxW / 2.0;
-            const int pointCount = qMax(2, bands.size());
-            QPainterPath upperPath, lowerPath;
-            QVector<QPointF> upperPoints;
-            QVector<QPointF> lowerPoints;
-            upperPoints.reserve(pointCount);
-            lowerPoints.reserve(pointCount);
-            for (int i = 0; i < pointCount; ++i) {
-                const qreal t = qreal(i) / qMax(1, pointCount - 1);
-                const qreal x = startX + maxW * t;
-                const qreal v = qBound(0.0, qreal(bands[i]), 1.0);
-                const qreal amp = qMax(0.75, v * maxH * 0.46);
-                upperPoints.push_back(QPointF(x, cy - amp));
-                lowerPoints.push_back(QPointF(x, cy + amp));
-            }
-            auto buildSmoothPath = [](const QVector<QPointF> &points) {
-                QPainterPath path;
-                if (points.isEmpty()) return path;
-                path.moveTo(points.first());
-                for (int i = 1; i < points.size(); ++i) {
-                    const QPointF previous = points[i - 1];
-                    const QPointF current = points[i];
-                    const qreal midX = (previous.x() + current.x()) * 0.5;
-                    const QPointF mid(midX, (previous.y() + current.y()) * 0.5);
-                    path.quadTo(previous, mid);
-                }
-                if (points.size() > 1) path.lineTo(points.last());
-                return path;
-            };
-            upperPath = buildSmoothPath(upperPoints);
-            lowerPath = buildSmoothPath(lowerPoints);
-
-            QLinearGradient lineGradient(startX, cy, startX + maxW, cy);
-            if (useGradient) {
-                for (int j = 0; j <= 48; ++j) {
-                    const qreal t = j / 48.0;
-                    lineGradient.setColorAt(t, colorAt(gradientCoordinate(t + gradientPhase)));
-                }
-            } else {
-                lineGradient.setColorAt(0.0, solidColor);
-                lineGradient.setColorAt(1.0, solidColor);
-            }
-
-            // Glow is optional and intentionally subtle to preserve video detail.
-            if (glowPercent > 0 && glowIntensity > 0) {
-                const qreal strength = (glowPercent / 100.0) * (glowIntensity / 100.0);
-                const qreal spread = 1.0 + 5.0 * (glowRadius / 100.0);
-                for (int layer = 3; layer >= 1; --layer) {
-                    const qreal width = 1.2 + spread * layer * 0.55;
-                    const int alpha = qBound(0, qRound(22.0 * strength / layer), 22);
-                    QPen glowPen(lineGradient, width);
-                    glowPen.setCapStyle(Qt::RoundCap);
-                    glowPen.setJoinStyle(Qt::RoundJoin);
-                    QColor tint = useGradient ? colorAt(gradientCoordinate(0.5 + gradientPhase)) : solidColor;
-                    tint.setAlpha(alpha);
-                    glowPen.setColor(tint);
-                    p.setPen(glowPen);
-                    p.setBrush(Qt::NoBrush);
-                    p.drawPath(upperPath);
-                    p.drawPath(lowerPath);
-                }
-            }
-
-            QPen linePen(lineGradient, qMax(1.25, width() * 0.0018 * thicknessPercent / 75.0));
-            linePen.setCapStyle(Qt::RoundCap);
-            linePen.setJoinStyle(Qt::RoundJoin);
-            p.setPen(linePen);
-            p.setBrush(Qt::NoBrush);
-            p.drawPath(upperPath);
-            p.drawPath(lowerPath);
-
-            // A faint center guide helps read the symmetry without masking the clip.
-            QColor centerColor = useGradient ? colorAt(gradientCoordinate(0.5 + gradientPhase)) : solidColor;
-            centerColor.setAlpha(38);
-            p.setPen(QPen(centerColor, 0.7, Qt::DashLine));
-            p.drawLine(QPointF(startX, cy), QPointF(startX + maxW, cy));
-        } else if (visualMode == 2) { // C: circular spectrum
-            const qreal radius = qMin(width(), height()) * 0.17 * (scalePercent / 72.0);
-            const qreal barMax = qMin(width(), height()) * 0.12 * (scalePercent / 72.0) * (heightPercent / 100.0);
-            p.setPen(QPen(QColor(255, 255, 255, 35), 1));
-            p.setBrush(Qt::NoBrush);
-            p.drawEllipse(QPointF(cx, cy), radius, radius);
-            for (int i = 0; i < bands.size(); ++i) {
-                const qreal angle = qDegreesToRadians((360.0 * i / bands.size()) - 90.0);
-                const qreal v = qBound(0.0, qreal(bands[i]), 1.0);
-                const qreal outer = radius + qMax(1.0, v * barMax);
-                const QPointF a(cx + qCos(angle) * radius, cy + qSin(angle) * radius);
-                const QPointF b(cx + qCos(angle) * outer, cy + qSin(angle) * outer);
-                p.setPen(QPen(colorForBand(i, bands.size()), qMax(1.0, width() * 0.004 * thicknessPercent / 100.0), Qt::SolidLine, Qt::RoundCap));
-                p.drawLine(a, b);
-            }
-        } else { // D: filled mirrored waveform spectrum (preserved as a separate style)
-            const qreal startX = cx - maxW / 2.0;
-            const int pointCount = qMax(2, bands.size());
-            QVector<QPointF> upperPoints;
-            QVector<QPointF> lowerPoints;
-            upperPoints.reserve(pointCount);
-            lowerPoints.reserve(pointCount);
-            for (int i = 0; i < pointCount; ++i) {
-                const qreal t = qreal(i) / qMax(1, pointCount - 1);
-                const qreal x = startX + maxW * t;
-                const qreal v = qBound(0.0, qreal(bands[i]), 1.0);
-
-                // Taper both ends smoothly to the center line so the filled
-                // silhouette closes cleanly instead of flaring at the edges.
-                const qreal taperWidth = 0.08;
-                const qreal leftTaper = qBound(0.0, t / taperWidth, 1.0);
-                const qreal rightTaper = qBound(0.0, (1.0 - t) / taperWidth, 1.0);
-                const qreal taper = qMin(leftTaper, rightTaper);
-                const qreal amp = v * maxH * 0.46 * taper;
-                upperPoints.push_back(QPointF(x, cy - amp));
-                lowerPoints.push_back(QPointF(x, cy + amp));
-            }
-            auto buildSmoothPath = [](const QVector<QPointF> &points) {
-                QPainterPath path;
-                if (points.isEmpty()) return path;
-                path.moveTo(points.first());
-                for (int i = 1; i < points.size(); ++i) {
-                    const QPointF previous = points[i - 1];
-                    const QPointF current = points[i];
-                    const QPointF mid((previous.x() + current.x()) * 0.5,
-                                      (previous.y() + current.y()) * 0.5);
-                    path.quadTo(previous, mid);
-                }
-                if (points.size() > 1) path.lineTo(points.last());
-                return path;
-            };
-            QPainterPath filledPath = buildSmoothPath(upperPoints);
-            for (int i = lowerPoints.size() - 1; i >= 0; --i)
-                filledPath.lineTo(lowerPoints[i]);
-            filledPath.closeSubpath();
-
-            QLinearGradient fillGradient(startX, cy, startX + maxW, cy);
-            if (useGradient) {
-                for (int j = 0; j <= 48; ++j) {
-                    const qreal t = j / 48.0;
-                    fillGradient.setColorAt(t, colorAt(gradientCoordinate(t + gradientPhase)));
-                }
-            } else {
-                fillGradient.setColorAt(0.0, solidColor);
-                fillGradient.setColorAt(1.0, solidColor);
-            }
-
-            // Fill first, then paint several translucent strokes around the
-            // silhouette edge; drawing glow before the fill hides most of it.
-            p.setPen(Qt::NoPen);
-            p.setBrush(fillGradient);
-            p.drawPath(filledPath);
-
-            if (glowPercent > 0 && glowIntensity > 0) {
-                const qreal strength = (glowPercent / 100.0) * (glowIntensity / 100.0);
-                const qreal radius = 2.0 + 16.0 * (glowRadius / 100.0);
-                const QColor baseGlow = useGradient
-                    ? colorAt(gradientCoordinate(0.5 + gradientPhase)) : solidColor;
-                for (int layer = 4; layer >= 1; --layer) {
-                    QColor glowColor = baseGlow;
-                    const qreal layerFactor = qreal(layer) / 4.0;
-                    glowColor.setAlpha(qBound(0, qRound(60.0 * strength * layerFactor), 60));
-                    QPen glowPen(glowColor, radius * layerFactor);
-                    glowPen.setJoinStyle(Qt::RoundJoin);
-                    glowPen.setCapStyle(Qt::RoundCap);
-                    p.setPen(glowPen);
-                    p.setBrush(Qt::NoBrush);
-                    p.drawPath(filledPath);
-                }
-            }
-
-            QColor centerColor = useGradient
-                ? colorAt(gradientCoordinate(0.5 + gradientPhase)) : solidColor;
-            centerColor.setAlpha(34);
-            p.setPen(QPen(centerColor, 0.7));
-            p.drawLine(QPointF(startX, cy), QPointF(startX + maxW, cy));
+        } else {
+            // B2: Lines, Circular and Filled share one offscreen-capable renderer.
+            p.setOpacity(1.0);
+            SpectrumRenderer::paint(p, QRectF(rect()), bands,
+                                    currentRenderSettings(), peakLevels);
         }
         if (visualMode == 0) {
             const QString gpuFrameLine = GpuRenderer::instance().runtimeStats().section('\n', 0, 0);
@@ -710,6 +510,29 @@ protected:
     }
 
 private:
+    SpectrumRenderSettings currentRenderSettings() const
+    {
+        SpectrumRenderSettings s;
+        s.mode = visualMode;
+        s.positionX = positionX;
+        s.positionY = positionY;
+        s.opacity = opacityPercent;
+        s.scale = scalePercent;
+        s.columns = columnCount;
+        s.height = heightPercent;
+        s.thickness = thicknessPercent;
+        s.glow = glowPercent;
+        s.glowRadius = glowRadius;
+        s.glowIntensity = glowIntensity;
+        s.peakHold = peakHoldEnabled;
+        s.gradient = useGradient;
+        s.interpolation = interpolation;
+        s.gradientPhase = gradientPhase;
+        s.solidColor = solidColor;
+        s.stops = gradientStops;
+        return s;
+    }
+
     bool tryNativeGpuPaint()
     {
 #ifdef Q_OS_WIN
