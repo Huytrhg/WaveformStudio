@@ -217,6 +217,24 @@ public:
         p.restore();
     }
 
+    // B3.1: render a complete output frame from the original video frame.
+    // This function is deterministic for a given frame, FFT bands and settings,
+    // making it suitable for both preview-independent export and repeatable tests.
+    static QImage renderFrame(const QImage &videoFrame,
+                              const QVector<float> &bands,
+                              const SpectrumRenderSettings &settings,
+                              const QVector<float> &peaks = {}) {
+        if (videoFrame.isNull()) return {};
+        QImage frame = videoFrame.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        QPainter painter(&frame);
+        painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+        paint(painter, QRectF(QPointF(0, 0), QSizeF(frame.size())), bands, settings, peaks);
+        painter.end();
+        return frame;
+    }
+
+    // Render an RGBA overlay only. Transparent pixels preserve the source video
+    // when composited by FFmpeg or another frame encoder.
     static QImage renderOverlay(const QSize &size, const QVector<float> &bands,
                                 const SpectrumRenderSettings &settings,
                                 const QVector<float> &peaks = {}) {
