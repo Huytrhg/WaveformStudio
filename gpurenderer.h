@@ -25,7 +25,8 @@ public:
     bool renderColoredRects(int width, int height,
                             const QVector<QRectF> &rects,
                             const QVector<QColor> &colors,
-                            QImage *output, const QImage *background = nullptr);
+                            QImage *output, const QImage *background = nullptr,
+                            const QVector<QColor> *topColors = nullptr);
     QString lastRenderError() const;
     QString runtimeStats() const;
 
