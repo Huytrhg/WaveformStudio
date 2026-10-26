@@ -187,6 +187,22 @@ public:
                     gpuBackgroundDirty = true;
                     update();
                 });
+        // Phase 4D.1: animate between 20 Hz FFT samples at ~30 Hz.
+        // Stop the animation when the analyzer clears its bands.
+        motionTimer = new QTimer(this);
+        motionTimer->setInterval(33);
+        connect(motionTimer, &QTimer::timeout, this, [this]() {
+            if (targetBands.isEmpty()) { motionTimer->stop(); return; }
+            bool changed = false;
+            for (int i = 0; i < bands.size(); ++i) {
+                const float delta = targetBands[i] - bands[i];
+                const float response = delta > 0.0f ? 0.52f : 0.32f;
+                const float next = std::abs(delta) < 0.0005f
+                    ? targetBands[i] : bands[i] + delta * response;
+                if (next != bands[i]) { bands[i] = next; changed = true; }
+            }
+            if (changed) update();
+        });
         gradientStops = {
             {0.0, QColor("#00D5FF")},
             {0.5, QColor("#376BFF")},
@@ -198,9 +214,20 @@ public:
 
     void setBands(const QVector<float> &values)
     {
-        bands = values;
-        if (bands.size() > 64) bands.resize(64);
-        update();
+        if (values.isEmpty()) {
+            motionTimer->stop();
+            targetBands.clear();
+            bands.clear();
+            update();
+            return;
+        }
+        targetBands = values;
+        if (targetBands.size() > 64) targetBands.resize(64);
+        if (bands.size() != targetBands.size()) {
+            bands = targetBands; // First sample: no ramp from stale values.
+            update();
+        }
+        if (!motionTimer->isActive()) motionTimer->start();
     }
     void setMessage(const QString &text) { message = text; update(); }
     void setVisualMode(int mode) { visualMode = qBound(0, mode, 2); update(); }
@@ -576,6 +603,8 @@ private:
     double measuredFps = 0.0;
     bool forceCpuFallback = false;
     QVector<float> bands;
+    QVector<float> targetBands;
+    QTimer *motionTimer = nullptr;
     QString message;
     int visualMode;
     int positionX, positionY, opacityPercent, scalePercent;
