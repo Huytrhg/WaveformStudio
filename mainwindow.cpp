@@ -616,7 +616,14 @@ protected:
                 const qreal t = qreal(i) / qMax(1, pointCount - 1);
                 const qreal x = startX + maxW * t;
                 const qreal v = qBound(0.0, qreal(bands[i]), 1.0);
-                const qreal amp = qMax(0.75, v * maxH * 0.46);
+
+                // Taper both ends smoothly to the center line so the filled
+                // silhouette closes cleanly instead of flaring at the edges.
+                const qreal taperWidth = 0.08;
+                const qreal leftTaper = qBound(0.0, t / taperWidth, 1.0);
+                const qreal rightTaper = qBound(0.0, (1.0 - t) / taperWidth, 1.0);
+                const qreal taper = qMin(leftTaper, rightTaper);
+                const qreal amp = v * maxH * 0.46 * taper;
                 upperPoints.push_back(QPointF(x, cy - amp));
                 lowerPoints.push_back(QPointF(x, cy + amp));
             }
@@ -650,22 +657,30 @@ protected:
                 fillGradient.setColorAt(1.0, solidColor);
             }
 
-            // Keep the familiar solid, mirrored silhouette, with an optional
-            // restrained edge glow. The two-line Waveform mode above stays untouched.
-            if (glowPercent > 0 && glowIntensity > 0) {
-                const qreal strength = (glowPercent / 100.0) * (glowIntensity / 100.0);
-                QColor glowColor = useGradient
-                    ? colorAt(gradientCoordinate(0.5 + gradientPhase)) : solidColor;
-                glowColor.setAlpha(qBound(0, qRound(42.0 * strength), 42));
-                QPen glowPen(glowColor, 1.0 + 4.0 * (glowRadius / 100.0));
-                glowPen.setJoinStyle(Qt::RoundJoin);
-                p.setPen(glowPen);
-                p.setBrush(Qt::NoBrush);
-                p.drawPath(filledPath);
-            }
+            // Fill first, then paint several translucent strokes around the
+            // silhouette edge; drawing glow before the fill hides most of it.
             p.setPen(Qt::NoPen);
             p.setBrush(fillGradient);
             p.drawPath(filledPath);
+
+            if (glowPercent > 0 && glowIntensity > 0) {
+                const qreal strength = (glowPercent / 100.0) * (glowIntensity / 100.0);
+                const qreal radius = 2.0 + 16.0 * (glowRadius / 100.0);
+                const QColor baseGlow = useGradient
+                    ? colorAt(gradientCoordinate(0.5 + gradientPhase)) : solidColor;
+                for (int layer = 4; layer >= 1; --layer) {
+                    QColor glowColor = baseGlow;
+                    const qreal layerFactor = qreal(layer) / 4.0;
+                    glowColor.setAlpha(qBound(0, qRound(60.0 * strength * layerFactor), 60));
+                    QPen glowPen(glowColor, radius * layerFactor);
+                    glowPen.setJoinStyle(Qt::RoundJoin);
+                    glowPen.setCapStyle(Qt::RoundCap);
+                    p.setPen(glowPen);
+                    p.setBrush(Qt::NoBrush);
+                    p.drawPath(filledPath);
+                }
+            }
+
             QColor centerColor = useGradient
                 ? colorAt(gradientCoordinate(0.5 + gradientPhase)) : solidColor;
             centerColor.setAlpha(34);
