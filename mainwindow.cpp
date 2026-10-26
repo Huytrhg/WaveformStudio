@@ -23,6 +23,7 @@
 #include <QVideoSink>
 #include <QVideoFrame>
 #include <QFileDialog>
+#include <QFile>
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QPushButton>
