@@ -2123,14 +2123,14 @@ MainWindow::MainWindow(QWidget *parent)
             const qint64 totalFrames = qMax<qint64>(
                 1, (qMax<qint64>(1, player->duration()) * exportFps + 999) / 1000);
             auto frameGenerator = std::make_shared<SpectrumExportFrames>(
-                spectrumAnalyzer, spectrumDisplay->exportSettings(),
+                spectrumAnalyzer, spectrumOverlay->exportSettings(),
                 overlaySize, exportFps);
-            frameGenerator->setGradientSpeed(spectrumDisplay->exportGradientSpeed());
+            frameGenerator->setGradientSpeed(spectrumOverlay->exportGradientSpeed());
 
             // Resize the RGBA overlay to the actual source video resolution.
             const QString filterGraph =
-                "[0:v]format=rgba[rgba];"
-                "[rgba][1:v]scale2ref=w=main_w:h=main_h[spec][base];"
+                "[1:v]setpts=PTS-STARTPTS,format=yuv420p[base];"
+                "[0:v]format=rgba,scale2ref=w=main_w:h=main_h[spec][ref];"
                 "[base][spec]overlay=0:0:shortest=1:format=auto,"
                 "format=yuv420p[outv]";
 
