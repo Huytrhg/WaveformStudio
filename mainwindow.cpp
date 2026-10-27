@@ -2180,9 +2180,7 @@ MainWindow::MainWindow(QWidget *parent)
                     process->closeWriteChannel();
                     return;
                 }
-                // renderOverlay() already returns straight RGBA8888 pixels,
-                // matching FFmpeg's rawvideo input. Avoid a full-frame format
-                // conversion and allocation for every exported frame.
+                overlay = overlay.convertToFormat(QImage::Format_RGBA8888);
                 process->write(reinterpret_cast<const char *>(overlay.constBits()),
                                qint64(overlay.sizeInBytes()));
             });
