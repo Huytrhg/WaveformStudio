@@ -2117,9 +2117,15 @@ MainWindow::MainWindow(QWidget *parent)
                 return;
             }
 
-            // B3.2: pipe RGBA Spectrum frames directly into FFmpeg.
+            // B3.3.1: render the Spectrum at the source video's native resolution.
+            // This avoids scaling a 960x540 overlay up during export, which can soften
+            // thin lines, circular curves, and other fine Spectrum details.
+            QSize sourceSize = spectrumDisplay->getVideoSink()->videoSize();
+            if (!sourceSize.isValid() || sourceSize.isEmpty())
+                sourceSize = QSize(1920, 1080);
+            const QSize overlaySize = sourceSize;
+
             const int exportFps = 30;
-            const QSize overlaySize(960, 540);
             const qint64 totalFrames = qMax<qint64>(
                 1, (qMax<qint64>(1, player->duration()) * exportFps + 999) / 1000);
             auto frameGenerator = std::make_shared<SpectrumExportFrames>(
@@ -2127,15 +2133,10 @@ MainWindow::MainWindow(QWidget *parent)
                 overlaySize, exportFps);
             frameGenerator->setGradientSpeed(spectrumOverlay->exportGradientSpeed());
 
-            // Resize the RGBA overlay to the actual source video resolution.
-            QSize sourceSize = spectrumDisplay->getVideoSink()->videoSize();
-            if (!sourceSize.isValid() || sourceSize.isEmpty())
-                sourceSize = QSize(1920, 1080);
-            const QString spectrumScale =
-                QString("scale=%1:%2").arg(sourceSize.width()).arg(sourceSize.height());
+            // The overlay is already rendered at source resolution; do not scale it.
             const QString filterGraph =
                 "[1:v]setpts=PTS-STARTPTS,format=yuv420p[base];"
-                "[0:v]format=rgba," + spectrumScale + "[spec];"
+                "[0:v]format=rgba[spec];"
                 "[base][spec]overlay=0:0:shortest=1:format=auto,"
                 "format=yuv420p[outv]";
 
@@ -2144,7 +2145,8 @@ MainWindow::MainWindow(QWidget *parent)
                 "-y", "-hide_banner", "-nostats",
                 "-progress", "pipe:1",
                 "-f", "rawvideo", "-pixel_format", "rgba",
-                "-video_size", "960x540",
+                "-video_size", QString::number(overlaySize.width()) + "x" +
+                               QString::number(overlaySize.height()),
                 "-framerate", QString::number(exportFps),
                 "-i", "pipe:0",
                 "-i", inputPath,
