@@ -2159,55 +2159,65 @@ MainWindow::MainWindow(QWidget *parent)
                 finalOutputPath
             };
 
-            // B3.3.2 diagnostics: measure frame generation/conversion and
-            // FFmpeg pipe backpressure without changing the rendering pipeline.
+            // B3.3.2: event-driven pipe feed. Produce a new frame only after
+            // Qt has drained the previous frame, avoiding 10 ms polling.
             struct ExportMetrics {
                 QElapsedTimer wall;
                 qint64 renderMs = 0;
                 qint64 convertMs = 0;
-                qint64 blockedTicks = 0;
                 qint64 frames = 0;
                 qint64 lastReportMs = 0;
+                bool inputClosed = false;
+                bool feedScheduled = false;
             };
             auto metrics = std::make_shared<ExportMetrics>();
             metrics->wall.start();
-            auto *feedTimer = new QTimer(process);
-            feedTimer->setInterval(10);
-            connect(feedTimer, &QTimer::timeout, process,
-                    [process, feedTimer, frameGenerator, totalFrames, metrics]() {
-                if (process->state() != QProcess::Running) {
-                    feedTimer->stop();
+
+            auto pump = std::make_shared<std::function<void()>>();
+            std::weak_ptr<std::function<void()>> weakPump = pump;
+            *pump = [process, frameGenerator, totalFrames, metrics, weakPump]() {
+                metrics->feedScheduled = false;
+                if (metrics->inputClosed || process->state() != QProcess::Running)
                     return;
-                }
-                if (process->bytesToWrite() > 0) {
-                    ++metrics->blockedTicks;
+                if (process->bytesToWrite() != 0)
                     return;
-                }
+
                 if (frameGenerator->nextFrameIndex() >= totalFrames) {
-                    feedTimer->stop();
+                    metrics->inputClosed = true;
                     process->closeWriteChannel();
-                    qDebug().noquote() << "[B3.3.2] All overlay frames sent:"
-                                       << metrics->frames << "elapsed_ms=" << metrics->wall.elapsed()
+                    qDebug().noquote() << "[B3.3.2] All overlay frames queued:"
+                                       << metrics->frames
+                                       << "elapsed_ms=" << metrics->wall.elapsed()
                                        << "render_ms=" << metrics->renderMs
-                                       << "convert_ms=" << metrics->convertMs
-                                       << "backpressure_ticks=" << metrics->blockedTicks;
+                                       << "convert_ms=" << metrics->convertMs;
                     return;
                 }
+
                 QElapsedTimer step;
                 step.start();
                 QImage overlay = frameGenerator->nextOverlay();
                 metrics->renderMs += step.elapsed();
                 if (overlay.isNull()) {
-                    feedTimer->stop();
+                    metrics->inputClosed = true;
                     process->closeWriteChannel();
                     qWarning() << "[B3.3.2] Overlay generator returned an empty frame";
                     return;
                 }
+
                 step.restart();
                 overlay = overlay.convertToFormat(QImage::Format_RGBA8888);
                 metrics->convertMs += step.elapsed();
-                process->write(reinterpret_cast<const char *>(overlay.constBits()),
-                               qint64(overlay.sizeInBytes()));
+                const qint64 frameBytes = qint64(overlay.sizeInBytes());
+                const qint64 accepted = process->write(
+                    reinterpret_cast<const char *>(overlay.constBits()), frameBytes);
+                if (accepted != frameBytes) {
+                    metrics->inputClosed = true;
+                    qWarning() << "[B3.3.2] Pipe write failed:" << accepted
+                               << "of" << frameBytes << "bytes";
+                    if (process->state() == QProcess::Running)
+                        process->closeWriteChannel();
+                    return;
+                }
                 ++metrics->frames;
                 const qint64 elapsed = metrics->wall.elapsed();
                 if (elapsed - metrics->lastReportMs >= 10000) {
@@ -2217,12 +2227,45 @@ MainWindow::MainWindow(QWidget *parent)
                                        << "elapsed_ms=" << elapsed
                                        << "render_ms=" << metrics->renderMs
                                        << "convert_ms=" << metrics->convertMs
-                                       << "backpressure_ticks=" << metrics->blockedTicks
                                        << "queued_bytes=" << process->bytesToWrite();
                 }
+                // If Qt accepted the frame without buffering, schedule the next
+                // one asynchronously. Otherwise bytesWritten wakes the pump.
+                if (process->bytesToWrite() == 0 && !metrics->feedScheduled) {
+                    metrics->feedScheduled = true;
+                    QTimer::singleShot(0, process, [weakPump]() {
+                        if (auto fn = weakPump.lock()) (*fn)();
+                    });
+                }
+            };
+
+            connect(process, &QProcess::bytesWritten, process,
+                    [process, metrics, weakPump](qint64) {
+                if (metrics->inputClosed || metrics->feedScheduled ||
+                    process->state() != QProcess::Running ||
+                    process->bytesToWrite() != 0)
+                    return;
+                metrics->feedScheduled = true;
+                QTimer::singleShot(0, process, [weakPump]() {
+                    if (auto fn = weakPump.lock()) (*fn)();
+                });
             });
-            connect(process, &QProcess::started, feedTimer,
-                    [feedTimer]() { feedTimer->start(); });
+            connect(process, &QProcess::started, process,
+                    [metrics, weakPump]() {
+                metrics->feedScheduled = true;
+                QTimer::singleShot(0, [weakPump]() {
+                    if (auto fn = weakPump.lock()) (*fn)();
+                });
+            });
+            connect(process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+                    process, [metrics, pump](int, QProcess::ExitStatus) {
+                metrics->inputClosed = true;
+                qDebug().noquote() << "[B3.3.2] FFmpeg finished:"
+                                   << "frames_queued=" << metrics->frames
+                                   << "elapsed_ms=" << metrics->wall.elapsed()
+                                   << "render_ms=" << metrics->renderMs
+                                   << "convert_ms=" << metrics->convertMs;
+            });
             statusBar()->showMessage("Starting MP4 Spectrum export...", 3000);
             process->start(ffmpegPath, arguments);
         }
