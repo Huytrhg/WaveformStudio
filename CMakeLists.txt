@@ -21,6 +21,7 @@ qt_add_executable(WaveformStudio
     spectrumanalyzer.cpp
     spectrumanalyzer.h
     spectrumrenderer.h
+    spectrumexportframes.h
     gpurenderer.cpp
     gpurenderer.h
     nativegpupresenter.cpp
