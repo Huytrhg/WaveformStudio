@@ -61,6 +61,7 @@
 #include <QScrollArea>
 #include <QSpinBox>
 #include <functional>
+#include <memory>
 
 // Interactive Photoshop-inspired gradient bar: click to add, drag stops,
 // double-click a stop to choose its color. Keeps rendering independent of FFT.
@@ -328,6 +329,8 @@ public:
         }
     }
     int selectedStopIndex = 0;
+    SpectrumRenderSettings exportSettings() const { return currentRenderSettings(); }
+    int exportGradientSpeed() const { return gradientSpeed; }
 
 protected:
     void paintEvent(QPaintEvent *) override
@@ -2114,36 +2117,69 @@ MainWindow::MainWindow(QWidget *parent)
                 return;
             }
 
+            // B3.2: pipe RGBA Spectrum frames directly into FFmpeg.
+            const int exportFps = 30;
+            const QSize overlaySize(960, 540);
+            const qint64 totalFrames = qMax<qint64>(
+                1, (qMax<qint64>(1, player->duration()) * exportFps + 999) / 1000);
+            auto frameGenerator = std::make_shared<SpectrumExportFrames>(
+                spectrumAnalyzer, spectrumDisplay->exportSettings(),
+                overlaySize, exportFps);
+            frameGenerator->setGradientSpeed(spectrumDisplay->exportGradientSpeed());
+
+            // Resize the RGBA overlay to the actual source video resolution.
             const QString filterGraph =
-                "[0:a:0]showfreqs=s=960x400:mode=bar:ascale=log:fscale=log:"
-                "win_size=2048:rate=30:colors=0x35B8FF,"
-                "format=rgba,colorkey=0x000000:0.08:0.0[spec];"
-                "[0:v:0]setpts=PTS-STARTPTS[base];"
-                "[base][spec]overlay=x=(W-w)/2:y=H*0.78-h/2:shortest=1[outv]";
+                "[0:v]format=rgba[rgba];"
+                "[rgba][1:v]scale2ref=w=main_w:h=main_h[spec][base];"
+                "[base][spec]overlay=0:0:shortest=1:format=auto,"
+                "format=yuv420p[outv]";
 
-            progress->setLabelText("Rendering video with audio-reactive Spectrum Bars...");
-
+            progress->setLabelText("Rendering Spectrum frames into MP4...");
             QStringList arguments = {
-                "-y",
-                "-hide_banner",
-                "-nostats",
+                "-y", "-hide_banner", "-nostats",
                 "-progress", "pipe:1",
+                "-f", "rawvideo", "-pixel_format", "rgba",
+                "-video_size", "960x540",
+                "-framerate", QString::number(exportFps),
+                "-i", "pipe:0",
                 "-i", inputPath,
                 "-filter_complex", filterGraph,
-                "-map", "[outv]",
-                "-map", "0:a:0",
-                "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-crf", QString::number(crf),
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-b:a", "192k",
-                "-shortest",
-                "-movflags", "+faststart",
+                "-map", "[outv]", "-map", "1:a:0",
+                "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", QString::number(crf), "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "192k",
+                "-shortest", "-movflags", "+faststart",
                 finalOutputPath
             };
 
-            statusBar()->showMessage("Starting MP4 export...", 3000);
+            // Backpressure prevents buffering the entire video in RAM.
+            auto *feedTimer = new QTimer(process);
+            feedTimer->setInterval(10);
+            connect(feedTimer, &QTimer::timeout, process,
+                    [process, feedTimer, frameGenerator, totalFrames]() {
+                if (process->state() != QProcess::Running) {
+                    feedTimer->stop();
+                    return;
+                }
+                if (process->bytesToWrite() > 0) return;
+                if (frameGenerator->nextFrameIndex() >= totalFrames) {
+                    feedTimer->stop();
+                    process->closeWriteChannel();
+                    return;
+                }
+                QImage overlay = frameGenerator->nextOverlay();
+                if (overlay.isNull()) {
+                    feedTimer->stop();
+                    process->closeWriteChannel();
+                    return;
+                }
+                overlay = overlay.convertToFormat(QImage::Format_RGBA8888);
+                process->write(reinterpret_cast<const char *>(overlay.constBits()),
+                               qint64(overlay.sizeInBytes()));
+            });
+            connect(process, &QProcess::started, feedTimer,
+                    [feedTimer]() { feedTimer->start(); });
+            statusBar()->showMessage("Starting MP4 Spectrum export...", 3000);
             process->start(ffmpegPath, arguments);
         }
         );
