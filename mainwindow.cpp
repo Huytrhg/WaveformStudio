@@ -2130,8 +2130,9 @@ MainWindow::MainWindow(QWidget *parent)
             // Resize the RGBA overlay to the actual source video resolution.
             const QString filterGraph =
                 "[1:v]setpts=PTS-STARTPTS,format=yuv420p[base];"
-                "[0:v]format=rgba,scale2ref=w=main_w:h=main_h[spec][ref];"
-                "[base][spec]overlay=0:0:shortest=1:format=auto,"
+                "[0:v]format=rgba[small];"
+                "[small][base]scale2ref=w=main_w:h=main_h[spec][base2];"
+                "[base2][spec]overlay=0:0:shortest=1:format=auto,"
                 "format=yuv420p[outv]";
 
             progress->setLabelText("Rendering Spectrum frames into MP4...");
