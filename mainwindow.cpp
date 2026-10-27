@@ -2159,30 +2159,67 @@ MainWindow::MainWindow(QWidget *parent)
                 finalOutputPath
             };
 
-            // Backpressure prevents buffering the entire video in RAM.
+            // B3.3.2 diagnostics: measure frame generation/conversion and
+            // FFmpeg pipe backpressure without changing the rendering pipeline.
+            struct ExportMetrics {
+                QElapsedTimer wall;
+                qint64 renderMs = 0;
+                qint64 convertMs = 0;
+                qint64 blockedTicks = 0;
+                qint64 frames = 0;
+                qint64 lastReportMs = 0;
+            };
+            auto metrics = std::make_shared<ExportMetrics>();
+            metrics->wall.start();
             auto *feedTimer = new QTimer(process);
             feedTimer->setInterval(10);
             connect(feedTimer, &QTimer::timeout, process,
-                    [process, feedTimer, frameGenerator, totalFrames]() {
+                    [process, feedTimer, frameGenerator, totalFrames, metrics]() {
                 if (process->state() != QProcess::Running) {
                     feedTimer->stop();
                     return;
                 }
-                if (process->bytesToWrite() > 0) return;
+                if (process->bytesToWrite() > 0) {
+                    ++metrics->blockedTicks;
+                    return;
+                }
                 if (frameGenerator->nextFrameIndex() >= totalFrames) {
                     feedTimer->stop();
                     process->closeWriteChannel();
+                    qDebug().noquote() << "[B3.3.2] All overlay frames sent:"
+                                       << metrics->frames << "elapsed_ms=" << metrics->wall.elapsed()
+                                       << "render_ms=" << metrics->renderMs
+                                       << "convert_ms=" << metrics->convertMs
+                                       << "backpressure_ticks=" << metrics->blockedTicks;
                     return;
                 }
+                QElapsedTimer step;
+                step.start();
                 QImage overlay = frameGenerator->nextOverlay();
+                metrics->renderMs += step.elapsed();
                 if (overlay.isNull()) {
                     feedTimer->stop();
                     process->closeWriteChannel();
+                    qWarning() << "[B3.3.2] Overlay generator returned an empty frame";
                     return;
                 }
+                step.restart();
                 overlay = overlay.convertToFormat(QImage::Format_RGBA8888);
+                metrics->convertMs += step.elapsed();
                 process->write(reinterpret_cast<const char *>(overlay.constBits()),
                                qint64(overlay.sizeInBytes()));
+                ++metrics->frames;
+                const qint64 elapsed = metrics->wall.elapsed();
+                if (elapsed - metrics->lastReportMs >= 10000) {
+                    metrics->lastReportMs = elapsed;
+                    qDebug().noquote() << "[B3.3.2] export diagnostic:"
+                                       << "frames=" << metrics->frames << "/" << totalFrames
+                                       << "elapsed_ms=" << elapsed
+                                       << "render_ms=" << metrics->renderMs
+                                       << "convert_ms=" << metrics->convertMs
+                                       << "backpressure_ticks=" << metrics->blockedTicks
+                                       << "queued_bytes=" << process->bytesToWrite();
+                }
             });
             connect(process, &QProcess::started, feedTimer,
                     [feedTimer]() { feedTimer->start(); });
