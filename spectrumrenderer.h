@@ -239,11 +239,10 @@ public:
                                 const SpectrumRenderSettings &settings,
                                 const QVector<float> &peaks = {}) {
         if (size.isEmpty()) return {};
-        QImage image(size, QImage::Format_RGBA8888);
+        QImage image(size, QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::transparent);
         QPainter painter(&image);
         paint(painter, QRectF(QPointF(0, 0), QSizeF(size)), bands, settings, peaks);
-        painter.end();
         return image;
     }
 };
