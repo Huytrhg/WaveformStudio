@@ -37,8 +37,12 @@ public:
         if (!m_analyzer || !m_analyzer->isReady() || m_size.isEmpty())
             return {};
         const qint64 index = m_nextFrame++;
+        // B3.3.3: use the presentation timestamp of the output frame.
+        // Round to nearest millisecond instead of consistently flooring.
+        const qint64 presentationMs =
+            (index * 1000 + m_fps / 2) / m_fps;
         const int timeMs = int(qMin<qint64>(
-            (index * 1000) / m_fps, m_analyzer->durationMs()));
+            presentationMs, m_analyzer->durationMs()));
         const QVector<float> target = m_analyzer->spectrumAt(timeMs, 64);
         if (target.isEmpty()) return {};
         if (m_smoothed.size() != target.size()) {
