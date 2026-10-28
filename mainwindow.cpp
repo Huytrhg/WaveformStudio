@@ -2011,6 +2011,21 @@ MainWindow::MainWindow(QWidget *parent)
             qDebug().noquote() << "[B3.4.2.5] A/B configuration:"
                                << "write_batch_frames=" << writeBatchFrames;
 
+            // B3.4.2.9: isolate MP4 faststart's finalization cost.
+            bool faststartAccepted = false;
+            const QStringList faststartOptions = {
+                "A: Enable faststart (better progressive playback)",
+                "B: Disable faststart (A/B timing test)"
+            };
+            const QString faststartChoice = QInputDialog::getItem(
+                this, "MP4 Faststart A/B",
+                "Choose MP4 finalization mode:",
+                faststartOptions, 0, false, &faststartAccepted);
+            if (!faststartAccepted) return;
+            const bool useFaststart = (faststartChoice == faststartOptions.first());
+            qDebug().noquote() << "[B3.4.2.9] Faststart A/B:"
+                               << (useFaststart ? "enabled" : "disabled");
+
             const QString ffmpegPath = "C:/ffmpeg/bin/ffmpeg.exe";
             if (!QFileInfo::exists(ffmpegPath)) {
                 QMessageBox::critical(
@@ -2266,9 +2281,11 @@ MainWindow::MainWindow(QWidget *parent)
                 "-filter_complex", filterGraph,
                 "-map", "[outv]", "-map", "1:a:0",
                 "-c:a", "aac", "-b:a", "192k",
-                "-shortest", "-movflags", "+faststart",
-                finalOutputPath
+                "-shortest"
             };
+            if (useFaststart)
+                arguments << "-movflags" << "+faststart";
+            arguments << finalOutputPath;
 
             // QSV global_quality and CPU CRF are not identical scales.
             const int qsvQuality = crf == 18 ? 20 : (crf == 28 ? 30 : 25);
