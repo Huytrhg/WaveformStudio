@@ -2276,6 +2276,9 @@ MainWindow::MainWindow(QWidget *parent)
                 qint64 lastReportMs = 0;
                 qint64 firstFrameMs = -1;
                 qint64 lastFrameQueuedMs = 0;
+                qint64 inputCloseRequestedMs = -1;
+                qint64 qtBufferDrainedMs = -1;
+                qint64 ffmpegFinishedMs = -1;
                 qint64 pipeBytes = 0;
                 qint64 pipeWriteMs = 0;
                 qint64 maxPipeWriteMs = 0;
@@ -2312,6 +2315,7 @@ MainWindow::MainWindow(QWidget *parent)
 
                 if (frameGenerator->nextFrameIndex() >= totalFrames) {
                     metrics->inputClosed = true;
+                    metrics->inputCloseRequestedMs = metrics->wall.elapsed();
                     process->closeWriteChannel();
                     qDebug().noquote() << "[B3.3.2] All overlay frames queued:"
                                        << metrics->frames
@@ -2401,8 +2405,14 @@ MainWindow::MainWindow(QWidget *parent)
                     [process, metrics, weakPump](qint64 count) {
                 ++metrics->bytesWrittenSignals;
                 metrics->bytesWrittenSignalBytes += count;
-                metrics->maxQueuedBytes = qMax(metrics->maxQueuedBytes,
-                                                process->bytesToWrite());
+                const qint64 queuedBytes = process->bytesToWrite();
+                metrics->maxQueuedBytes = qMax(metrics->maxQueuedBytes, queuedBytes);
+                // This marks Qt's QProcess write buffer reaching zero after
+                // input closure was requested; it does not prove FFmpeg has
+                // consumed or encoded every byte already delivered to the OS.
+                if (metrics->inputClosed && queuedBytes == 0 &&
+                    metrics->qtBufferDrainedMs < 0)
+                    metrics->qtBufferDrainedMs = metrics->wall.elapsed();
                 if (metrics->inputClosed || metrics->feedScheduled ||
                     process->state() != QProcess::Running ||
                     process->bytesToWrite() != 0)
@@ -2422,6 +2432,12 @@ MainWindow::MainWindow(QWidget *parent)
             connect(process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
                     process, [metrics, pump, useQsv, directRgba, totalFrames, writeBatchFrames](int, QProcess::ExitStatus) {
                 metrics->inputClosed = true;
+                metrics->ffmpegFinishedMs = metrics->wall.elapsed();
+                // Fallback: if Qt did not emit a final bytesWritten signal after
+                // closure, record the finish time as an upper bound for drain.
+                if (metrics->qtBufferDrainedMs < 0)
+                    metrics->qtBufferDrainedMs = metrics->ffmpegFinishedMs;
+                metrics->processFinished = true;
                 qDebug().noquote() << "[B3.3.2] FFmpeg finished:"
                                    << "frames_queued=" << metrics->frames
                                    << "elapsed_ms=" << metrics->wall.elapsed()
@@ -2436,6 +2452,18 @@ MainWindow::MainWindow(QWidget *parent)
                     << "wall_ms=" << metrics->wall.elapsed()
                     << "first_frame_ms=" << metrics->firstFrameMs
                     << "last_frame_queued_ms=" << metrics->lastFrameQueuedMs
+                    << "input_close_requested_ms=" << metrics->inputCloseRequestedMs
+                    << "qt_buffer_drained_ms=" << metrics->qtBufferDrainedMs
+                    << "ffmpeg_finished_ms=" << metrics->ffmpegFinishedMs
+                    << "queue_to_close_ms="
+                    << (metrics->inputCloseRequestedMs >= 0
+                            ? metrics->inputCloseRequestedMs - metrics->lastFrameQueuedMs : -1)
+                    << "close_to_qt_drain_ms="
+                    << (metrics->inputCloseRequestedMs >= 0 && metrics->qtBufferDrainedMs >= 0
+                            ? metrics->qtBufferDrainedMs - metrics->inputCloseRequestedMs : -1)
+                    << "qt_drain_to_finish_ms="
+                    << (metrics->qtBufferDrainedMs >= 0 && metrics->ffmpegFinishedMs >= 0
+                            ? metrics->ffmpegFinishedMs - metrics->qtBufferDrainedMs : -1)
                     << "render_total_ms=" << metrics->renderMs
                     << "render_max_ms=" << metrics->renderMaxMs
                     << "convert_total_ms=" << metrics->convertMs
