@@ -2290,36 +2290,54 @@ MainWindow::MainWindow(QWidget *parent)
                     return;
                 }
 
-                QElapsedTimer step;
-                step.start();
-                QImage overlay = frameGenerator->nextOverlay();
-                const qint64 renderStepMs = step.elapsed();
-                metrics->renderMs += renderStepMs;
-                metrics->renderMaxMs = qMax(metrics->renderMaxMs, renderStepMs);
-                if (overlay.isNull()) {
-                    metrics->inputClosed = true;
-                    process->closeWriteChannel();
-                    qWarning() << "[B3.3.2] Overlay generator returned an empty frame";
-                    return;
+                // B3.4.2.3 experiment: batch two RGBA frames into one QProcess::write
+                // to reduce per-call overhead. Keep batches small (16 MiB at 1080p)
+                // so memory use stays bounded and the output byte stream remains exact.
+                constexpr int kFramesPerWriteBatch = 2;
+                QByteArray batch;
+                batch.reserve(int(qMin<qint64>(
+                    qint64(kFramesPerWriteBatch) * m_size.width() * m_size.height() * 4,
+                    std::numeric_limits<int>::max())));
+
+                int framesInBatch = 0;
+                while (framesInBatch < kFramesPerWriteBatch &&
+                       frameGenerator->nextFrameIndex() < totalFrames) {
+                    QElapsedTimer step;
+                    step.start();
+                    QImage overlay = frameGenerator->nextOverlay();
+                    const qint64 renderStepMs = step.elapsed();
+                    metrics->renderMs += renderStepMs;
+                    metrics->renderMaxMs = qMax(metrics->renderMaxMs, renderStepMs);
+                    if (overlay.isNull()) {
+                        metrics->inputClosed = true;
+                        process->closeWriteChannel();
+                        qWarning() << "[B3.3.2] Overlay generator returned an empty frame";
+                        return;
+                    }
+
+                    step.restart();
+                    if (overlay.format() != QImage::Format_RGBA8888)
+                        overlay = overlay.convertToFormat(QImage::Format_RGBA8888);
+                    const qint64 convertStepMs = step.elapsed();
+                    metrics->convertMs += convertStepMs;
+                    metrics->convertMaxMs = qMax(metrics->convertMaxMs, convertStepMs);
+                    batch.append(reinterpret_cast<const char *>(overlay.constBits()),
+                                 int(overlay.sizeInBytes()));
+                    ++framesInBatch;
                 }
 
-                step.restart();
-                if (overlay.format() != QImage::Format_RGBA8888)
-                    overlay = overlay.convertToFormat(QImage::Format_RGBA8888);
-                const qint64 convertStepMs = step.elapsed();
-                metrics->convertMs += convertStepMs;
-                metrics->convertMaxMs = qMax(metrics->convertMaxMs, convertStepMs);
-                const qint64 frameBytes = qint64(overlay.sizeInBytes());
-                step.restart();
-                const qint64 accepted = process->write(
-                    reinterpret_cast<const char *>(overlay.constBits()), frameBytes);
+                if (framesInBatch == 0)
+                    return;
+
+                step.start();
+                const qint64 accepted = process->write(batch.constData(), batch.size());
                 const qint64 pipeStepMs = step.elapsed();
                 metrics->pipeWriteMs += pipeStepMs;
                 metrics->maxPipeWriteMs = qMax(metrics->maxPipeWriteMs, pipeStepMs);
-                if (accepted != frameBytes) {
+                if (accepted != batch.size()) {
                     metrics->inputClosed = true;
-                    qWarning() << "[B3.3.2] Pipe write failed:" << accepted
-                               << "of" << frameBytes << "bytes";
+                    qWarning() << "[B3.4.2.3] Batched pipe write failed:" << accepted
+                               << "of" << batch.size() << "bytes";
                     if (process->state() == QProcess::Running)
                         process->closeWriteChannel();
                     return;
@@ -2328,7 +2346,7 @@ MainWindow::MainWindow(QWidget *parent)
                     metrics->firstFrameMs = metrics->wall.elapsed();
                 metrics->lastFrameQueuedMs = metrics->wall.elapsed();
                 metrics->pipeBytes += accepted;
-                ++metrics->frames;
+                metrics->frames += framesInBatch;
                 const qint64 elapsed = metrics->wall.elapsed();
                 if (elapsed - metrics->lastReportMs >= 10000) {
                     metrics->lastReportMs = elapsed;
@@ -2379,6 +2397,7 @@ MainWindow::MainWindow(QWidget *parent)
                     << "[B3.4.2.1] PERFORMANCE SUMMARY"
                     << "encoder=" << (useQsv ? "h264_qsv" : "libx264")
                     << "pixel_pipeline=" << (directRgba ? "direct_rgba" : "stable_conversion")
+                    << "write_batch_frames=2"
                     << "frames=" << metrics->frames << "/" << totalFrames
                     << "wall_ms=" << metrics->wall.elapsed()
                     << "first_frame_ms=" << metrics->firstFrameMs
