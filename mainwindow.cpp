@@ -2195,12 +2195,29 @@ MainWindow::MainWindow(QWidget *parent)
                     qDebug().noquote() << "FFmpeg:" << QString::fromLocal8Bit(errors);
             });
 
+            // B3.4.2.14: timestamp entry into the first finished slot before
+            // any modal dialog can block the slot and delay later diagnostics.
+            auto finishedSignalEntryMs = std::make_shared<qint64>(-1);
             connect(process,
                     qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
                     this,
                     [this, process, progress, finalOutputPath, useQsv,
-                     resumePreviewAfterExport, resumeSpectrumTimerAfterExport](
+                     resumePreviewAfterExport, resumeSpectrumTimerAfterExport,
+                     ffmpegProgressClock, nativeExitMs, finishedSignalEntryMs](
                         int exitCode, QProcess::ExitStatus exitStatus) {
+                *finishedSignalEntryMs = ffmpegProgressClock->elapsed();
+                const qint64 nativeMsAtEntry = nativeExitMs->load();
+                qDebug().noquote() << "[B3.4.2.14] QPROCESS FINISHED ENTRY"
+                    << "entry_ms=" << *finishedSignalEntryMs
+                    << "native_exit_ms=" << nativeMsAtEntry
+                    << "entry_after_native_ms="
+                    << (nativeMsAtEntry >= 0
+                            ? *finishedSignalEntryMs - nativeMsAtEntry : -1)
+                    << "exit_code=" << exitCode
+                    << "exit_status=" << static_cast<int>(exitStatus)
+                    << "qprocess_state=" << static_cast<int>(process->state())
+                    << "bytes_available=" << process->bytesAvailable()
+                    << "bytes_to_write=" << process->bytesToWrite();
                 progress->setValue(100);
                 progress->close();
 
