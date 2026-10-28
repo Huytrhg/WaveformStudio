@@ -2591,7 +2591,15 @@ MainWindow::MainWindow(QWidget *parent)
                                heartbeatStateAtNative, process](int, QProcess::ExitStatus) {
                 nativeProbe->stop();
                 heartbeat->stop();
-                const qint64 finishedMs = ffmpegProgressClock->elapsed();
+                const qint64 diagnosticSlotMs = ffmpegProgressClock->elapsed();
+                // B3.4.2.15: use the first finished-handler entry timestamp,
+                // recorded before the modal completion dialog is displayed.
+                const qint64 finishedMs = *finishedSignalEntryMs;
+                qDebug().noquote() << "[B3.4.2.15] FINISHED TIMESTAMP CORRECTION"
+                    << "finished_entry_ms=" << finishedMs
+                    << "diagnostic_slot_ms=" << diagnosticSlotMs
+                    << "dialog_or_slot_delay_ms="
+                    << (finishedMs >= 0 ? diagnosticSlotMs - finishedMs : -1);
                 qDebug().noquote() << "[B3.4.2.13] EVENT LOOP HEARTBEAT"
                     << "interval_ms=100"
                     << "ticks=" << *heartbeatCount
@@ -2640,7 +2648,9 @@ MainWindow::MainWindow(QWidget *parent)
                     << (*lastStderrMs >= 0 ? finishedMs - *lastStderrMs : -1);
                 // These are Qt event-observation times, not FFmpeg-internal timestamps.
                 metrics->inputClosed = true;
-                metrics->ffmpegFinishedMs = metrics->wall.elapsed();
+                // Exclude time spent displaying the modal completion dialog.
+                metrics->ffmpegFinishedMs = finishedMs >= 0
+                    ? finishedMs : metrics->wall.elapsed();
                 metrics->processFinished = true;
                 qDebug().noquote() << "[B3.3.2] FFmpeg finished:"
                                    << "frames_queued=" << metrics->frames
@@ -2653,7 +2663,8 @@ MainWindow::MainWindow(QWidget *parent)
                     << "pixel_pipeline=" << (directRgba ? "direct_rgba" : "stable_conversion")
                     << "write_batch_frames=" << writeBatchFrames
                     << "frames=" << metrics->frames << "/" << totalFrames
-                    << "wall_ms=" << metrics->wall.elapsed()
+                    << "wall_ms=" << (finishedMs >= 0
+                            ? finishedMs : metrics->wall.elapsed())
                     << "first_frame_ms=" << metrics->firstFrameMs
                     << "last_frame_queued_ms=" << metrics->lastFrameQueuedMs
                     << "input_close_requested_ms=" << metrics->inputCloseRequestedMs
@@ -2682,7 +2693,8 @@ MainWindow::MainWindow(QWidget *parent)
                     << "backpressure_checks=" << metrics->backpressureChecks
                     << "pump_noop_count=" << metrics->pumpNoopCount
                     << "ffmpeg_finish_after_last_queue_ms="
-                    << (metrics->wall.elapsed() - metrics->lastFrameQueuedMs);
+                    << ((finishedMs >= 0 ? finishedMs : metrics->wall.elapsed())
+                        - metrics->lastFrameQueuedMs);
                 // FFmpeg -benchmark prints aggregate user/system CPU time and peak RSS.
                 // These measurements overlap with rendering and pipe delivery;
                 // they must not be added together as sequential phases.
