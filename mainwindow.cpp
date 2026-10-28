@@ -2087,13 +2087,55 @@ MainWindow::MainWindow(QWidget *parent)
             // A single monotonic clock is shared by Qt and the native Windows waiter.
             auto nativeExitMs = std::make_shared<std::atomic<qint64>>(-1);
             auto nativeWaitStatus = std::make_shared<std::atomic<int>>(-1);
+            // B3.4.2.13: GUI event-loop heartbeat. Diagnostics only; it does not
+            // participate in export completion or cleanup decisions.
+            auto heartbeatCount = std::make_shared<qint64>(0);
+            auto heartbeatLastMs = std::make_shared<qint64>(-1);
+            auto heartbeatMaxGapMs = std::make_shared<qint64>(0);
+            auto heartbeatMaxPostNativeGapMs = std::make_shared<qint64>(0);
+            auto heartbeatGapsOver250 = std::make_shared<qint64>(0);
+            auto heartbeatGapsOver500 = std::make_shared<qint64>(0);
+            auto heartbeatPostNativeGapsOver250 = std::make_shared<qint64>(0);
+            auto heartbeatPostNativeGapsOver500 = std::make_shared<qint64>(0);
+            auto heartbeatStateAtNative = std::make_shared<int>(-1);
+            auto heartbeat = new QTimer(process);
+            heartbeat->setInterval(100);
+            connect(heartbeat, &QTimer::timeout, process,
+                    [process, ffmpegProgressClock, nativeExitMs, heartbeatCount,
+                     heartbeatLastMs, heartbeatMaxGapMs, heartbeatMaxPostNativeGapMs,
+                     heartbeatGapsOver250, heartbeatGapsOver500,
+                     heartbeatPostNativeGapsOver250, heartbeatPostNativeGapsOver500,
+                     heartbeatStateAtNative]() {
+                const qint64 now = ffmpegProgressClock->elapsed();
+                ++(*heartbeatCount);
+                if (*heartbeatLastMs >= 0) {
+                    const qint64 gap = now - *heartbeatLastMs;
+                    *heartbeatMaxGapMs = qMax(*heartbeatMaxGapMs, gap);
+                    if (gap > 250) ++(*heartbeatGapsOver250);
+                    if (gap > 500) ++(*heartbeatGapsOver500);
+                    const qint64 nativeMs = nativeExitMs->load();
+                    if (nativeMs >= 0 && now >= nativeMs) {
+                        const qint64 postGap = (*heartbeatLastMs < nativeMs)
+                            ? now - nativeMs : gap;
+                        *heartbeatMaxPostNativeGapMs =
+                            qMax(*heartbeatMaxPostNativeGapMs, postGap);
+                        if (postGap > 250) ++(*heartbeatPostNativeGapsOver250);
+                        if (postGap > 500) ++(*heartbeatPostNativeGapsOver500);
+                    }
+                }
+                *heartbeatLastMs = now;
+                if (nativeExitMs->load() >= 0 && *heartbeatStateAtNative < 0)
+                    *heartbeatStateAtNative = static_cast<int>(process->state());
+            });
+            heartbeat->start();
+
             // B3.4.2.12: a 10 ms GUI-thread probe observes the native exit
             // independently of QProcess::finished, without changing cleanup.
             auto nativeNotificationMs = std::make_shared<qint64>(-1);
             auto nativeProbe = new QTimer(process);
             nativeProbe->setInterval(10);
             connect(nativeProbe, &QTimer::timeout, process,
-                    [nativeProbe, ffmpegProgressClock, nativeExitMs,
+                    [process, nativeProbe, ffmpegProgressClock, nativeExitMs,
                      nativeWaitStatus, nativeNotificationMs]() {
                 if (nativeWaitStatus->load() != 1 || *nativeNotificationMs >= 0)
                     return;
@@ -2103,7 +2145,8 @@ MainWindow::MainWindow(QWidget *parent)
                     << "native_exit_ms=" << nativeExitMs->load()
                     << "qt_notification_ms=" << *nativeNotificationMs
                     << "notification_lag_ms="
-                    << (*nativeNotificationMs - nativeExitMs->load());
+                    << (*nativeNotificationMs - nativeExitMs->load())
+                    << "qprocess_state_at_notification=" << int(process->state());
             });
             nativeProbe->start();
 
@@ -2524,9 +2567,28 @@ MainWindow::MainWindow(QWidget *parent)
                                ffmpegProgressClock, ffmpegProgressEndMs, lastStdoutMs,
                                lastStderrMs, muxSummaryMs, benchMs, useFaststart,
                                nativeExitMs, nativeWaitStatus, nativeNotificationMs,
-                               nativeProbe](int, QProcess::ExitStatus) {
+                               nativeProbe, heartbeat, heartbeatCount, heartbeatLastMs,
+                               heartbeatMaxGapMs, heartbeatMaxPostNativeGapMs,
+                               heartbeatGapsOver250, heartbeatGapsOver500,
+                               heartbeatPostNativeGapsOver250, heartbeatPostNativeGapsOver500,
+                               heartbeatStateAtNative, process](int, QProcess::ExitStatus) {
                 nativeProbe->stop();
+                heartbeat->stop();
                 const qint64 finishedMs = ffmpegProgressClock->elapsed();
+                qDebug().noquote() << "[B3.4.2.13] EVENT LOOP HEARTBEAT"
+                    << "interval_ms=100"
+                    << "ticks=" << *heartbeatCount
+                    << "max_gap_ms=" << *heartbeatMaxGapMs
+                    << "gaps_over_250ms=" << *heartbeatGapsOver250
+                    << "gaps_over_500ms=" << *heartbeatGapsOver500
+                    << "native_exit_ms=" << nativeExitMs->load()
+                    << "max_post_native_gap_ms=" << *heartbeatMaxPostNativeGapMs
+                    << "post_native_gaps_over_250ms=" << *heartbeatPostNativeGapsOver250
+                    << "post_native_gaps_over_500ms=" << *heartbeatPostNativeGapsOver500
+                    << "qprocess_state_at_native_observation=" << *heartbeatStateAtNative
+                    << "qprocess_state_at_finished=" << int(process->state())
+                    << "last_heartbeat_ms=" << *heartbeatLastMs
+                    << "finished_ms=" << finishedMs;
                 const qint64 observedNativeExit = nativeExitMs->load();
                 qDebug().noquote() << "[B3.4.2.12] NOTIFICATION A/B SUMMARY"
                     << "native_exit_ms=" << observedNativeExit
