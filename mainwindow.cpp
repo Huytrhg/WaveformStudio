@@ -2265,7 +2265,6 @@ MainWindow::MainWindow(QWidget *parent)
                 qint64 bytesWrittenSignals = 0;
                 qint64 bytesWrittenSignalBytes = 0;
                 qint64 backpressureChecks = 0;
-                qint64 backpressureWaitMs = 0;
                 qint64 maxQueuedBytes = 0;
                 qint64 maxBatchBytes = 0;
                 qint64 pumpNoopCount = 0;
