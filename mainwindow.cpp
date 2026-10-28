@@ -1979,6 +1979,18 @@ MainWindow::MainWindow(QWidget *parent)
                 encoderOptions, 0, false, &encoderAccepted);
             if (!encoderAccepted) return;
             const bool useQsv = (encoderChoice == encoderOptions.first());
+            bool rgbaAccepted = false;
+            const QStringList rgbaOptions = {
+                "Stable: premultiplied render + RGBA conversion",
+                "Experimental: direct RGBA render (no conversion)"
+            };
+            const QString rgbaChoice = QInputDialog::getItem(
+                this, "Spectrum Pixel Pipeline", "Choose pixel pipeline:",
+                rgbaOptions, 0, false, &rgbaAccepted);
+            if (!rgbaAccepted) return;
+            const bool directRgba = (rgbaChoice == rgbaOptions.last());
+            qDebug().noquote() << "[B3.4.2.2] Pixel pipeline:"
+                               << (directRgba ? "direct_rgba" : "stable_conversion");
 
             const QString ffmpegPath = "C:/ffmpeg/bin/ffmpeg.exe";
             if (!QFileInfo::exists(ffmpegPath)) {
@@ -2194,6 +2206,7 @@ MainWindow::MainWindow(QWidget *parent)
                 spectrumAnalyzer, spectrumOverlay->exportSettings(),
                 overlaySize, exportFps);
             frameGenerator->setGradientSpeed(spectrumOverlay->exportGradientSpeed());
+            frameGenerator->setDirectRgba(directRgba);
 
             // The overlay is already rendered at source resolution; do not scale it.
             const QString filterGraph =
@@ -2291,7 +2304,8 @@ MainWindow::MainWindow(QWidget *parent)
                 }
 
                 step.restart();
-                overlay = overlay.convertToFormat(QImage::Format_RGBA8888);
+                if (overlay.format() != QImage::Format_RGBA8888)
+                    overlay = overlay.convertToFormat(QImage::Format_RGBA8888);
                 const qint64 convertStepMs = step.elapsed();
                 metrics->convertMs += convertStepMs;
                 metrics->convertMaxMs = qMax(metrics->convertMaxMs, convertStepMs);
@@ -2354,7 +2368,7 @@ MainWindow::MainWindow(QWidget *parent)
                 });
             });
             connect(process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
-                    process, [metrics, pump, useQsv, totalFrames](int, QProcess::ExitStatus) {
+                    process, [metrics, pump, useQsv, directRgba, totalFrames](int, QProcess::ExitStatus) {
                 metrics->inputClosed = true;
                 qDebug().noquote() << "[B3.3.2] FFmpeg finished:"
                                    << "frames_queued=" << metrics->frames
@@ -2364,6 +2378,7 @@ MainWindow::MainWindow(QWidget *parent)
                 qDebug().noquote()
                     << "[B3.4.2.1] PERFORMANCE SUMMARY"
                     << "encoder=" << (useQsv ? "h264_qsv" : "libx264")
+                    << "pixel_pipeline=" << (directRgba ? "direct_rgba" : "stable_conversion")
                     << "frames=" << metrics->frames << "/" << totalFrames
                     << "wall_ms=" << metrics->wall.elapsed()
                     << "first_frame_ms=" << metrics->firstFrameMs
