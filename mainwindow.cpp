@@ -2262,6 +2262,13 @@ MainWindow::MainWindow(QWidget *parent)
                 qint64 maxPipeWriteMs = 0;
                 qint64 renderMaxMs = 0;
                 qint64 convertMaxMs = 0;
+                qint64 bytesWrittenSignals = 0;
+                qint64 bytesWrittenSignalBytes = 0;
+                qint64 backpressureChecks = 0;
+                qint64 backpressureWaitMs = 0;
+                qint64 maxQueuedBytes = 0;
+                qint64 maxBatchBytes = 0;
+                qint64 pumpNoopCount = 0;
                 bool inputClosed = false;
                 bool feedScheduled = false;
                 bool processFinished = false;
@@ -2274,10 +2281,16 @@ MainWindow::MainWindow(QWidget *parent)
             *pump = [process, frameGenerator, totalFrames, metrics, weakPump]() {
                 metrics->feedScheduled = false;
                 if (metrics->inputClosed || metrics->processFinished ||
-                    process->state() != QProcess::Running)
+                    process->state() != QProcess::Running) {
+                    ++metrics->pumpNoopCount;
                     return;
-                if (process->bytesToWrite() != 0)
+                }
+                const qint64 queuedAtPump = process->bytesToWrite();
+                metrics->maxQueuedBytes = qMax(metrics->maxQueuedBytes, queuedAtPump);
+                if (queuedAtPump != 0) {
+                    ++metrics->backpressureChecks;
                     return;
+                }
 
                 if (frameGenerator->nextFrameIndex() >= totalFrames) {
                     metrics->inputClosed = true;
@@ -2326,6 +2339,7 @@ MainWindow::MainWindow(QWidget *parent)
                 if (framesInBatch == 0)
                     return;
 
+                metrics->maxBatchBytes = qMax<qint64>(metrics->maxBatchBytes, batch.size());
                 QElapsedTimer pipeStepTimer;
                 pipeStepTimer.start();
                 const qint64 accepted = process->write(batch.constData(), batch.size());
@@ -2345,6 +2359,8 @@ MainWindow::MainWindow(QWidget *parent)
                 metrics->lastFrameQueuedMs = metrics->wall.elapsed();
                 metrics->pipeBytes += accepted;
                 metrics->frames += framesInBatch;
+                metrics->maxQueuedBytes = qMax(metrics->maxQueuedBytes,
+                                                process->bytesToWrite());
                 const qint64 elapsed = metrics->wall.elapsed();
                 if (elapsed - metrics->lastReportMs >= 10000) {
                     metrics->lastReportMs = elapsed;
@@ -2366,7 +2382,11 @@ MainWindow::MainWindow(QWidget *parent)
             };
 
             connect(process, &QProcess::bytesWritten, process,
-                    [process, metrics, weakPump](qint64) {
+                    [process, metrics, weakPump](qint64 count) {
+                ++metrics->bytesWrittenSignals;
+                metrics->bytesWrittenSignalBytes += count;
+                metrics->maxQueuedBytes = qMax(metrics->maxQueuedBytes,
+                                                process->bytesToWrite());
                 if (metrics->inputClosed || metrics->feedScheduled ||
                     process->state() != QProcess::Running ||
                     process->bytesToWrite() != 0)
@@ -2407,6 +2427,12 @@ MainWindow::MainWindow(QWidget *parent)
                     << "pipe_write_total_ms=" << metrics->pipeWriteMs
                     << "pipe_write_max_ms=" << metrics->maxPipeWriteMs
                     << "pipe_bytes=" << metrics->pipeBytes
+                    << "batch_max_bytes=" << metrics->maxBatchBytes
+                    << "qt_max_queued_bytes=" << metrics->maxQueuedBytes
+                    << "bytes_written_signals=" << metrics->bytesWrittenSignals
+                    << "bytes_written_signal_bytes=" << metrics->bytesWrittenSignalBytes
+                    << "backpressure_checks=" << metrics->backpressureChecks
+                    << "pump_noop_count=" << metrics->pumpNoopCount
                     << "ffmpeg_finish_after_last_queue_ms="
                     << (metrics->wall.elapsed() - metrics->lastFrameQueuedMs);
                 // FFmpeg -benchmark prints aggregate user/system CPU time and peak RSS.
