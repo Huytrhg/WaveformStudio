@@ -2295,9 +2295,6 @@ MainWindow::MainWindow(QWidget *parent)
                 // so memory use stays bounded and the output byte stream remains exact.
                 constexpr int kFramesPerWriteBatch = 2;
                 QByteArray batch;
-                batch.reserve(int(qMin<qint64>(
-                    qint64(kFramesPerWriteBatch) * m_size.width() * m_size.height() * 4,
-                    std::numeric_limits<int>::max())));
 
                 int framesInBatch = 0;
                 while (framesInBatch < kFramesPerWriteBatch &&
