@@ -238,7 +238,8 @@ public:
     // when composited by FFmpeg or another frame encoder.
     static QImage renderOverlay(const QSize &size, const QVector<float> &bands,
                                 const SpectrumRenderSettings &settings,
-                                const QVector<float> &peaks = {}) {
+                                const QVector<float> &peaks = {},
+                                QImage::Format outputFormat = QImage::Format_ARGB32_Premultiplied) {
         if (size.isEmpty()) return {};
         QImage image(size, outputFormat);
         image.fill(Qt::transparent);
