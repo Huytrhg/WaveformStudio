@@ -74,8 +74,11 @@ public:
             m_settings.gradientPhase +
                 (qreal(index) / m_fps) * m_gradientSpeed / 100.0 * 0.45, 2.0);
         return SpectrumRenderer::renderOverlay(m_size, m_smoothed, timed,
-                                               timed.peakHold ? m_peaks : QVector<float>());
+                                               timed.peakHold ? m_peaks : QVector<float>(),
+                                               m_directRgba ? QImage::Format_RGBA8888 : QImage::Format_ARGB32_Premultiplied);
     }
+
+    void setDirectRgba(bool enabled) { m_directRgba = enabled; }
 
     void setGradientSpeed(int speed) { m_gradientSpeed = qBound(0, speed, 100); }
 
@@ -85,6 +88,7 @@ private:
     QSize m_size;
     int m_fps = 30;
     int m_gradientSpeed = 0;
+    bool m_directRgba = false;
     qint64 m_nextFrame = 0;
     QVector<float> m_smoothed;
     QVector<float> m_peaks;
