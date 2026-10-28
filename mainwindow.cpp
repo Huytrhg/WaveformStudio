@@ -2075,10 +2075,15 @@ MainWindow::MainWindow(QWidget *parent)
             ffmpegProgressClock->start();
             auto lastReportedOutTimeMs = std::make_shared<qint64>(-1);
             auto ffmpegProgressEndMs = std::make_shared<qint64>(-1);
+            auto lastStdoutMs = std::make_shared<qint64>(-1);
+            auto lastStderrMs = std::make_shared<qint64>(-1);
+            auto muxSummaryMs = std::make_shared<qint64>(-1);
+            auto benchMs = std::make_shared<qint64>(-1);
 
             connect(process, &QProcess::readyReadStandardOutput, this,
                     [this, process, progress, ffmpegProgressClock,
-                     lastReportedOutTimeMs, ffmpegProgressEndMs]() {
+                     lastReportedOutTimeMs, ffmpegProgressEndMs, lastStdoutMs]() {
+                *lastStdoutMs = ffmpegProgressClock->elapsed();
                 const QByteArray output = process->readAllStandardOutput();
                 const QList<QByteArray> lines = output.split('\n');
                 for (const QByteArray &rawLine : lines) {
@@ -2109,8 +2114,13 @@ MainWindow::MainWindow(QWidget *parent)
             });
 
             connect(process, &QProcess::readyReadStandardError, this,
-                    [process]() {
+                    [process, ffmpegProgressClock, lastStderrMs, muxSummaryMs, benchMs]() {
+                *lastStderrMs = ffmpegProgressClock->elapsed();
                 const QByteArray errors = process->readAllStandardError();
+                if (errors.contains("muxing overhead:") && *muxSummaryMs < 0)
+                    *muxSummaryMs = *lastStderrMs;
+                if (errors.contains("bench: maxrss=") && *benchMs < 0)
+                    *benchMs = *lastStderrMs;
                 if (!errors.isEmpty())
                     qDebug().noquote() << "FFmpeg:" << QString::fromLocal8Bit(errors);
             });
@@ -2463,7 +2473,23 @@ MainWindow::MainWindow(QWidget *parent)
                 });
             });
             connect(process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
-                    process, [metrics, pump, useQsv, directRgba, totalFrames, writeBatchFrames](int, QProcess::ExitStatus) {
+                    process, [metrics, pump, useQsv, directRgba, totalFrames, writeBatchFrames,
+                               ffmpegProgressClock, ffmpegProgressEndMs, lastStdoutMs,
+                               lastStderrMs, muxSummaryMs, benchMs, useFaststart](int, QProcess::ExitStatus) {
+                const qint64 finishedMs = ffmpegProgressClock->elapsed();
+                qDebug().noquote() << "[B3.4.2.10] PROCESS EXIT TIMING"
+                    << "faststart=" << (useFaststart ? "enabled" : "disabled")
+                    << "progress_end_ms=" << *ffmpegProgressEndMs
+                    << "last_stdout_ms=" << *lastStdoutMs
+                    << "last_stderr_ms=" << *lastStderrMs
+                    << "mux_summary_ms=" << *muxSummaryMs
+                    << "bench_ms=" << *benchMs
+                    << "finished_signal_ms=" << finishedMs
+                    << "progress_end_to_finished_ms="
+                    << (*ffmpegProgressEndMs >= 0 ? finishedMs - *ffmpegProgressEndMs : -1)
+                    << "last_stderr_to_finished_ms="
+                    << (*lastStderrMs >= 0 ? finishedMs - *lastStderrMs : -1);
+                // These are Qt event-observation times, not FFmpeg-internal timestamps.
                 metrics->inputClosed = true;
                 metrics->ffmpegFinishedMs = metrics->wall.elapsed();
                 metrics->processFinished = true;
