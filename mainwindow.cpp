@@ -2053,23 +2053,42 @@ MainWindow::MainWindow(QWidget *parent)
                     process->terminate();
             });
 
+            // Diagnostic clock for FFmpeg's own progress milestones. This is
+            // intentionally separate from the frame-feed timer below: it helps
+            // distinguish "all raw frames sent" from "FFmpeg reports progress=end".
+            auto ffmpegProgressClock = std::make_shared<QElapsedTimer>();
+            ffmpegProgressClock->start();
+            auto lastReportedOutTimeMs = std::make_shared<qint64>(-1);
+            auto ffmpegProgressEndMs = std::make_shared<qint64>(-1);
+
             connect(process, &QProcess::readyReadStandardOutput, this,
-                    [this, process, progress]() {
+                    [this, process, progress, ffmpegProgressClock,
+                     lastReportedOutTimeMs, ffmpegProgressEndMs]() {
                 const QByteArray output = process->readAllStandardOutput();
                 const QList<QByteArray> lines = output.split('\n');
-                for (const QByteArray &line : lines) {
-                    if (!line.startsWith("out_time_ms="))
-                        continue;
-                    bool ok = false;
-                    const qint64 timeUs = line.mid(12).trimmed().toLongLong(&ok);
-                    const qint64 durationMs = player->duration();
-                    if (ok && durationMs > 0) {
-                        const int percent = qBound(
-                            0,
-                            static_cast<int>((timeUs / 1000.0) * 100.0 / durationMs),
-                            99
-                            );
-                        progress->setValue(percent);
+                for (const QByteArray &rawLine : lines) {
+                    const QByteArray line = rawLine.trimmed();
+                    if (line.startsWith("out_time_ms=")) {
+                        bool ok = false;
+                        const qint64 timeUs = line.mid(12).trimmed().toLongLong(&ok);
+                        const qint64 durationMs = player->duration();
+                        if (ok) {
+                            *lastReportedOutTimeMs = timeUs / 1000;
+                            if (durationMs > 0) {
+                                const int percent = qBound(
+                                    0,
+                                    static_cast<int>((*lastReportedOutTimeMs) * 100.0 / durationMs),
+                                    99
+                                    );
+                                progress->setValue(percent);
+                            }
+                        }
+                    } else if (line == "progress=end") {
+                        *ffmpegProgressEndMs = ffmpegProgressClock->elapsed();
+                        qDebug().noquote()
+                            << "[B3.4.2.8] FFmpeg progress=end"
+                            << "elapsed_ms=" << *ffmpegProgressEndMs
+                            << "last_out_time_ms=" << *lastReportedOutTimeMs;
                     }
                 }
             });
