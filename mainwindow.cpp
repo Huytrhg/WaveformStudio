@@ -2087,6 +2087,25 @@ MainWindow::MainWindow(QWidget *parent)
             // A single monotonic clock is shared by Qt and the native Windows waiter.
             auto nativeExitMs = std::make_shared<std::atomic<qint64>>(-1);
             auto nativeWaitStatus = std::make_shared<std::atomic<int>>(-1);
+            // B3.4.2.12: a 10 ms GUI-thread probe observes the native exit
+            // independently of QProcess::finished, without changing cleanup.
+            auto nativeNotificationMs = std::make_shared<qint64>(-1);
+            auto nativeProbe = new QTimer(process);
+            nativeProbe->setInterval(10);
+            connect(nativeProbe, &QTimer::timeout, process,
+                    [nativeProbe, ffmpegProgressClock, nativeExitMs,
+                     nativeWaitStatus, nativeNotificationMs]() {
+                if (nativeWaitStatus->load() != 1 || *nativeNotificationMs >= 0)
+                    return;
+                *nativeNotificationMs = ffmpegProgressClock->elapsed();
+                nativeProbe->stop();
+                qDebug().noquote() << "[B3.4.2.12] NATIVE EXIT NOTIFICATION"
+                    << "native_exit_ms=" << nativeExitMs->load()
+                    << "qt_notification_ms=" << *nativeNotificationMs
+                    << "notification_lag_ms="
+                    << (*nativeNotificationMs - nativeExitMs->load());
+            });
+            nativeProbe->start();
 
             connect(process, &QProcess::readyReadStandardOutput, this,
                     [this, process, progress, ffmpegProgressClock,
@@ -2504,9 +2523,19 @@ MainWindow::MainWindow(QWidget *parent)
                     process, [metrics, pump, useQsv, directRgba, totalFrames, writeBatchFrames,
                                ffmpegProgressClock, ffmpegProgressEndMs, lastStdoutMs,
                                lastStderrMs, muxSummaryMs, benchMs, useFaststart,
-                               nativeExitMs, nativeWaitStatus](int, QProcess::ExitStatus) {
+                               nativeExitMs, nativeWaitStatus, nativeNotificationMs,
+                               nativeProbe](int, QProcess::ExitStatus) {
+                nativeProbe->stop();
                 const qint64 finishedMs = ffmpegProgressClock->elapsed();
                 const qint64 observedNativeExit = nativeExitMs->load();
+                qDebug().noquote() << "[B3.4.2.12] NOTIFICATION A/B SUMMARY"
+                    << "native_exit_ms=" << observedNativeExit
+                    << "notification_ms=" << *nativeNotificationMs
+                    << "finished_ms=" << finishedMs
+                    << "notification_to_finished_ms="
+                    << (*nativeNotificationMs >= 0 ? finishedMs - *nativeNotificationMs : -1)
+                    << "native_to_finished_ms="
+                    << (observedNativeExit >= 0 ? finishedMs - observedNativeExit : -1);
                 qDebug().noquote() << "[B3.4.2.11] NATIVE PROCESS EXIT"
                     << "native_exit_ms=" << observedNativeExit
                     << "native_wait_status=" << nativeWaitStatus->load()
