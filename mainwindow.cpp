@@ -62,6 +62,11 @@
 #include <QSpinBox>
 #include <functional>
 #include <memory>
+#include <atomic>
+#include <thread>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 // Interactive Photoshop-inspired gradient bar: click to add, drag stops,
 // double-click a stop to choose its color. Keeps rendering independent of FFT.
@@ -2079,6 +2084,9 @@ MainWindow::MainWindow(QWidget *parent)
             auto lastStderrMs = std::make_shared<qint64>(-1);
             auto muxSummaryMs = std::make_shared<qint64>(-1);
             auto benchMs = std::make_shared<qint64>(-1);
+            // A single monotonic clock is shared by Qt and the native Windows waiter.
+            auto nativeExitMs = std::make_shared<std::atomic<qint64>>(-1);
+            auto nativeWaitStatus = std::make_shared<std::atomic<int>>(-1);
 
             connect(process, &QProcess::readyReadStandardOutput, this,
                     [this, process, progress, ffmpegProgressClock,
@@ -2466,7 +2474,27 @@ MainWindow::MainWindow(QWidget *parent)
                 });
             });
             connect(process, &QProcess::started, process,
-                    [process, metrics, weakPump]() {
+                    [process, metrics, weakPump, ffmpegProgressClock,
+                     nativeExitMs, nativeWaitStatus]() {
+#ifdef Q_OS_WIN
+                const DWORD pid = static_cast<DWORD>(process->processId());
+                HANDLE nativeHandle = OpenProcess(SYNCHRONIZE, FALSE, pid);
+                if (nativeHandle) {
+                    nativeWaitStatus->store(0); // Waiting for process termination.
+                    std::thread([nativeHandle, ffmpegProgressClock,
+                                 nativeExitMs, nativeWaitStatus]() {
+                        const DWORD result = WaitForSingleObject(nativeHandle, INFINITE);
+                        const qint64 observedMs = ffmpegProgressClock->elapsed();
+                        nativeExitMs->store(observedMs);
+                        nativeWaitStatus->store(result == WAIT_OBJECT_0 ? 1 : 2);
+                        CloseHandle(nativeHandle);
+                    }).detach();
+                } else {
+                    nativeWaitStatus->store(3); // OpenProcess failed.
+                }
+#else
+                nativeWaitStatus->store(4); // Windows-only diagnostic.
+#endif
                 metrics->feedScheduled = true;
                 QTimer::singleShot(0, process, [weakPump]() {
                     if (auto fn = weakPump.lock()) (*fn)();
@@ -2475,8 +2503,21 @@ MainWindow::MainWindow(QWidget *parent)
             connect(process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
                     process, [metrics, pump, useQsv, directRgba, totalFrames, writeBatchFrames,
                                ffmpegProgressClock, ffmpegProgressEndMs, lastStdoutMs,
-                               lastStderrMs, muxSummaryMs, benchMs, useFaststart](int, QProcess::ExitStatus) {
+                               lastStderrMs, muxSummaryMs, benchMs, useFaststart,
+                               nativeExitMs, nativeWaitStatus](int, QProcess::ExitStatus) {
                 const qint64 finishedMs = ffmpegProgressClock->elapsed();
+                const qint64 observedNativeExit = nativeExitMs->load();
+                qDebug().noquote() << "[B3.4.2.11] NATIVE PROCESS EXIT"
+                    << "native_exit_ms=" << observedNativeExit
+                    << "native_wait_status=" << nativeWaitStatus->load()
+                    << "qt_finished_ms=" << finishedMs
+                    << "native_to_qt_ms="
+                    << (observedNativeExit >= 0 ? finishedMs - observedNativeExit : -1)
+                    << "progress_end_to_native_ms="
+                    << (observedNativeExit >= 0 && *ffmpegProgressEndMs >= 0
+                        ? observedNativeExit - *ffmpegProgressEndMs : -1);
+                // Windows waiter runs independently of Qt event delivery.
+                // A -1 native timestamp means the waiter did not observe exit yet.
                 qDebug().noquote() << "[B3.4.2.10] PROCESS EXIT TIMING"
                     << "faststart=" << (useFaststart ? "enabled" : "disabled")
                     << "progress_end_ms=" << *ffmpegProgressEndMs
