@@ -2588,7 +2588,8 @@ MainWindow::MainWindow(QWidget *parent)
                                heartbeatMaxGapMs, heartbeatMaxPostNativeGapMs,
                                heartbeatGapsOver250, heartbeatGapsOver500,
                                heartbeatPostNativeGapsOver250, heartbeatPostNativeGapsOver500,
-                               heartbeatStateAtNative, process](int, QProcess::ExitStatus) {
+                               heartbeatStateAtNative, finishedSignalEntryMs,
+                               process](int, QProcess::ExitStatus) {
                 nativeProbe->stop();
                 heartbeat->stop();
                 const qint64 diagnosticSlotMs = ffmpegProgressClock->elapsed();
