@@ -2326,9 +2326,10 @@ MainWindow::MainWindow(QWidget *parent)
                 if (framesInBatch == 0)
                     return;
 
-                step.start();
+                QElapsedTimer pipeStepTimer;
+                pipeStepTimer.start();
                 const qint64 accepted = process->write(batch.constData(), batch.size());
-                const qint64 pipeStepMs = step.elapsed();
+                const qint64 pipeStepMs = pipeStepTimer.elapsed();
                 metrics->pipeWriteMs += pipeStepMs;
                 metrics->maxPipeWriteMs = qMax(metrics->maxPipeWriteMs, pipeStepMs);
                 if (accepted != batch.size()) {
