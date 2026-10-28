@@ -79,7 +79,8 @@ public:
 
     static void paint(QPainter &p, const QRectF &stage,
                       const QVector<float> &bands, const SpectrumRenderSettings &s,
-                      const QVector<float> &peaks = {}) {
+                      const QVector<float> &peaks = {},
+                                QImage::Format outputFormat = QImage::Format_ARGB32_Premultiplied) {
         if (bands.isEmpty() || stage.width() < 2 || stage.height() < 2) return;
         p.save();
         p.setRenderHint(QPainter::Antialiasing);
@@ -239,7 +240,7 @@ public:
                                 const SpectrumRenderSettings &settings,
                                 const QVector<float> &peaks = {}) {
         if (size.isEmpty()) return {};
-        QImage image(size, QImage::Format_ARGB32_Premultiplied);
+        QImage image(size, outputFormat);
         image.fill(Qt::transparent);
         QPainter painter(&image);
         paint(painter, QRectF(QPointF(0, 0), QSizeF(size)), bands, settings, peaks);
