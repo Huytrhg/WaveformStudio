@@ -1992,6 +1992,25 @@ MainWindow::MainWindow(QWidget *parent)
             qDebug().noquote() << "[B3.4.2.2] Pixel pipeline:"
                                << (directRgba ? "direct_rgba" : "stable_conversion");
 
+            // B3.4.2.5: controlled A/B test of one-frame versus two-frame writes.
+            // Keep the pixel pipeline and encoder selection unchanged between runs.
+            int writeBatchFrames = 2;
+            if (directRgba) {
+                bool batchAccepted = false;
+                const QStringList batchOptions = {
+                    "A/B: 1 frame per write (baseline)",
+                    "A/B: 2 frames per write (current experiment)"
+                };
+                const QString batchChoice = QInputDialog::getItem(
+                    this, "Pipe Write Batch A/B",
+                    "Choose batch size for this export:",
+                    batchOptions, 0, false, &batchAccepted);
+                if (!batchAccepted) return;
+                writeBatchFrames = (batchChoice == batchOptions.first()) ? 1 : 2;
+            }
+            qDebug().noquote() << "[B3.4.2.5] A/B configuration:"
+                               << "write_batch_frames=" << writeBatchFrames;
+
             const QString ffmpegPath = "C:/ffmpeg/bin/ffmpeg.exe";
             if (!QFileInfo::exists(ffmpegPath)) {
                 QMessageBox::critical(
@@ -2277,7 +2296,7 @@ MainWindow::MainWindow(QWidget *parent)
 
             auto pump = std::make_shared<std::function<void()>>();
             std::weak_ptr<std::function<void()>> weakPump = pump;
-            *pump = [process, frameGenerator, totalFrames, metrics, weakPump]() {
+            *pump = [process, frameGenerator, totalFrames, metrics, weakPump, writeBatchFrames]() {
                 metrics->feedScheduled = false;
                 if (metrics->inputClosed || metrics->processFinished ||
                     process->state() != QProcess::Running) {
@@ -2302,14 +2321,12 @@ MainWindow::MainWindow(QWidget *parent)
                     return;
                 }
 
-                // B3.4.2.3 experiment: batch two RGBA frames into one QProcess::write
-                // to reduce per-call overhead. Keep batches small (16 MiB at 1080p)
-                // so memory use stays bounded and the output byte stream remains exact.
-                constexpr int kFramesPerWriteBatch = 2;
+                // B3.4.2.5 A/B experiment: use a selectable batch size of one or two
+                // frames. Keep the maximum batch bounded and preserve raw frame order.
                 QByteArray batch;
 
                 int framesInBatch = 0;
-                while (framesInBatch < kFramesPerWriteBatch &&
+                while (framesInBatch < writeBatchFrames &&
                        frameGenerator->nextFrameIndex() < totalFrames) {
                     QElapsedTimer step;
                     step.start();
@@ -2347,7 +2364,7 @@ MainWindow::MainWindow(QWidget *parent)
                 metrics->maxPipeWriteMs = qMax(metrics->maxPipeWriteMs, pipeStepMs);
                 if (accepted != batch.size()) {
                     metrics->inputClosed = true;
-                    qWarning() << "[B3.4.2.3] Batched pipe write failed:" << accepted
+                    qWarning() << "[B3.4.2.5] Batched pipe write failed:" << accepted
                                << "of" << batch.size() << "bytes";
                     if (process->state() == QProcess::Running)
                         process->closeWriteChannel();
@@ -2403,7 +2420,7 @@ MainWindow::MainWindow(QWidget *parent)
                 });
             });
             connect(process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
-                    process, [metrics, pump, useQsv, directRgba, totalFrames](int, QProcess::ExitStatus) {
+                    process, [metrics, pump, useQsv, directRgba, totalFrames, writeBatchFrames](int, QProcess::ExitStatus) {
                 metrics->inputClosed = true;
                 qDebug().noquote() << "[B3.3.2] FFmpeg finished:"
                                    << "frames_queued=" << metrics->frames
@@ -2414,7 +2431,7 @@ MainWindow::MainWindow(QWidget *parent)
                     << "[B3.4.2.1] PERFORMANCE SUMMARY"
                     << "encoder=" << (useQsv ? "h264_qsv" : "libx264")
                     << "pixel_pipeline=" << (directRgba ? "direct_rgba" : "stable_conversion")
-                    << "write_batch_frames=2"
+                    << "write_batch_frames=" << writeBatchFrames
                     << "frames=" << metrics->frames << "/" << totalFrames
                     << "wall_ms=" << metrics->wall.elapsed()
                     << "first_frame_ms=" << metrics->firstFrameMs
