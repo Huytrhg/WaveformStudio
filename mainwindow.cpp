@@ -1968,6 +1968,18 @@ MainWindow::MainWindow(QWidget *parent)
             else if (quality.startsWith("Smaller"))
                 crf = 28;
 
+            // B3.4.1: selectable hardware encoder; CPU remains available.
+            bool encoderAccepted = false;
+            const QStringList encoderOptions = {
+                "Intel Quick Sync H.264 (GPU)",
+                "CPU H.264 (libx264)"
+            };
+            const QString encoderChoice = QInputDialog::getItem(
+                this, "Video Encoder", "Choose video encoder:",
+                encoderOptions, 0, false, &encoderAccepted);
+            if (!encoderAccepted) return;
+            const bool useQsv = (encoderChoice == encoderOptions.first());
+
             const QString ffmpegPath = "C:/ffmpeg/bin/ffmpeg.exe";
             if (!QFileInfo::exists(ffmpegPath)) {
                 QMessageBox::critical(
@@ -2041,7 +2053,7 @@ MainWindow::MainWindow(QWidget *parent)
             connect(process,
                     qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
                     this,
-                    [this, process, progress, finalOutputPath,
+                    [this, process, progress, finalOutputPath, useQsv,
                      resumePreviewAfterExport, resumeSpectrumTimerAfterExport](
                         int exitCode, QProcess::ExitStatus exitStatus) {
                 progress->setValue(100);
@@ -2068,7 +2080,7 @@ MainWindow::MainWindow(QWidget *parent)
                     QMessageBox::warning(
                         this,
                         "Export Failed",
-                        "FFmpeg could not complete the export.\n\n" +
+                        (useQsv ? "Intel Quick Sync export failed. Retry with CPU H.264 (libx264).\n\n" : "FFmpeg could not complete the export.\n\n") +
                             (errorText.isEmpty()
                                  ? QString("The operation was cancelled or FFmpeg returned an error.")
                                  : errorText.left(1800))
@@ -2202,12 +2214,25 @@ MainWindow::MainWindow(QWidget *parent)
                 "-i", inputPath,
                 "-filter_complex", filterGraph,
                 "-map", "[outv]", "-map", "1:a:0",
-                "-c:v", "libx264", "-preset", "veryfast",
-                "-crf", QString::number(crf), "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "192k",
                 "-shortest", "-movflags", "+faststart",
                 finalOutputPath
             };
+
+            // QSV global_quality and CPU CRF are not identical scales.
+            const int qsvQuality = crf == 18 ? 20 : (crf == 28 ? 30 : 25);
+            const QStringList videoCodecArguments = useQsv
+                ? QStringList{"-c:v", "h264_qsv", "-preset", "veryfast",
+                              "-global_quality", QString::number(qsvQuality),
+                              "-pix_fmt", "nv12"}
+                : QStringList{"-c:v", "libx264", "-preset", "veryfast",
+                              "-crf", QString::number(crf),
+                              "-pix_fmt", "yuv420p"};
+            const int codecInsertAt = arguments.indexOf("-c:a");
+            for (int i = 0; i < videoCodecArguments.size(); ++i)
+                arguments.insert(codecInsertAt + i, videoCodecArguments[i]);
+            qDebug().noquote() << "[B3.4.1] Encoder:"
+                               << (useQsv ? "h264_qsv" : "libx264");
 
             // B3.3.2.1: event-driven pipe feed. Produce a new frame only after
             // Qt has drained the previous frame, avoiding 10 ms polling.
