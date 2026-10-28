@@ -2126,8 +2126,58 @@ MainWindow::MainWindow(QWidget *parent)
             const QSize overlaySize = sourceSize;
 
             const int exportFps = 30;
-            const qint64 totalFrames = qMax<qint64>(
+            qint64 totalFrames = qMax<qint64>(
                 1, (qMax<qint64>(1, player->duration()) * exportFps + 999) / 1000);
+
+            // B3.3.2.1: count actual source-video packets when the source is
+            // constant 30 FPS. Container duration can round up by several frames;
+            // -shortest then closes stdin before the extra overlay frames arrive.
+            // Counting packets avoids decoding the video a second time.
+            const QString ffprobePath = QFileInfo(ffmpegPath).dir().filePath("ffprobe.exe");
+            if (QFileInfo::exists(ffprobePath)) {
+                QProcess probe;
+                probe.start(ffprobePath, QStringList{
+                    "-v", "error", "-select_streams", "v:0",
+                    "-count_packets", "-show_entries",
+                    "stream=r_frame_rate,avg_frame_rate,nb_read_packets",
+                    "-of", "default=noprint_wrappers=1", inputPath
+                });
+                if (probe.waitForStarted(3000)) {
+                    if (!probe.waitForFinished(15000)) {
+                        probe.kill();
+                        probe.waitForFinished(1000);
+                        qWarning() << "[B3.3.2.1] ffprobe timed out; using duration estimate";
+                    } else if (probe.exitStatus() == QProcess::NormalExit &&
+                               probe.exitCode() == 0) {
+                        const QList<QByteArray> fields =
+                            probe.readAllStandardOutput().trimmed().split('\n');
+                        QByteArray rate, avgRate;
+                        qint64 packetCount = 0;
+                        for (const QByteArray &field : fields) {
+                            if (field.startsWith("r_frame_rate="))
+                                rate = field.mid(sizeof("r_frame_rate=") - 1).trimmed();
+                            else if (field.startsWith("avg_frame_rate="))
+                                avgRate = field.mid(sizeof("avg_frame_rate=") - 1).trimmed();
+                            else if (field.startsWith("nb_read_packets="))
+                                packetCount = field.mid(sizeof("nb_read_packets=") - 1)
+                                                  .trimmed().toLongLong();
+                        }
+                        if (rate == "30/1" && avgRate == "30/1" &&
+                            packetCount > 0 &&
+                            packetCount <= totalFrames + exportFps * 2 &&
+                            packetCount >= totalFrames - exportFps * 2) {
+                            qDebug() << "[B3.3.2.1] Source packet count:"
+                                     << packetCount << "duration estimate:" << totalFrames;
+                            totalFrames = packetCount;
+                        } else {
+                            qDebug() << "[B3.3.2.1] Using duration estimate:"
+                                     << totalFrames << "source rate:" << rate
+                                     << "average rate:" << avgRate
+                                     << "packet count:" << packetCount;
+                        }
+                    }
+                }
+            }
             auto frameGenerator = std::make_shared<SpectrumExportFrames>(
                 spectrumAnalyzer, spectrumOverlay->exportSettings(),
                 overlaySize, exportFps);
@@ -2159,7 +2209,7 @@ MainWindow::MainWindow(QWidget *parent)
                 finalOutputPath
             };
 
-            // B3.3.2: event-driven pipe feed. Produce a new frame only after
+            // B3.3.2.1: event-driven pipe feed. Produce a new frame only after
             // Qt has drained the previous frame, avoiding 10 ms polling.
             struct ExportMetrics {
                 QElapsedTimer wall;
@@ -2169,6 +2219,7 @@ MainWindow::MainWindow(QWidget *parent)
                 qint64 lastReportMs = 0;
                 bool inputClosed = false;
                 bool feedScheduled = false;
+                bool processFinished = false;
             };
             auto metrics = std::make_shared<ExportMetrics>();
             metrics->wall.start();
@@ -2177,7 +2228,8 @@ MainWindow::MainWindow(QWidget *parent)
             std::weak_ptr<std::function<void()>> weakPump = pump;
             *pump = [process, frameGenerator, totalFrames, metrics, weakPump]() {
                 metrics->feedScheduled = false;
-                if (metrics->inputClosed || process->state() != QProcess::Running)
+                if (metrics->inputClosed || metrics->processFinished ||
+                    process->state() != QProcess::Running)
                     return;
                 if (process->bytesToWrite() != 0)
                     return;
@@ -2251,9 +2303,9 @@ MainWindow::MainWindow(QWidget *parent)
                 });
             });
             connect(process, &QProcess::started, process,
-                    [metrics, weakPump]() {
+                    [process, metrics, weakPump]() {
                 metrics->feedScheduled = true;
-                QTimer::singleShot(0, [weakPump]() {
+                QTimer::singleShot(0, process, [weakPump]() {
                     if (auto fn = weakPump.lock()) (*fn)();
                 });
             });
