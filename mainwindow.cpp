@@ -2204,7 +2204,7 @@ MainWindow::MainWindow(QWidget *parent)
 
             progress->setLabelText("Rendering Spectrum frames into MP4...");
             QStringList arguments = {
-                "-y", "-hide_banner", "-nostats",
+                "-y", "-hide_banner", "-nostats", "-benchmark",
                 "-progress", "pipe:1",
                 "-f", "rawvideo", "-pixel_format", "rgba",
                 "-video_size", QString::number(overlaySize.width()) + "x" +
@@ -2242,6 +2242,13 @@ MainWindow::MainWindow(QWidget *parent)
                 qint64 convertMs = 0;
                 qint64 frames = 0;
                 qint64 lastReportMs = 0;
+                qint64 firstFrameMs = -1;
+                qint64 lastFrameQueuedMs = 0;
+                qint64 pipeBytes = 0;
+                qint64 pipeWriteMs = 0;
+                qint64 maxPipeWriteMs = 0;
+                qint64 renderMaxMs = 0;
+                qint64 convertMaxMs = 0;
                 bool inputClosed = false;
                 bool feedScheduled = false;
                 bool processFinished = false;
@@ -2273,7 +2280,9 @@ MainWindow::MainWindow(QWidget *parent)
                 QElapsedTimer step;
                 step.start();
                 QImage overlay = frameGenerator->nextOverlay();
-                metrics->renderMs += step.elapsed();
+                const qint64 renderStepMs = step.elapsed();
+                metrics->renderMs += renderStepMs;
+                metrics->renderMaxMs = qMax(metrics->renderMaxMs, renderStepMs);
                 if (overlay.isNull()) {
                     metrics->inputClosed = true;
                     process->closeWriteChannel();
@@ -2283,10 +2292,16 @@ MainWindow::MainWindow(QWidget *parent)
 
                 step.restart();
                 overlay = overlay.convertToFormat(QImage::Format_RGBA8888);
-                metrics->convertMs += step.elapsed();
+                const qint64 convertStepMs = step.elapsed();
+                metrics->convertMs += convertStepMs;
+                metrics->convertMaxMs = qMax(metrics->convertMaxMs, convertStepMs);
                 const qint64 frameBytes = qint64(overlay.sizeInBytes());
+                step.restart();
                 const qint64 accepted = process->write(
                     reinterpret_cast<const char *>(overlay.constBits()), frameBytes);
+                const qint64 pipeStepMs = step.elapsed();
+                metrics->pipeWriteMs += pipeStepMs;
+                metrics->maxPipeWriteMs = qMax(metrics->maxPipeWriteMs, pipeStepMs);
                 if (accepted != frameBytes) {
                     metrics->inputClosed = true;
                     qWarning() << "[B3.3.2] Pipe write failed:" << accepted
@@ -2295,6 +2310,10 @@ MainWindow::MainWindow(QWidget *parent)
                         process->closeWriteChannel();
                     return;
                 }
+                if (metrics->firstFrameMs < 0)
+                    metrics->firstFrameMs = metrics->wall.elapsed();
+                metrics->lastFrameQueuedMs = metrics->wall.elapsed();
+                metrics->pipeBytes += accepted;
                 ++metrics->frames;
                 const qint64 elapsed = metrics->wall.elapsed();
                 if (elapsed - metrics->lastReportMs >= 10000) {
@@ -2335,13 +2354,32 @@ MainWindow::MainWindow(QWidget *parent)
                 });
             });
             connect(process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
-                    process, [metrics, pump](int, QProcess::ExitStatus) {
+                    process, [metrics, pump, useQsv, totalFrames](int, QProcess::ExitStatus) {
                 metrics->inputClosed = true;
                 qDebug().noquote() << "[B3.3.2] FFmpeg finished:"
                                    << "frames_queued=" << metrics->frames
                                    << "elapsed_ms=" << metrics->wall.elapsed()
                                    << "render_ms=" << metrics->renderMs
                                    << "convert_ms=" << metrics->convertMs;
+                qDebug().noquote()
+                    << "[B3.4.2.1] PERFORMANCE SUMMARY"
+                    << "encoder=" << (useQsv ? "h264_qsv" : "libx264")
+                    << "frames=" << metrics->frames << "/" << totalFrames
+                    << "wall_ms=" << metrics->wall.elapsed()
+                    << "first_frame_ms=" << metrics->firstFrameMs
+                    << "last_frame_queued_ms=" << metrics->lastFrameQueuedMs
+                    << "render_total_ms=" << metrics->renderMs
+                    << "render_max_ms=" << metrics->renderMaxMs
+                    << "convert_total_ms=" << metrics->convertMs
+                    << "convert_max_ms=" << metrics->convertMaxMs
+                    << "pipe_write_total_ms=" << metrics->pipeWriteMs
+                    << "pipe_write_max_ms=" << metrics->maxPipeWriteMs
+                    << "pipe_bytes=" << metrics->pipeBytes
+                    << "ffmpeg_finish_after_last_queue_ms="
+                    << (metrics->wall.elapsed() - metrics->lastFrameQueuedMs);
+                // FFmpeg -benchmark prints aggregate user/system CPU time and peak RSS.
+                // These measurements overlap with rendering and pipe delivery;
+                // they must not be added together as sequential phases.
             });
             statusBar()->showMessage("Starting MP4 Spectrum export...", 3000);
             process->start(ffmpegPath, arguments);
