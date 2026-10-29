@@ -1,12 +1,19 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "spectrumanalyzer.h"
+#include "spectrumrenderer.h"
+#include "spectrumexportframes.h" // B3.2: frame generator; encoder wiring pending.
 #include "gpurenderer.h"
+#include "nativegpupresenter.h"
 
 #include <QPainter>
+#include <QPainterPath>
+#include <QFont>
+#include <QDebug>
 #include <QLinearGradient>
 #include <QAbstractItemView>
 #include <algorithm>
+#include <climits>
 #include <QTimer>
 #include <QScrollArea>
 #include <cmath>
@@ -19,10 +26,12 @@
 #include <QVideoSink>
 #include <QVideoFrame>
 #include <QFileDialog>
+#include <QFile>
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSlider>
+#include <QCheckBox>
 #include <QLabel>
 #include <QFrame>
 #include <QVBoxLayout>
@@ -48,9 +57,17 @@
 #include <QMouseEvent>
 #include <QSettings>
 #include <QInputDialog>
+#include <QProcess>
+#include <QProgressDialog>
 #include <QScrollArea>
 #include <QSpinBox>
 #include <functional>
+#include <memory>
+#include <atomic>
+#include <thread>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 // Interactive Photoshop-inspired gradient bar: click to add, drag stops,
 // double-click a stop to choose its color. Keeps rendering independent of FFT.
@@ -154,9 +171,12 @@ public:
           positionX(50), positionY(78), opacityPercent(92), scalePercent(72),
           solidColor(QColor("#35B8FF")), useGradient(true),
           columnCount(64), heightPercent(100), thicknessPercent(75), glowPercent(0),
-          gradientSpeed(0), gradientPhase(0.0)
+          glowRadius(50), glowIntensity(100), gradientSpeed(0), gradientPhase(0.0), peakHoldEnabled(false)
     {
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+#ifdef Q_OS_WIN
+        setAttribute(Qt::WA_NativeWindow, true);
+#endif
         setAttribute(Qt::WA_TransparentForMouseEvents, true);
         setAttribute(Qt::WA_TranslucentBackground, false);
         setAttribute(Qt::WA_AlwaysStackOnTop, false);
@@ -166,8 +186,10 @@ public:
         connect(videoSink, &QVideoSink::videoFrameChanged, this,
                 [this](const QVideoFrame &frame) {
                     if (!frame.isValid()) return;
-                    // Limit CPU video-frame conversions to about 24 FPS.
-                    if (frameClock.isValid() && frameClock.elapsed() < 41) return;
+                    // Keep the preview video close to 30 FPS when frames are available.
+                    // A 41 ms gate capped the video near 24 FPS and could look choppy
+                    // even while Spectrum continued repainting smoothly.
+                    if (frameClock.isValid() && frameClock.elapsed() < 33) return;
                     frameClock.restart();
                     QImage image = frame.toImage();
                     if (image.isNull()) return;
@@ -176,8 +198,42 @@ public:
                     if (image.width() > limit.width() || image.height() > limit.height())
                         image = image.scaled(limit, Qt::KeepAspectRatio, Qt::FastTransformation);
                     videoImage = std::move(image);
+                    gpuBackgroundDirty = true;
                     update();
                 });
+        // Phase 4D.1: animate between 20 Hz FFT samples at ~30 Hz.
+        // Stop the animation when the analyzer clears its bands.
+        motionTimer = new QTimer(this);
+        motionTimer->setInterval(33);
+        connect(motionTimer, &QTimer::timeout, this, [this]() {
+            if (targetBands.isEmpty()) { motionTimer->stop(); return; }
+            bool changed = false;
+            for (int i = 0; i < bands.size(); ++i) {
+                const float delta = targetBands[i] - bands[i];
+                const float response = delta > 0.0f ? 0.52f : 0.32f;
+                const float next = std::abs(delta) < 0.0005f
+                    ? targetBands[i] : bands[i] + delta * response;
+                if (next != bands[i]) { bands[i] = next; changed = true; }
+            }
+            if (peakHoldEnabled && !bands.isEmpty()) {
+                if (peakLevels.size() != bands.size()) {
+                    peakLevels = bands;
+                    peakTicks.fill(0, bands.size());
+                }
+                for (int i = 0; i < bands.size(); ++i) {
+                    if (targetBands[i] >= peakLevels[i]) {
+                        peakLevels[i] = targetBands[i];
+                        peakTicks[i] = 8; // About 264 ms at 33 ms/tick.
+                    } else if (peakTicks[i] > 0) {
+                        --peakTicks[i];
+                    } else {
+                        peakLevels[i] = qMax(bands[i], peakLevels[i] - 0.008f);
+                    }
+                }
+                changed = true;
+            }
+            if (changed) update();
+        });
         gradientStops = {
             {0.0, QColor("#00D5FF")},
             {0.5, QColor("#376BFF")},
@@ -189,19 +245,46 @@ public:
 
     void setBands(const QVector<float> &values)
     {
-        bands = values;
-        if (bands.size() > 64) bands.resize(64);
-        update();
+        if (values.isEmpty()) {
+            motionTimer->stop();
+            targetBands.clear();
+            bands.clear();
+            peakLevels.clear();
+            peakTicks.clear();
+            update();
+            return;
+        }
+        targetBands = values;
+        if (targetBands.size() > 64) targetBands.resize(64);
+        if (bands.size() != targetBands.size()) {
+            bands = targetBands; // First sample: no ramp from stale values.
+            peakLevels = targetBands;
+            peakTicks.fill(0, bands.size());
+            update();
+        }
+        if (!motionTimer->isActive()) motionTimer->start();
     }
     void setMessage(const QString &text) { message = text; update(); }
-    void setVisualMode(int mode) { visualMode = qBound(0, mode, 2); update(); }
+    void setVisualMode(int mode) { visualMode = qBound(0, mode, 3); update(); }
     void setPosition(int x, int y) { positionX = qBound(0, x, 100); positionY = qBound(0, y, 100); update(); }
     void setOpacityPercent(int value) { opacityPercent = qBound(0, value, 100); update(); }
+    void setForceCpuFallback(bool enabled) { forceCpuFallback = enabled; update(); }
+    QString diagnosticsText() const
+    {
+        return QStringLiteral("Preview mode: %1\nMeasured paint rate: %2 FPS\n\n%3")
+            .arg(forceCpuFallback ? QStringLiteral("CPU fallback (QPainter)")
+                                  : QStringLiteral("Hybrid GPU (D3D11 composite + readback)"))
+            .arg(measuredFps, 0, 'f', 1)
+            .arg(GpuRenderer::instance().diagnostics());
+    }
     void setScalePercent(int value) { scalePercent = qBound(20, value, 100); update(); }
     void setColumnCount(int value) { columnCount = qBound(8, value, 128); update(); }
     void setHeightPercent(int value) { heightPercent = qBound(10, value, 200); update(); }
     void setThicknessPercent(int value) { thicknessPercent = qBound(10, value, 100); update(); }
     void setGlowPercent(int value) { glowPercent = qBound(0, value, 100); update(); }
+    void setGlowRadius(int value) { glowRadius = qBound(0, value, 100); update(); }
+    void setGlowIntensity(int value) { glowIntensity = qBound(0, value, 100); update(); }
+    void setPeakHoldEnabled(bool enabled) { peakHoldEnabled = enabled; peakLevels = bands; peakTicks.fill(0, bands.size()); update(); }
     void setGradientSpeed(int value) { gradientSpeed = qBound(0, value, 100); update(); }
     void advanceGradient(qreal seconds)
     {
@@ -252,10 +335,27 @@ public:
         }
     }
     int selectedStopIndex = 0;
+    SpectrumRenderSettings exportSettings() const { return currentRenderSettings(); }
+    int exportGradientSpeed() const { return gradientSpeed; }
 
 protected:
     void paintEvent(QPaintEvent *) override
     {
+        ++diagnosticFrameCount;
+        if (!diagnosticsClock.isValid()) diagnosticsClock.start();
+        else if (diagnosticsClock.elapsed() >= 1000) {
+            measuredFps = diagnosticFrameCount * 1000.0 / diagnosticsClock.elapsed();
+            diagnosticFrameCount = 0;
+            diagnosticsClock.restart();
+        }
+        // Stability fix: do not present a D3D11 swap chain directly into this
+        // Qt-owned widget HWND. On some Windows/Qt Multimedia configurations,
+        // Qt repaints and the native swap chain compete for the same surface,
+        // causing the preview to flash while audio continues normally.
+        // Keep the native presenter implementation available for a future
+        // integration using a dedicated native child window, but use the
+        // stable Qt paint path for all preview modes for now.
+
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
         p.setCompositionMode(QPainter::CompositionMode_SourceOver);
@@ -290,8 +390,10 @@ protected:
             const qreal baseline = cy;
             QVector<QRectF> gpuRects;
             QVector<QColor> gpuColors;
-            gpuRects.reserve(count * (glowPercent > 0 ? 2 : 1));
+            QVector<QColor> gpuTopColors;
+            gpuRects.reserve(count * ((glowPercent > 0 ? 5 : 1) + (peakHoldEnabled ? 1 : 0)));
             gpuColors.reserve(gpuRects.capacity());
+            gpuTopColors.reserve(gpuRects.capacity());
             for (int i = 0; i < count; ++i) {
                 const qreal sourceIndex = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
                 const int lo = qBound(0, int(sourceIndex), bands.size() - 1);
@@ -302,119 +404,244 @@ protected:
                 const QRectF bar(startX + i * cellW + (cellW - barW) / 2.0,
                                  baseline - h, barW, h);
                 const QColor color = colorForBand(i, count);
+                // Phase 4C.2: top and bottom colors are interpolated by the
+                // existing D3D11 vertex-color shader across each bar.
+                const qreal bandT = count <= 1 ? 0.0 : qreal(i) / (count - 1);
+                const QColor topColor = useGradient
+                    ? colorAt(gradientCoordinate(bandT + gradientPhase + 0.18)) : color;
                 if (glowPercent > 0) {
-                    QColor halo = color;
-                    halo.setAlpha(qBound(0, glowPercent * 55 / 100, 55));
-                    gpuRects.push_back(bar.adjusted(-2.5, -2.5, 2.5, 2.5));
-                    gpuColors.push_back(halo);
+                    // Phase 4C.4: radius and intensity are independent controls.
+                    // Four lightweight layers approximate falloff; this is not a Gaussian blur.
+                    const qreal strength = (glowPercent / 100.0) * (glowIntensity / 100.0);
+                    const qreal spread = 0.5 + 8.0 * (glowRadius / 100.0);
+                    const qreal layerScale[] = {1.0, 0.74, 0.48, 0.24};
+                    const qreal alphaScale[] = {0.07, 0.12, 0.19, 0.28};
+                    for (int layer = 0; layer < 4; ++layer) {
+                        QColor halo = color;
+                        const int alpha = qBound(0, qRound(255.0 * strength * alphaScale[layer]), 36);
+                        halo.setAlpha(alpha);
+                        const qreal radius = spread * layerScale[layer];
+                        gpuRects.push_back(bar.adjusted(-radius, -radius, radius, radius));
+                        gpuColors.push_back(halo);
+                        QColor topHalo = topColor;
+                        topHalo.setAlpha(alpha);
+                        gpuTopColors.push_back(topHalo);
+                    }
                 }
                 gpuRects.push_back(bar);
                 gpuColors.push_back(color);
+                gpuTopColors.push_back(topColor);
+                if (peakHoldEnabled && !peakLevels.isEmpty()) {
+                    const qreal idx = qreal(i) * (peakLevels.size() - 1) / qMax(1, count - 1);
+                    const int loPeak = qBound(0, int(idx), peakLevels.size() - 1);
+                    const int hiPeak = qMin(loPeak + 1, peakLevels.size() - 1);
+                    const qreal peak = qBound(0.0, qreal(peakLevels[loPeak]) * (1.0 - (idx - loPeak))
+                        + qreal(peakLevels[hiPeak]) * (idx - loPeak), 1.0);
+                    // A slim peak cap, colored like the Spectrum instead of a white block.
+                    const qreal markerH = 1.6;
+                    const qreal markerGap = 1.5;
+                    gpuRects.push_back(QRectF(bar.left(), baseline - qMax(1.0, peak * maxH) - markerGap - markerH, barW, markerH));
+                    QColor marker = useGradient ? topColor : color;
+                    marker.setAlpha(qMin(marker.alpha(), 220));
+                    gpuColors.push_back(marker);
+                    gpuTopColors.push_back(marker);
+                }
             }
             // Phase 4A hybrid compositing: prepare a correctly letterboxed,
             // opaque background, upload it to D3D11 and draw bars on the same
             // render target. The final readback remains until native presentation.
-            QImage gpuBackground(size(), QImage::Format_ARGB32);
-            gpuBackground.fill(QColor("#101114"));
-            if (!videoImage.isNull()) {
-                QPainter bgPainter(&gpuBackground);
-                const QSize fitted = videoImage.size().scaled(size(), Qt::KeepAspectRatio);
-                const QRect target((width() - fitted.width()) / 2,
-                                   (height() - fitted.height()) / 2,
-                                   fitted.width(), fitted.height());
-                bgPainter.drawImage(target, videoImage);
+            // Phase 4B.3: cache the CPU-prepared background. Spectrum/audio
+            // updates repaint frequently, but the video image and stage size often
+            // stay unchanged between video frames. Avoid allocating and repainting
+            // this full-size image on every Spectrum tick.
+            if (gpuBackgroundDirty || cachedGpuBackground.size() != size()
+                || cachedGpuBackground.format() != QImage::Format_ARGB32) {
+                cachedGpuBackground = QImage(size(), QImage::Format_ARGB32);
+                cachedGpuBackground.fill(QColor("#101114"));
+                if (!videoImage.isNull()) {
+                    QPainter bgPainter(&cachedGpuBackground);
+                    const QSize fitted = videoImage.size().scaled(size(), Qt::KeepAspectRatio);
+                    const QRect target((width() - fitted.width()) / 2,
+                                       (height() - fitted.height()) / 2,
+                                       fitted.width(), fitted.height());
+                    bgPainter.drawImage(target, videoImage);
+                }
+                gpuBackgroundDirty = false;
+                ++gpuBackgroundBuilds;
             }
+            // The GPU composite contains an opaque video background, so
+            // QPainter::setOpacity() cannot fade only the Spectrum after the
+            // composite has been rendered. Apply the opacity to each bar/glow
+            // color before GPU rendering; leave the video background untouched.
+            const qreal spectrumOpacity = opacityPercent / 100.0;
+            for (QColor &gpuColor : gpuColors) {
+                gpuColor.setAlphaF(qBound(0.0, gpuColor.alphaF() * spectrumOpacity, 1.0));
+            }
+            for (QColor &gpuColor : gpuTopColors) {
+                gpuColor.setAlphaF(qBound(0.0, gpuColor.alphaF() * spectrumOpacity, 1.0));
+            }
+
             QImage gpuComposite;
-            const bool gpuRendered = GpuRenderer::instance().renderColoredRects(
-                width(), height(), gpuRects, gpuColors, &gpuComposite, &gpuBackground);
+            const bool gpuRendered = !forceCpuFallback && GpuRenderer::instance().renderColoredRects(
+                width(), height(), gpuRects, gpuColors, &gpuComposite, &cachedGpuBackground,
+                &gpuTopColors);
             if (gpuRendered) {
                 p.setOpacity(1.0); // background must remain opaque
                 p.drawImage(QPoint(0, 0), gpuComposite);
             } else {
-                // Reliable CPU fallback preserves the original rounded-bar appearance.
-                p.setPen(Qt::NoPen);
-                for (int i = 0; i < count; ++i) {
-                    const qreal sourceIndex = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
-                    const int lo = qBound(0, int(sourceIndex), bands.size() - 1);
-                    const int hi = qMin(lo + 1, bands.size() - 1);
-                    const qreal v = qBound(0.0, qreal(bands[lo]) * (1.0 - (sourceIndex - lo))
-                                                  + qreal(bands[hi]) * (sourceIndex - lo), 1.0);
-                    const qreal h = qMax(1.0, v * maxH);
-                    const QRectF bar(startX + i * cellW + (cellW - barW) / 2.0,
-                                     baseline - h, barW, h);
-                    const QColor color = colorForBand(i, count);
-                    if (glowPercent > 0) {
-                        QColor halo = color;
-                        halo.setAlpha(qBound(0, glowPercent * 55 / 100, 55));
-                        p.setBrush(halo);
-                        p.drawRoundedRect(bar.adjusted(-2.5, -2.5, 2.5, 2.5), 3, 3);
-                    }
-                    p.setBrush(color);
-                    p.drawRoundedRect(bar, qMin(2.5, barW / 2.0), qMin(2.5, barW / 2.0));
-                }
+                // B2: CPU Bars fallback shares the same drawing engine as export.
+                // Reset opacity: SpectrumRenderer applies its own opacity once.
+                p.setOpacity(1.0);
+                SpectrumRenderer::paint(p, QRectF(rect()), bands,
+                                        currentRenderSettings(), peakLevels);
             }
-        } else if (visualMode == 1) { // B: horizontal waveform-like spectrum
-            QPolygonF upper, lower;
-            const qreal startX = cx - maxW / 2.0;
-            for (int i = 0; i < bands.size(); ++i) {
-                const qreal x = startX + maxW * i / qMax(1, bands.size() - 1);
-                const qreal amp = qBound(0.0, qreal(bands[i]), 1.0) * maxH * 0.52;
-                upper << QPointF(x, cy - amp);
-                lower.prepend(QPointF(x, cy + amp));
-            }
-            QPolygonF shape = upper;
-            for (const QPointF &pt : lower) shape << pt;
-            QLinearGradient grad(startX, cy, startX + maxW, cy);
-            if (useGradient) {
-                for (int j = 0; j <= 32; ++j) {
-                    const qreal t = j / 32.0;
-                    grad.setColorAt(t, colorAt(gradientCoordinate(t + gradientPhase)));
-                }
-            } else {
-                grad.setColorAt(0.0, solidColor); grad.setColorAt(1.0, solidColor);
-            }
-            p.setPen(Qt::NoPen); p.setBrush(grad); p.drawPolygon(shape);
-        } else { // C: circular spectrum
-            const qreal radius = qMin(width(), height()) * 0.17 * (scalePercent / 72.0);
-            const qreal barMax = qMin(width(), height()) * 0.12 * (scalePercent / 72.0) * (heightPercent / 100.0);
-            p.setPen(QPen(QColor(255, 255, 255, 35), 1));
-            p.setBrush(Qt::NoBrush);
-            p.drawEllipse(QPointF(cx, cy), radius, radius);
-            for (int i = 0; i < bands.size(); ++i) {
-                const qreal angle = qDegreesToRadians((360.0 * i / bands.size()) - 90.0);
-                const qreal v = qBound(0.0, qreal(bands[i]), 1.0);
-                const qreal outer = radius + qMax(1.0, v * barMax);
-                const QPointF a(cx + qCos(angle) * radius, cy + qSin(angle) * radius);
-                const QPointF b(cx + qCos(angle) * outer, cy + qSin(angle) * outer);
-                p.setPen(QPen(colorForBand(i, bands.size()), qMax(1.0, width() * 0.004 * thicknessPercent / 100.0), Qt::SolidLine, Qt::RoundCap));
-                p.drawLine(a, b);
-            }
+        } else {
+            // B2: Lines, Circular and Filled share one offscreen-capable renderer.
+            p.setOpacity(1.0);
+            SpectrumRenderer::paint(p, QRectF(rect()), bands,
+                                    currentRenderSettings(), peakLevels);
         }
         if (visualMode == 0) {
-            const QString firstLine = GpuRenderer::instance().runtimeStats().section('\n', 0, 0);
+            const QString gpuFrameLine = GpuRenderer::instance().runtimeStats().section('\n', 0, 0);
+            const QString fpsLine = QStringLiteral("Preview FPS: %1")
+                .arg(measuredFps, 0, 'f', 1);
+            const QString hudText = gpuFrameLine + QStringLiteral("  |  ") + fpsLine;
             p.save();
             p.setOpacity(0.92);
+            p.setFont(QFont(QStringLiteral("Consolas"), 9));
             p.setPen(QColor(230, 240, 245));
             p.setBrush(QColor(10, 14, 20, 205));
-            const QRect hudRect(8, 8, qMin(width() - 16, 430), 26);
+            const QRect hudRect(8, 8, qMin(width() - 16, 640), 28);
             p.drawRoundedRect(hudRect, 5, 5);
-            p.drawText(hudRect.adjusted(8, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft, firstLine);
+            p.drawText(hudRect.adjusted(8, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft, hudText);
             p.restore();
         }
         p.restore();
     }
 
 private:
+    SpectrumRenderSettings currentRenderSettings() const
+    {
+        SpectrumRenderSettings s;
+        s.mode = visualMode;
+        s.positionX = positionX;
+        s.positionY = positionY;
+        s.opacity = opacityPercent;
+        s.scale = scalePercent;
+        s.columns = columnCount;
+        s.height = heightPercent;
+        s.thickness = thicknessPercent;
+        s.glow = glowPercent;
+        s.glowRadius = glowRadius;
+        s.glowIntensity = glowIntensity;
+        s.peakHold = peakHoldEnabled;
+        s.gradient = useGradient;
+        s.interpolation = interpolation;
+        s.gradientPhase = gradientPhase;
+        s.solidColor = solidColor;
+        s.stops = gradientStops;
+        return s;
+    }
+
+    bool tryNativeGpuPaint()
+    {
+#ifdef Q_OS_WIN
+        if (!nativeGpuAttempted) {
+            nativeGpuAttempted = true;
+            nativeGpuReady = nativeGpuPresenter.initialize(
+                reinterpret_cast<void *>(winId()), qMax(1, width()), qMax(1, height()));
+            if (!nativeGpuReady)
+                qWarning() << "Native GPU preview unavailable; keeping Phase 4A fallback:"
+                           << nativeGpuPresenter.lastError();
+        }
+        if (!nativeGpuReady || width() < 2 || height() < 2)
+            return false;
+        if (!nativeGpuPresenter.resize(width(), height())) {
+            qWarning() << "Native GPU resize failed; switching to Phase 4A:"
+                       << nativeGpuPresenter.lastError();
+            nativeGpuReady = false;
+            nativeGpuPresenter.shutdown();
+            return false;
+        }
+
+        const int count = columnCount;
+        const qreal maxW = width() * (scalePercent / 100.0);
+        const qreal maxH = height() * 0.42 * (scalePercent / 72.0) * (heightPercent / 100.0);
+        const qreal cx = width() * positionX / 100.0;
+        const qreal cy = height() * positionY / 100.0;
+        const qreal cellW = maxW / count;
+        const qreal barW = qMax(0.6, cellW * thicknessPercent / 100.0);
+        const qreal startX = cx - maxW / 2.0;
+        QVector<QRectF> rects;
+        QVector<QColor> colors;
+        rects.reserve(count * (glowPercent > 0 ? 2 : 1));
+        colors.reserve(rects.capacity());
+        for (int i = 0; i < count; ++i) {
+            const qreal sourceIndex = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
+            const int lo = qBound(0, int(sourceIndex), bands.size() - 1);
+            const int hi = qMin(lo + 1, bands.size() - 1);
+            const qreal frac = sourceIndex - lo;
+            const qreal value = qBound(0.0, qreal(bands[lo]) * (1.0 - frac)
+                                              + qreal(bands[hi]) * frac, 1.0);
+            const qreal h = qMax(1.0, value * maxH);
+            const QRectF bar(startX + i * cellW + (cellW - barW) / 2.0,
+                             cy - h, barW, h);
+            const QColor color = colorForBand(i, count);
+            if (glowPercent > 0) {
+                QColor halo = color;
+                halo.setAlpha(qBound(0, qRound(55.0 * glowPercent / 100.0 * glowIntensity / 100.0), 55));
+                const qreal radius = 0.5 + 4.0 * (glowRadius / 100.0);
+                rects.push_back(bar.adjusted(-radius, -radius, radius, radius));
+                colors.push_back(halo);
+            }
+            rects.push_back(bar);
+            colors.push_back(color);
+        }
+        QImage background = videoImage;
+        if (background.isNull()) {
+            background = QImage(size(), QImage::Format_ARGB32);
+            background.fill(QColor("#101114"));
+        }
+        if (!nativeGpuPresenter.presentFrame(background, rects, colors, opacityPercent / 100.0)) {
+            qWarning() << "Native GPU present failed; switching to Phase 4A:"
+                       << nativeGpuPresenter.lastError();
+            nativeGpuReady = false;
+            nativeGpuPresenter.shutdown();
+            return false;
+        }
+        return true;
+#else
+        return false;
+#endif
+    }
+
     QVideoSink *videoSink = nullptr;
+#ifdef Q_OS_WIN
+    NativeGpuPresenter nativeGpuPresenter;
+    bool nativeGpuAttempted = false;
+    bool nativeGpuReady = false;
+#endif
     QImage videoImage;
+    QImage cachedGpuBackground;
+    bool gpuBackgroundDirty = true;
+    quint64 gpuBackgroundBuilds = 0;
     QElapsedTimer frameClock;
+    QElapsedTimer diagnosticsClock;
+    int diagnosticFrameCount = 0;
+    double measuredFps = 0.0;
+    bool forceCpuFallback = false;
     QVector<float> bands;
+    QVector<float> targetBands;
+    QVector<float> peakLevels;
+    QVector<int> peakTicks;
+    QTimer *motionTimer = nullptr;
+    bool peakHoldEnabled;
     QString message;
     int visualMode;
     int positionX, positionY, opacityPercent, scalePercent;
     QColor solidColor;
     bool useGradient;
-    int columnCount, heightPercent, thicknessPercent, glowPercent, gradientSpeed;
+    int columnCount, heightPercent, thicknessPercent, glowPercent, glowRadius, glowIntensity, gradientSpeed;
     int interpolation = 1;
     qreal gradientPhase;
     QVector<QPair<qreal, QColor>> gradientStops;
@@ -840,6 +1067,19 @@ MainWindow::MainWindow(QWidget *parent)
         );
 
     previewHeader->addWidget(previewTitle);
+    previewHeader->addSpacing(12);
+    QLabel *rendererLabel = new QLabel("Renderer");
+    rendererLabel->setStyleSheet("color:#9AA0A6;");
+    QComboBox *rendererModeCombo = new QComboBox;
+    rendererModeCombo->addItem("Hybrid GPU");
+    rendererModeCombo->addItem("CPU fallback");
+    rendererModeCombo->setToolTip("Hybrid GPU composites Spectrum with D3D11 then reads back to Qt. CPU fallback uses QPainter.");
+    rendererModeCombo->setMinimumWidth(125);
+    QPushButton *diagnosticsButton = new QPushButton("Diagnostics");
+    diagnosticsButton->setToolTip("Show renderer performance and Direct3D 11 diagnostics");
+    previewHeader->addWidget(rendererLabel);
+    previewHeader->addWidget(rendererModeCombo);
+    previewHeader->addWidget(diagnosticsButton);
     previewHeader->addStretch();
     previewHeader->addWidget(videoInfoLabel);
 
@@ -969,7 +1209,7 @@ MainWindow::MainWindow(QWidget *parent)
     QLabel *styleLabel = new QLabel("Visualization Style");
     propertiesLayout->addWidget(styleLabel);
     QComboBox *visualModeCombo = new QComboBox;
-    visualModeCombo->addItems({"A · Vertical Bars", "B · Horizontal Wave", "C · Circular"});
+    visualModeCombo->addItems({"A · Vertical Bars", "B · Waveform Lines", "C · Circular", "D · Filled Waveform"});
     visualModeCombo->setCurrentIndex(0);
     propertiesLayout->addWidget(visualModeCombo);
 
@@ -1096,6 +1336,21 @@ MainWindow::MainWindow(QWidget *parent)
         spectrumOverlay->setGlowPercent(v);
         spectrumDisplay->setGlowPercent(v);
     });
+    addWaveSlider("Glow Radius", 0, 100, 50, "%", [this](int v) {
+        spectrumOverlay->setGlowRadius(v);
+        spectrumDisplay->setGlowRadius(v);
+    });
+    addWaveSlider("Glow Intensity", 0, 100, 100, "%", [this](int v) {
+        spectrumOverlay->setGlowIntensity(v);
+        spectrumDisplay->setGlowIntensity(v);
+    });
+    QCheckBox *peakHoldToggle = new QCheckBox("Peak Hold (GPU Bars)");
+    peakHoldToggle->setChecked(false);
+    propertiesLayout->addWidget(peakHoldToggle);
+    connect(peakHoldToggle, &QCheckBox::toggled, this, [this](bool enabled) {
+        spectrumDisplay->setPeakHoldEnabled(enabled);
+        spectrumOverlay->setPeakHoldEnabled(enabled);
+    });
     addWaveSlider("Gradient Speed", 0, 100, 0, "%", [this](int v) {
         spectrumOverlay->setGradientSpeed(v);
         spectrumDisplay->setGradientSpeed(v);
@@ -1103,6 +1358,19 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Local alias: class members cannot be captured directly by lambdas.
     SpectrumDisplay *overlay = spectrumOverlay;
+    connect(rendererModeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this, overlay](int index) {
+        const bool cpuFallback = (index == 1);
+        overlay->setForceCpuFallback(cpuFallback);
+        spectrumDisplay->setForceCpuFallback(cpuFallback);
+        statusBar()->showMessage(cpuFallback
+            ? "Preview renderer: CPU fallback (QPainter)"
+            : "Preview renderer: Hybrid GPU (D3D11 composite + readback)", 4000);
+    });
+    connect(diagnosticsButton, &QPushButton::clicked, this, [overlay]() {
+        QMessageBox::information(nullptr, "WaveformStudio — Renderer Diagnostics",
+                                 overlay->diagnosticsText());
+    });
 
     // Populate the Photoshop-like editable gradient-stop list.
     auto refreshGradientList = [overlay, gradientStopsList, gradientEditor, stopPosition]() {
@@ -1658,12 +1926,821 @@ MainWindow::MainWindow(QWidget *parent)
         &QPushButton::clicked,
         this,
         [this]() {
-            QMessageBox::information(
+            const QString inputPath = player->source().toLocalFile();
+            if (inputPath.isEmpty() || !QFileInfo::exists(inputPath)) {
+                QMessageBox::warning(
+                    this,
+                    "Export Video",
+                    "Please import a local video before exporting."
+                    );
+                return;
+            }
+
+            const QString outputPath = QFileDialog::getSaveFileName(
                 this,
-                "Export Video",
-                "Video compositing and MP4 export "
-                "will be implemented in a later step."
+                "Export MP4 Video",
+                QDir::homePath() + "/" +
+                    QFileInfo(inputPath).completeBaseName() + "_export.mp4",
+                "MP4 Video (*.mp4)"
                 );
+            if (outputPath.isEmpty())
+                return;
+
+            QString finalOutputPath = outputPath;
+            if (QFileInfo(finalOutputPath).suffix().isEmpty())
+                finalOutputPath += ".mp4";
+
+            bool qualityAccepted = false;
+            const QStringList qualityOptions = {
+                "High quality (CRF 18)",
+                "Balanced (CRF 23)",
+                "Smaller file (CRF 28)"
+            };
+            const QString quality = QInputDialog::getItem(
+                this,
+                "Export Quality",
+                "Choose video quality:",
+                qualityOptions,
+                1,
+                false,
+                &qualityAccepted
+                );
+            if (!qualityAccepted)
+                return;
+
+            int crf = 23;
+            if (quality.startsWith("High"))
+                crf = 18;
+            else if (quality.startsWith("Smaller"))
+                crf = 28;
+
+            // B3.4.1: selectable hardware encoder; CPU remains available.
+            bool encoderAccepted = false;
+            const QStringList encoderOptions = {
+                "Intel Quick Sync H.264 (GPU)",
+                "CPU H.264 (libx264)"
+            };
+            const QString encoderChoice = QInputDialog::getItem(
+                this, "Video Encoder", "Choose video encoder:",
+                encoderOptions, 0, false, &encoderAccepted);
+            if (!encoderAccepted) return;
+            const bool useQsv = (encoderChoice == encoderOptions.first());
+            bool rgbaAccepted = false;
+            const QStringList rgbaOptions = {
+                "Stable: premultiplied render + RGBA conversion",
+                "Experimental: direct RGBA render (no conversion)"
+            };
+            const QString rgbaChoice = QInputDialog::getItem(
+                this, "Spectrum Pixel Pipeline", "Choose pixel pipeline:",
+                rgbaOptions, 0, false, &rgbaAccepted);
+            if (!rgbaAccepted) return;
+            const bool directRgba = (rgbaChoice == rgbaOptions.last());
+            qDebug().noquote() << "[B3.4.2.2] Pixel pipeline:"
+                               << (directRgba ? "direct_rgba" : "stable_conversion");
+
+            // B3.4.2.5: controlled A/B test of one-frame versus two-frame writes.
+            // Keep the pixel pipeline and encoder selection unchanged between runs.
+            int writeBatchFrames = 2;
+            if (directRgba) {
+                bool batchAccepted = false;
+                const QStringList batchOptions = {
+                    "A/B: 1 frame per write (baseline)",
+                    "A/B: 2 frames per write (current experiment)"
+                };
+                const QString batchChoice = QInputDialog::getItem(
+                    this, "Pipe Write Batch A/B",
+                    "Choose batch size for this export:",
+                    batchOptions, 0, false, &batchAccepted);
+                if (!batchAccepted) return;
+                writeBatchFrames = (batchChoice == batchOptions.first()) ? 1 : 2;
+            }
+            qDebug().noquote() << "[B3.4.2.5] A/B configuration:"
+                               << "write_batch_frames=" << writeBatchFrames;
+
+            // B3.4.2.9: isolate MP4 faststart's finalization cost.
+            bool faststartAccepted = false;
+            const QStringList faststartOptions = {
+                "A: Enable faststart (better progressive playback)",
+                "B: Disable faststart (A/B timing test)"
+            };
+            const QString faststartChoice = QInputDialog::getItem(
+                this, "MP4 Faststart A/B",
+                "Choose MP4 finalization mode:",
+                faststartOptions, 0, false, &faststartAccepted);
+            if (!faststartAccepted) return;
+            const bool useFaststart = (faststartChoice == faststartOptions.first());
+            qDebug().noquote() << "[B3.4.2.9] Faststart A/B:"
+                               << (useFaststart ? "enabled" : "disabled");
+
+            const QString ffmpegPath = "C:/ffmpeg/bin/ffmpeg.exe";
+            if (!QFileInfo::exists(ffmpegPath)) {
+                QMessageBox::critical(
+                    this,
+                    "FFmpeg Not Found",
+                    "FFmpeg was not found at:\n" + ffmpegPath +
+                        "\n\nPlease install FFmpeg or update its path in the source."
+                    );
+                return;
+            }
+
+            // Pause live preview during encoding to reduce GPU/CPU load.
+            const bool resumePreviewAfterExport =
+                player->playbackState() == QMediaPlayer::PlayingState;
+            const bool resumeSpectrumTimerAfterExport = spectrumTimer->isActive();
+            player->pause();
+            spectrumTimer->stop();
+            statusBar()->showMessage(
+                "Preview paused while exporting to reduce system load.",
+                5000
+                );
+
+            auto *progress = new QProgressDialog(
+                "Preparing video export...",
+                "Cancel",
+                0,
+                100,
+                this
+                );
+            progress->setWindowTitle("Exporting MP4");
+            progress->setWindowModality(Qt::WindowModal);
+            progress->setMinimumDuration(0);
+            progress->setValue(0);
+
+            auto *process = new QProcess(this);
+            process->setProcessChannelMode(QProcess::SeparateChannels);
+
+            connect(progress, &QProgressDialog::canceled, process, [process]() {
+                if (process->state() != QProcess::NotRunning)
+                    process->terminate();
+            });
+
+            // Diagnostic clock for FFmpeg's own progress milestones. This is
+            // intentionally separate from the frame-feed timer below: it helps
+            // distinguish "all raw frames sent" from "FFmpeg reports progress=end".
+            auto ffmpegProgressClock = std::make_shared<QElapsedTimer>();
+            ffmpegProgressClock->start();
+            auto lastReportedOutTimeMs = std::make_shared<qint64>(-1);
+            auto ffmpegProgressEndMs = std::make_shared<qint64>(-1);
+            auto lastStdoutMs = std::make_shared<qint64>(-1);
+            auto lastStderrMs = std::make_shared<qint64>(-1);
+            auto muxSummaryMs = std::make_shared<qint64>(-1);
+            auto benchMs = std::make_shared<qint64>(-1);
+            // A single monotonic clock is shared by Qt and the native Windows waiter.
+            auto nativeExitMs = std::make_shared<std::atomic<qint64>>(-1);
+            auto nativeWaitStatus = std::make_shared<std::atomic<int>>(-1);
+            // B3.4.2.13: GUI event-loop heartbeat. Diagnostics only; it does not
+            // participate in export completion or cleanup decisions.
+            auto heartbeatCount = std::make_shared<qint64>(0);
+            auto heartbeatLastMs = std::make_shared<qint64>(-1);
+            auto heartbeatMaxGapMs = std::make_shared<qint64>(0);
+            auto heartbeatMaxPostNativeGapMs = std::make_shared<qint64>(0);
+            auto heartbeatGapsOver250 = std::make_shared<qint64>(0);
+            auto heartbeatGapsOver500 = std::make_shared<qint64>(0);
+            auto heartbeatPostNativeGapsOver250 = std::make_shared<qint64>(0);
+            auto heartbeatPostNativeGapsOver500 = std::make_shared<qint64>(0);
+            auto heartbeatStateAtNative = std::make_shared<int>(-1);
+            auto heartbeat = new QTimer(process);
+            heartbeat->setInterval(100);
+            connect(heartbeat, &QTimer::timeout, process,
+                    [process, ffmpegProgressClock, nativeExitMs, heartbeatCount,
+                     heartbeatLastMs, heartbeatMaxGapMs, heartbeatMaxPostNativeGapMs,
+                     heartbeatGapsOver250, heartbeatGapsOver500,
+                     heartbeatPostNativeGapsOver250, heartbeatPostNativeGapsOver500,
+                     heartbeatStateAtNative]() {
+                const qint64 now = ffmpegProgressClock->elapsed();
+                ++(*heartbeatCount);
+                if (*heartbeatLastMs >= 0) {
+                    const qint64 gap = now - *heartbeatLastMs;
+                    *heartbeatMaxGapMs = qMax(*heartbeatMaxGapMs, gap);
+                    if (gap > 250) ++(*heartbeatGapsOver250);
+                    if (gap > 500) ++(*heartbeatGapsOver500);
+                    const qint64 nativeMs = nativeExitMs->load();
+                    if (nativeMs >= 0 && now >= nativeMs) {
+                        const qint64 postGap = (*heartbeatLastMs < nativeMs)
+                            ? now - nativeMs : gap;
+                        *heartbeatMaxPostNativeGapMs =
+                            qMax(*heartbeatMaxPostNativeGapMs, postGap);
+                        if (postGap > 250) ++(*heartbeatPostNativeGapsOver250);
+                        if (postGap > 500) ++(*heartbeatPostNativeGapsOver500);
+                    }
+                }
+                *heartbeatLastMs = now;
+                if (nativeExitMs->load() >= 0 && *heartbeatStateAtNative < 0)
+                    *heartbeatStateAtNative = static_cast<int>(process->state());
+            });
+            heartbeat->start();
+
+            // B3.4.2.12: a 10 ms GUI-thread probe observes the native exit
+            // independently of QProcess::finished, without changing cleanup.
+            auto nativeNotificationMs = std::make_shared<qint64>(-1);
+            auto nativeProbe = new QTimer(process);
+            nativeProbe->setInterval(10);
+            connect(nativeProbe, &QTimer::timeout, process,
+                    [process, nativeProbe, ffmpegProgressClock, nativeExitMs,
+                     nativeWaitStatus, nativeNotificationMs]() {
+                if (nativeWaitStatus->load() != 1 || *nativeNotificationMs >= 0)
+                    return;
+                *nativeNotificationMs = ffmpegProgressClock->elapsed();
+                nativeProbe->stop();
+                qDebug().noquote() << "[B3.4.2.12] NATIVE EXIT NOTIFICATION"
+                    << "native_exit_ms=" << nativeExitMs->load()
+                    << "qt_notification_ms=" << *nativeNotificationMs
+                    << "notification_lag_ms="
+                    << (*nativeNotificationMs - nativeExitMs->load())
+                    << "qprocess_state_at_notification=" << int(process->state());
+            });
+            nativeProbe->start();
+
+            // B4.1.6: record FFmpeg-reported progress at 5% milestones.
+            auto lastProgressBucket = std::make_shared<int>(-1);
+            connect(process, &QProcess::readyReadStandardOutput, this,
+                    [this, process, progress, ffmpegProgressClock,
+                     lastReportedOutTimeMs, ffmpegProgressEndMs, lastStdoutMs,
+                     lastProgressBucket]() {
+                *lastStdoutMs = ffmpegProgressClock->elapsed();
+                const QByteArray output = process->readAllStandardOutput();
+                const QList<QByteArray> lines = output.split('\n');
+                for (const QByteArray &rawLine : lines) {
+                    const QByteArray line = rawLine.trimmed();
+                    if (line.startsWith("out_time_ms=")) {
+                        bool ok = false;
+                        const qint64 timeUs = line.mid(12).trimmed().toLongLong(&ok);
+                        const qint64 durationMs = player->duration();
+                        if (ok) {
+                            *lastReportedOutTimeMs = timeUs / 1000;
+                            if (durationMs > 0) {
+                                const int percent = qBound(
+                                    0,
+                                    static_cast<int>((*lastReportedOutTimeMs) * 100.0 / durationMs),
+                                    99
+                                    );
+                                progress->setValue(percent);
+                                const int bucket = percent / 5;
+                                if (bucket > *lastProgressBucket) {
+                                    *lastProgressBucket = bucket;
+                                    qDebug().noquote() << "[B4.1.6] FFMPEG PROGRESS"
+                                        << "elapsed_ms=" << ffmpegProgressClock->elapsed()
+                                        << "out_time_ms=" << *lastReportedOutTimeMs
+                                        << "duration_ms=" << durationMs
+                                        << "ui_percent=" << percent
+                                        << "bucket_percent=" << bucket * 5;
+                                }
+                            }
+                        }
+                    } else if (line == "progress=end") {
+                        *ffmpegProgressEndMs = ffmpegProgressClock->elapsed();
+                        qDebug().noquote()
+                            << "[B3.4.2.8] FFmpeg progress=end"
+                            << "elapsed_ms=" << *ffmpegProgressEndMs
+                            << "last_out_time_ms=" << *lastReportedOutTimeMs;
+                    }
+                }
+            });
+
+            connect(process, &QProcess::readyReadStandardError, this,
+                    [process, ffmpegProgressClock, lastStderrMs, muxSummaryMs, benchMs]() {
+                *lastStderrMs = ffmpegProgressClock->elapsed();
+                const QByteArray errors = process->readAllStandardError();
+                if (errors.contains("muxing overhead:") && *muxSummaryMs < 0)
+                    *muxSummaryMs = *lastStderrMs;
+                if (errors.contains("bench: maxrss=") && *benchMs < 0)
+                    *benchMs = *lastStderrMs;
+                if (!errors.isEmpty())
+                    qDebug().noquote() << "FFmpeg:" << QString::fromLocal8Bit(errors);
+            });
+
+            // B3.4.2.14: timestamp entry into the first finished slot before
+            // any modal dialog can block the slot and delay later diagnostics.
+            auto finishedSignalEntryMs = std::make_shared<qint64>(-1);
+            connect(process,
+                    qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+                    this,
+                    [this, process, progress, finalOutputPath, useQsv,
+                     resumePreviewAfterExport, resumeSpectrumTimerAfterExport,
+                     ffmpegProgressClock, nativeExitMs, finishedSignalEntryMs](
+                        int exitCode, QProcess::ExitStatus exitStatus) {
+                *finishedSignalEntryMs = ffmpegProgressClock->elapsed();
+                const qint64 nativeMsAtEntry = nativeExitMs->load();
+                qDebug().noquote() << "[B3.4.2.14] QPROCESS FINISHED ENTRY"
+                    << "entry_ms=" << *finishedSignalEntryMs
+                    << "native_exit_ms=" << nativeMsAtEntry
+                    << "entry_after_native_ms="
+                    << (nativeMsAtEntry >= 0
+                            ? *finishedSignalEntryMs - nativeMsAtEntry : -1)
+                    << "exit_code=" << exitCode
+                    << "exit_status=" << static_cast<int>(exitStatus)
+                    << "qprocess_state=" << static_cast<int>(process->state())
+                    << "bytes_available=" << process->bytesAvailable()
+                    << "bytes_to_write=" << process->bytesToWrite();
+                progress->setValue(100);
+                progress->close();
+
+                if (resumePreviewAfterExport)
+                    player->play();
+                if (resumeSpectrumTimerAfterExport)
+                    spectrumTimer->start();
+
+                if (exitStatus == QProcess::NormalExit && exitCode == 0) {
+                    statusBar()->showMessage("MP4 export completed", 5000);
+                    QMessageBox::information(
+                        this,
+                        "Export Complete",
+                        "The MP4 video with an audio-reactive Spectrum Bars overlay was exported successfully to:\n" +
+                            finalOutputPath +
+                            "\n\nPhase 1 uses FFmpeg's Spectrum Bars renderer. Its appearance is an initial preset; matching Preview styles and color controls will be added later."
+                        );
+                } else {
+                    const QString errorText = QString::fromLocal8Bit(
+                        process->readAllStandardError()
+                        ).trimmed();
+                    QMessageBox::warning(
+                        this,
+                        "Export Failed",
+                        (useQsv ? "Intel Quick Sync export failed. Retry with CPU H.264 (libx264).\n\n" : "FFmpeg could not complete the export.\n\n") +
+                            (errorText.isEmpty()
+                                 ? QString("The operation was cancelled or FFmpeg returned an error.")
+                                 : errorText.left(1800))
+                        );
+                    QFile::remove(finalOutputPath);
+                }
+
+                process->deleteLater();
+                progress->deleteLater();
+            });
+
+            connect(process, &QProcess::errorOccurred, this,
+                    [this, process, progress,
+                     resumePreviewAfterExport, resumeSpectrumTimerAfterExport](
+                        QProcess::ProcessError error) {
+                if (error == QProcess::FailedToStart) {
+                    progress->close();
+                    if (resumePreviewAfterExport)
+                        player->play();
+                    if (resumeSpectrumTimerAfterExport)
+                        spectrumTimer->start();
+                    QMessageBox::critical(
+                        this,
+                        "Could Not Start FFmpeg",
+                        "FFmpeg could not be started. Check the FFmpeg path and permissions."
+                        );
+                    process->deleteLater();
+                    progress->deleteLater();
+                }
+            });
+
+            // Phase 1 visualizer export: generate an audio-reactive bar spectrum
+            // from the source audio and composite it over the source video.
+            if (!spectrumAnalyzer->isReady()) {
+                QMessageBox::warning(
+                    this,
+                    "Spectrum Analysis Not Ready",
+                    "Wait until Spectrum Analyzer finishes analyzing the video's audio, then export again."
+                );
+                if (resumePreviewAfterExport)
+                    player->play();
+                if (resumeSpectrumTimerAfterExport)
+                    spectrumTimer->start();
+                process->deleteLater();
+                progress->deleteLater();
+                return;
+            }
+
+            // B3.3.1: render the Spectrum at the source video's native resolution.
+            // This avoids scaling a 960x540 overlay up during export, which can soften
+            // thin lines, circular curves, and other fine Spectrum details.
+            QSize sourceSize = spectrumDisplay->getVideoSink()->videoSize();
+            if (!sourceSize.isValid() || sourceSize.isEmpty())
+                sourceSize = QSize(1920, 1080);
+            const QSize overlaySize = sourceSize;
+
+            const int exportFps = 30;
+            qint64 totalFrames = qMax<qint64>(
+                1, (qMax<qint64>(1, player->duration()) * exportFps + 999) / 1000);
+
+            // B3.3.2.1: count actual source-video packets when the source is
+            // constant 30 FPS. Container duration can round up by several frames;
+            // -shortest then closes stdin before the extra overlay frames arrive.
+            // Counting packets avoids decoding the video a second time.
+            const QString ffprobePath = QFileInfo(ffmpegPath).dir().filePath("ffprobe.exe");
+            if (QFileInfo::exists(ffprobePath)) {
+                QProcess probe;
+                probe.start(ffprobePath, QStringList{
+                    "-v", "error", "-select_streams", "v:0",
+                    "-count_packets", "-show_entries",
+                    "stream=r_frame_rate,avg_frame_rate,nb_read_packets",
+                    "-of", "default=noprint_wrappers=1", inputPath
+                });
+                if (probe.waitForStarted(3000)) {
+                    if (!probe.waitForFinished(15000)) {
+                        probe.kill();
+                        probe.waitForFinished(1000);
+                        qWarning() << "[B3.3.2.1] ffprobe timed out; using duration estimate";
+                    } else if (probe.exitStatus() == QProcess::NormalExit &&
+                               probe.exitCode() == 0) {
+                        const QList<QByteArray> fields =
+                            probe.readAllStandardOutput().trimmed().split('\n');
+                        QByteArray rate, avgRate;
+                        qint64 packetCount = 0;
+                        for (const QByteArray &field : fields) {
+                            if (field.startsWith("r_frame_rate="))
+                                rate = field.mid(sizeof("r_frame_rate=") - 1).trimmed();
+                            else if (field.startsWith("avg_frame_rate="))
+                                avgRate = field.mid(sizeof("avg_frame_rate=") - 1).trimmed();
+                            else if (field.startsWith("nb_read_packets="))
+                                packetCount = field.mid(sizeof("nb_read_packets=") - 1)
+                                                  .trimmed().toLongLong();
+                        }
+                        if (rate == "30/1" && avgRate == "30/1" &&
+                            packetCount > 0 &&
+                            packetCount <= totalFrames + exportFps * 2 &&
+                            packetCount >= totalFrames - exportFps * 2) {
+                            qDebug() << "[B3.3.2.1] Source packet count:"
+                                     << packetCount << "duration estimate:" << totalFrames;
+                            totalFrames = packetCount;
+                        } else {
+                            qDebug() << "[B3.3.2.1] Using duration estimate:"
+                                     << totalFrames << "source rate:" << rate
+                                     << "average rate:" << avgRate
+                                     << "packet count:" << packetCount;
+                        }
+                    }
+                }
+            }
+            auto frameGenerator = std::make_shared<SpectrumExportFrames>(
+                spectrumAnalyzer, spectrumOverlay->exportSettings(),
+                overlaySize, exportFps);
+            frameGenerator->setGradientSpeed(spectrumOverlay->exportGradientSpeed());
+            frameGenerator->setDirectRgba(directRgba);
+
+            // The overlay is already rendered at source resolution; do not scale it.
+            const QString filterGraph =
+                "[1:v]setpts=PTS-STARTPTS,format=yuv420p[base];"
+                "[0:v]format=rgba[spec];"
+                "[base][spec]overlay=0:0:shortest=1:format=auto,"
+                "format=yuv420p[outv]";
+
+            progress->setLabelText("Rendering Spectrum frames into MP4...");
+            QStringList arguments = {
+                "-y", "-hide_banner", "-nostats", "-benchmark",
+                "-progress", "pipe:1",
+                "-f", "rawvideo", "-pixel_format", "rgba",
+                "-video_size", QString::number(overlaySize.width()) + "x" +
+                               QString::number(overlaySize.height()),
+                "-framerate", QString::number(exportFps),
+                "-i", "pipe:0",
+                "-i", inputPath,
+                "-filter_complex", filterGraph,
+                "-map", "[outv]", "-map", "1:a:0",
+                "-c:a", "aac", "-b:a", "192k",
+                "-shortest"
+            };
+            if (useFaststart)
+                arguments << "-movflags" << "+faststart";
+            arguments << finalOutputPath;
+
+            // QSV global_quality and CPU CRF are not identical scales.
+            const int qsvQuality = crf == 18 ? 20 : (crf == 28 ? 30 : 25);
+            const QStringList videoCodecArguments = useQsv
+                ? QStringList{"-c:v", "h264_qsv", "-preset", "veryfast",
+                              "-global_quality", QString::number(qsvQuality),
+                              "-pix_fmt", "nv12"}
+                : QStringList{"-c:v", "libx264", "-preset", "veryfast",
+                              "-crf", QString::number(crf),
+                              "-pix_fmt", "yuv420p"};
+            const int codecInsertAt = arguments.indexOf("-c:a");
+            for (int i = 0; i < videoCodecArguments.size(); ++i)
+                arguments.insert(codecInsertAt + i, videoCodecArguments[i]);
+            qDebug().noquote() << "[B3.4.1] Encoder:"
+                               << (useQsv ? "h264_qsv" : "libx264");
+
+            // B3.3.2.1: event-driven pipe feed. Produce a new frame only after
+            // Qt has drained the previous frame, avoiding 10 ms polling.
+            struct ExportMetrics {
+                QElapsedTimer wall;
+                qint64 renderMs = 0;
+                qint64 convertMs = 0;
+                qint64 frames = 0;
+                qint64 lastReportMs = 0;
+                qint64 firstFrameMs = -1;
+                qint64 lastFrameQueuedMs = 0;
+                qint64 inputCloseRequestedMs = -1;
+                qint64 qtBufferDrainedMs = -1;
+                qint64 ffmpegFinishedMs = -1;
+                qint64 pipeBytes = 0;
+                qint64 pipeWriteMs = 0;
+                qint64 maxPipeWriteMs = 0;
+                qint64 batchBuildMs = 0;
+                qint64 batchAppendMs = 0;
+                qint64 maxBatchAppendMs = 0;
+                qint64 batchCount = 0;
+                qint64 renderMaxMs = 0;
+                qint64 convertMaxMs = 0;
+                qint64 bytesWrittenSignals = 0;
+                qint64 bytesWrittenSignalBytes = 0;
+                qint64 backpressureChecks = 0;
+                qint64 maxQueuedBytes = 0;
+                qint64 maxBatchBytes = 0;
+                qint64 pumpNoopCount = 0;
+                bool inputClosed = false;
+                bool feedScheduled = false;
+                bool processFinished = false;
+            };
+            auto metrics = std::make_shared<ExportMetrics>();
+            metrics->wall.start();
+
+            auto pump = std::make_shared<std::function<void()>>();
+            std::weak_ptr<std::function<void()>> weakPump = pump;
+            *pump = [process, frameGenerator, totalFrames, metrics, weakPump, writeBatchFrames]() {
+                metrics->feedScheduled = false;
+                if (metrics->inputClosed || metrics->processFinished ||
+                    process->state() != QProcess::Running) {
+                    ++metrics->pumpNoopCount;
+                    return;
+                }
+                const qint64 queuedAtPump = process->bytesToWrite();
+                metrics->maxQueuedBytes = qMax(metrics->maxQueuedBytes, queuedAtPump);
+                if (queuedAtPump != 0) {
+                    ++metrics->backpressureChecks;
+                    return;
+                }
+
+                if (frameGenerator->nextFrameIndex() >= totalFrames) {
+                    metrics->inputClosed = true;
+                    metrics->inputCloseRequestedMs = metrics->wall.elapsed();
+                    // The pump reaches this branch only when bytesToWrite() is
+                    // already zero, so Qt's own write buffer is drained here.
+                    metrics->qtBufferDrainedMs = metrics->inputCloseRequestedMs;
+                    process->closeWriteChannel();
+                    qDebug().noquote() << "[B3.3.2] All overlay frames queued:"
+                                       << metrics->frames
+                                       << "elapsed_ms=" << metrics->wall.elapsed()
+                                       << "render_ms=" << metrics->renderMs
+                                       << "convert_ms=" << metrics->convertMs;
+                    return;
+                }
+
+                // B3.4.2.5 A/B experiment: use a selectable batch size of one or two
+                // frames. Keep the maximum batch bounded and preserve raw frame order.
+                QElapsedTimer batchBuildTimer;
+                batchBuildTimer.start();
+                QByteArray batch;
+
+                int framesInBatch = 0;
+                while (framesInBatch < writeBatchFrames &&
+                       frameGenerator->nextFrameIndex() < totalFrames) {
+                    QElapsedTimer step;
+                    step.start();
+                    QImage overlay = frameGenerator->nextOverlay();
+                    const qint64 renderStepMs = step.elapsed();
+                    metrics->renderMs += renderStepMs;
+                    metrics->renderMaxMs = qMax(metrics->renderMaxMs, renderStepMs);
+                    if (overlay.isNull()) {
+                        metrics->inputClosed = true;
+                        process->closeWriteChannel();
+                        qWarning() << "[B3.3.2] Overlay generator returned an empty frame";
+                        return;
+                    }
+
+                    step.restart();
+                    if (overlay.format() != QImage::Format_RGBA8888)
+                        overlay = overlay.convertToFormat(QImage::Format_RGBA8888);
+                    const qint64 convertStepMs = step.elapsed();
+                    metrics->convertMs += convertStepMs;
+                    metrics->convertMaxMs = qMax(metrics->convertMaxMs, convertStepMs);
+                    // B4.1.4: reserve the full bounded batch once to avoid
+                    // QByteArray growth/reallocation while appending later frames.
+                    if (framesInBatch == 0) {
+                        const qint64 reserveBytes =
+                            overlay.sizeInBytes() * qint64(writeBatchFrames);
+                        if (reserveBytes > 0 && reserveBytes <= INT_MAX)
+                            batch.reserve(static_cast<int>(reserveBytes));
+                    }
+                    QElapsedTimer appendTimer;
+                    appendTimer.start();
+                    batch.append(reinterpret_cast<const char *>(overlay.constBits()),
+                                 int(overlay.sizeInBytes()));
+                    const qint64 appendMs = appendTimer.elapsed();
+                    metrics->batchAppendMs += appendMs;
+                    metrics->maxBatchAppendMs = qMax(metrics->maxBatchAppendMs, appendMs);
+                    ++framesInBatch;
+                }
+
+                if (framesInBatch == 0)
+                    return;
+
+                metrics->batchBuildMs += batchBuildTimer.elapsed();
+                ++metrics->batchCount;
+                metrics->maxBatchBytes = qMax<qint64>(metrics->maxBatchBytes, batch.size());
+                QElapsedTimer pipeStepTimer;
+                pipeStepTimer.start();
+                const qint64 accepted = process->write(batch.constData(), batch.size());
+                const qint64 pipeStepMs = pipeStepTimer.elapsed();
+                metrics->pipeWriteMs += pipeStepMs;
+                metrics->maxPipeWriteMs = qMax(metrics->maxPipeWriteMs, pipeStepMs);
+                if (accepted != batch.size()) {
+                    metrics->inputClosed = true;
+                    qWarning() << "[B3.4.2.5] Batched pipe write failed:" << accepted
+                               << "of" << batch.size() << "bytes";
+                    if (process->state() == QProcess::Running)
+                        process->closeWriteChannel();
+                    return;
+                }
+                if (metrics->firstFrameMs < 0)
+                    metrics->firstFrameMs = metrics->wall.elapsed();
+                metrics->lastFrameQueuedMs = metrics->wall.elapsed();
+                metrics->pipeBytes += accepted;
+                metrics->frames += framesInBatch;
+                metrics->maxQueuedBytes = qMax(metrics->maxQueuedBytes,
+                                                process->bytesToWrite());
+                const qint64 elapsed = metrics->wall.elapsed();
+                if (elapsed - metrics->lastReportMs >= 10000) {
+                    metrics->lastReportMs = elapsed;
+                    qDebug().noquote() << "[B3.3.2] export diagnostic:"
+                                       << "frames=" << metrics->frames << "/" << totalFrames
+                                       << "elapsed_ms=" << elapsed
+                                       << "render_ms=" << metrics->renderMs
+                                       << "convert_ms=" << metrics->convertMs
+                                       << "queued_bytes=" << process->bytesToWrite();
+                }
+                // If Qt accepted the frame without buffering, schedule the next
+                // one asynchronously. Otherwise bytesWritten wakes the pump.
+                if (process->bytesToWrite() == 0 && !metrics->feedScheduled) {
+                    metrics->feedScheduled = true;
+                    QTimer::singleShot(0, process, [weakPump]() {
+                        if (auto fn = weakPump.lock()) (*fn)();
+                    });
+                }
+            };
+
+            connect(process, &QProcess::bytesWritten, process,
+                    [process, metrics, weakPump](qint64 count) {
+                ++metrics->bytesWrittenSignals;
+                metrics->bytesWrittenSignalBytes += count;
+                const qint64 queuedBytes = process->bytesToWrite();
+                metrics->maxQueuedBytes = qMax(metrics->maxQueuedBytes, queuedBytes);
+                if (metrics->inputClosed || metrics->feedScheduled ||
+                    process->state() != QProcess::Running ||
+                    process->bytesToWrite() != 0)
+                    return;
+                metrics->feedScheduled = true;
+                QTimer::singleShot(0, process, [weakPump]() {
+                    if (auto fn = weakPump.lock()) (*fn)();
+                });
+            });
+            connect(process, &QProcess::started, process,
+                    [process, metrics, weakPump, ffmpegProgressClock,
+                     nativeExitMs, nativeWaitStatus]() {
+#ifdef Q_OS_WIN
+                const DWORD pid = static_cast<DWORD>(process->processId());
+                HANDLE nativeHandle = OpenProcess(SYNCHRONIZE, FALSE, pid);
+                if (nativeHandle) {
+                    nativeWaitStatus->store(0); // Waiting for process termination.
+                    std::thread([nativeHandle, ffmpegProgressClock,
+                                 nativeExitMs, nativeWaitStatus]() {
+                        const DWORD result = WaitForSingleObject(nativeHandle, INFINITE);
+                        const qint64 observedMs = ffmpegProgressClock->elapsed();
+                        nativeExitMs->store(observedMs);
+                        nativeWaitStatus->store(result == WAIT_OBJECT_0 ? 1 : 2);
+                        CloseHandle(nativeHandle);
+                    }).detach();
+                } else {
+                    nativeWaitStatus->store(3); // OpenProcess failed.
+                }
+#else
+                nativeWaitStatus->store(4); // Windows-only diagnostic.
+#endif
+                metrics->feedScheduled = true;
+                QTimer::singleShot(0, process, [weakPump]() {
+                    if (auto fn = weakPump.lock()) (*fn)();
+                });
+            });
+            connect(process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+                    process, [metrics, pump, useQsv, directRgba, totalFrames, writeBatchFrames,
+                               ffmpegProgressClock, ffmpegProgressEndMs, lastStdoutMs,
+                               lastStderrMs, muxSummaryMs, benchMs, useFaststart,
+                               nativeExitMs, nativeWaitStatus, nativeNotificationMs,
+                               nativeProbe, heartbeat, heartbeatCount, heartbeatLastMs,
+                               heartbeatMaxGapMs, heartbeatMaxPostNativeGapMs,
+                               heartbeatGapsOver250, heartbeatGapsOver500,
+                               heartbeatPostNativeGapsOver250, heartbeatPostNativeGapsOver500,
+                               heartbeatStateAtNative, finishedSignalEntryMs,
+                               process](int, QProcess::ExitStatus) {
+                nativeProbe->stop();
+                heartbeat->stop();
+                const qint64 diagnosticSlotMs = ffmpegProgressClock->elapsed();
+                // B3.4.2.15: use the first finished-handler entry timestamp,
+                // recorded before the modal completion dialog is displayed.
+                const qint64 finishedMs = *finishedSignalEntryMs;
+                qDebug().noquote() << "[B3.4.2.15] FINISHED TIMESTAMP CORRECTION"
+                    << "finished_entry_ms=" << finishedMs
+                    << "diagnostic_slot_ms=" << diagnosticSlotMs
+                    << "dialog_or_slot_delay_ms="
+                    << (finishedMs >= 0 ? diagnosticSlotMs - finishedMs : -1);
+                qDebug().noquote() << "[B3.4.2.13] EVENT LOOP HEARTBEAT"
+                    << "interval_ms=100"
+                    << "ticks=" << *heartbeatCount
+                    << "max_gap_ms=" << *heartbeatMaxGapMs
+                    << "gaps_over_250ms=" << *heartbeatGapsOver250
+                    << "gaps_over_500ms=" << *heartbeatGapsOver500
+                    << "native_exit_ms=" << nativeExitMs->load()
+                    << "max_post_native_gap_ms=" << *heartbeatMaxPostNativeGapMs
+                    << "post_native_gaps_over_250ms=" << *heartbeatPostNativeGapsOver250
+                    << "post_native_gaps_over_500ms=" << *heartbeatPostNativeGapsOver500
+                    << "qprocess_state_at_native_observation=" << *heartbeatStateAtNative
+                    << "qprocess_state_at_finished=" << int(process->state())
+                    << "last_heartbeat_ms=" << *heartbeatLastMs
+                    << "finished_ms=" << finishedMs;
+                const qint64 observedNativeExit = nativeExitMs->load();
+                qDebug().noquote() << "[B3.4.2.12] NOTIFICATION A/B SUMMARY"
+                    << "native_exit_ms=" << observedNativeExit
+                    << "notification_ms=" << *nativeNotificationMs
+                    << "finished_ms=" << finishedMs
+                    << "notification_to_finished_ms="
+                    << (*nativeNotificationMs >= 0 ? finishedMs - *nativeNotificationMs : -1)
+                    << "native_to_finished_ms="
+                    << (observedNativeExit >= 0 ? finishedMs - observedNativeExit : -1);
+                qDebug().noquote() << "[B3.4.2.11] NATIVE PROCESS EXIT"
+                    << "native_exit_ms=" << observedNativeExit
+                    << "native_wait_status=" << nativeWaitStatus->load()
+                    << "qt_finished_ms=" << finishedMs
+                    << "native_to_qt_ms="
+                    << (observedNativeExit >= 0 ? finishedMs - observedNativeExit : -1)
+                    << "progress_end_to_native_ms="
+                    << (observedNativeExit >= 0 && *ffmpegProgressEndMs >= 0
+                        ? observedNativeExit - *ffmpegProgressEndMs : -1);
+                // Windows waiter runs independently of Qt event delivery.
+                // A -1 native timestamp means the waiter did not observe exit yet.
+                qDebug().noquote() << "[B3.4.2.10] PROCESS EXIT TIMING"
+                    << "faststart=" << (useFaststart ? "enabled" : "disabled")
+                    << "progress_end_ms=" << *ffmpegProgressEndMs
+                    << "last_stdout_ms=" << *lastStdoutMs
+                    << "last_stderr_ms=" << *lastStderrMs
+                    << "mux_summary_ms=" << *muxSummaryMs
+                    << "bench_ms=" << *benchMs
+                    << "finished_signal_ms=" << finishedMs
+                    << "progress_end_to_finished_ms="
+                    << (*ffmpegProgressEndMs >= 0 ? finishedMs - *ffmpegProgressEndMs : -1)
+                    << "last_stderr_to_finished_ms="
+                    << (*lastStderrMs >= 0 ? finishedMs - *lastStderrMs : -1);
+                // These are Qt event-observation times, not FFmpeg-internal timestamps.
+                metrics->inputClosed = true;
+                // Exclude time spent displaying the modal completion dialog.
+                metrics->ffmpegFinishedMs = finishedMs >= 0
+                    ? finishedMs : metrics->wall.elapsed();
+                metrics->processFinished = true;
+                qDebug().noquote() << "[B3.3.2] FFmpeg finished:"
+                                   << "frames_queued=" << metrics->frames
+                                   << "elapsed_ms=" << metrics->wall.elapsed()
+                                   << "render_ms=" << metrics->renderMs
+                                   << "convert_ms=" << metrics->convertMs;
+                qDebug().noquote()
+                    << "[B3.4.2.1] PERFORMANCE SUMMARY"
+                    << "encoder=" << (useQsv ? "h264_qsv" : "libx264")
+                    << "pixel_pipeline=" << (directRgba ? "direct_rgba" : "stable_conversion")
+                    << "write_batch_frames=" << writeBatchFrames
+                    << "frames=" << metrics->frames << "/" << totalFrames
+                    << "wall_ms=" << (finishedMs >= 0
+                            ? finishedMs : metrics->wall.elapsed())
+                    << "first_frame_ms=" << metrics->firstFrameMs
+                    << "last_frame_queued_ms=" << metrics->lastFrameQueuedMs
+                    << "input_close_requested_ms=" << metrics->inputCloseRequestedMs
+                    << "qt_buffer_drained_ms=" << metrics->qtBufferDrainedMs
+                    << "ffmpeg_finished_ms=" << metrics->ffmpegFinishedMs
+                    << "queue_to_close_ms="
+                    << (metrics->inputCloseRequestedMs >= 0
+                            ? metrics->inputCloseRequestedMs - metrics->lastFrameQueuedMs : -1)
+                    << "close_to_qt_drain_ms="
+                    << (metrics->inputCloseRequestedMs >= 0 && metrics->qtBufferDrainedMs >= 0
+                            ? metrics->qtBufferDrainedMs - metrics->inputCloseRequestedMs : -1)
+                    << "qt_drain_to_finish_ms="
+                    << (metrics->qtBufferDrainedMs >= 0 && metrics->ffmpegFinishedMs >= 0
+                            ? metrics->ffmpegFinishedMs - metrics->qtBufferDrainedMs : -1)
+                    << "render_total_ms=" << metrics->renderMs
+                    << "render_max_ms=" << metrics->renderMaxMs
+                    << "convert_total_ms=" << metrics->convertMs
+                    << "convert_max_ms=" << metrics->convertMaxMs
+                    << "pipe_write_total_ms=" << metrics->pipeWriteMs
+                    << "pipe_write_max_ms=" << metrics->maxPipeWriteMs
+                     << "batch_build_total_ms=" << metrics->batchBuildMs
+                     << "batch_append_total_ms=" << metrics->batchAppendMs
+                     << "batch_append_max_ms=" << metrics->maxBatchAppendMs
+                     << "batch_count=" << metrics->batchCount
+                    << "pipe_bytes=" << metrics->pipeBytes
+                    << "batch_max_bytes=" << metrics->maxBatchBytes
+                    << "qt_max_queued_bytes=" << metrics->maxQueuedBytes
+                    << "bytes_written_signals=" << metrics->bytesWrittenSignals
+                    << "bytes_written_signal_bytes=" << metrics->bytesWrittenSignalBytes
+                    << "backpressure_checks=" << metrics->backpressureChecks
+                    << "pump_noop_count=" << metrics->pumpNoopCount
+                    << "ffmpeg_finish_after_last_queue_ms="
+                    << ((finishedMs >= 0 ? finishedMs : metrics->wall.elapsed())
+                        - metrics->lastFrameQueuedMs);
+                // FFmpeg -benchmark prints aggregate user/system CPU time and peak RSS.
+                // These measurements overlap with rendering and pipe delivery;
+                // they must not be added together as sequential phases.
+            });
+            statusBar()->showMessage("Starting MP4 Spectrum export...", 3000);
+            process->start(ffmpegPath, arguments);
         }
         );
 

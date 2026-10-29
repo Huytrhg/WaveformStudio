@@ -270,10 +270,13 @@ QVector<float> SpectrumAnalyzer::spectrumAt(
         return {};
     }
 
-    const qint64 samplePosition =
-        (qint64(positionMs) * audioSampleRate) / 1000;
+    // B3.3.3: center the FFT window on the media timestamp.
+    // Preview and export share this exact audio sampling convention.
+    const qint64 centerSample =
+        (qint64(qMax(0, positionMs)) * audioSampleRate) / 1000;
+    const qint64 windowStart = qMax<qint64>(0, centerSample - FFT_SIZE / 2);
 
-    return computeSpectrum(samplePosition, bandCount);
+    return computeSpectrum(windowStart, bandCount);
 }
 
 QVector<float> SpectrumAnalyzer::computeSpectrum(

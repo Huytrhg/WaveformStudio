@@ -1,0 +1,72 @@
+name: Windows Qt build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - phase4b-native-gpu-preview
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          modules: qtmultimedia
+
+      - name: Verify Qt installation
+        shell: pwsh
+        run: |
+          if (-not $env:QT_ROOT_DIR) {
+            throw "install-qt-action did not set QT_ROOT_DIR."
+          }
+          if (-not (Test-Path $env:QT_ROOT_DIR)) {
+            throw "Qt root does not exist: $env:QT_ROOT_DIR"
+          }
+          Write-Host "Qt root: $env:QT_ROOT_DIR"
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+
+      - name: Build Debug
+        run: cmake --build build --config Debug --parallel
+
+      - name: Build Release
+        run: cmake --build build --config Release --parallel
+
+      - name: Package Release application
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD "build/Release/WaveformStudio.exe"
+          if (-not (Test-Path $exe)) {
+            throw "Release executable not found: $exe"
+          }
+          $package = Join-Path $PWD "build/package"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          & "$env:QT_ROOT_DIR/bin/windeployqt.exe" --release --multimedia --dir $package $exe
+          if ($LASTEXITCODE -ne 0) {
+            throw "windeployqt failed with exit code $LASTEXITCODE"
+          }
+          Copy-Item $exe $package
+          Copy-Item "PHASE4B1_TEST_GUIDE.txt" $package
+          if (-not (Test-Path (Join-Path $package "WaveformStudio.exe"))) {
+            throw "Packaged executable was not created."
+          }
+
+      - name: Upload runnable Release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: WaveformStudio-Phase4B1-Windows-x64
+          path: build/package/
+          if-no-files-found: error
+          retention-days: 14

@@ -25,7 +25,8 @@ public:
     bool renderColoredRects(int width, int height,
                             const QVector<QRectF> &rects,
                             const QVector<QColor> &colors,
-                            QImage *output, const QImage *background = nullptr);
+                            QImage *output, const QImage *background = nullptr,
+                            const QVector<QColor> *topColors = nullptr);
     QString lastRenderError() const;
     QString runtimeStats() const;
 
@@ -60,6 +61,8 @@ private:
 
 #ifdef Q_OS_WIN
     struct Vertex { float x, y, r, g, b, a; };
+    // Reuse CPU-side vertex storage across frames to avoid repeated allocations.
+    QVector<Vertex> cachedVertices;
     Microsoft::WRL::ComPtr<ID3D11Device> device;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     Microsoft::WRL::ComPtr<ID3D11VertexShader> vertexShader;

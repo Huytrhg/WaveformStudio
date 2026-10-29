@@ -114,7 +114,7 @@ bool GpuRenderer::createPipeline()
     };
     hr = device->CreateInputLayout(layout, ARRAYSIZE(layout), vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), inputLayout.GetAddressOf());
     if (FAILED(hr)) { renderError = QStringLiteral("CreateInputLayout failed: %1").arg(hexResult(hr)); return false; }
-    D3D11_BUFFER_DESC bd{}; bd.ByteWidth = UINT(sizeof(Vertex) * 6 * 128 * 3); bd.Usage = D3D11_USAGE_DYNAMIC;
+    D3D11_BUFFER_DESC bd{}; bd.ByteWidth = UINT(sizeof(Vertex) * 6 * 128 * 6); bd.Usage = D3D11_USAGE_DYNAMIC;
     bd.BindFlags = D3D11_BIND_VERTEX_BUFFER; bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     hr = device->CreateBuffer(&bd, nullptr, vertexBuffer.GetAddressOf());
     if (FAILED(hr)) { renderError = QStringLiteral("CreateBuffer failed: %1").arg(hexResult(hr)); return false; }
@@ -132,7 +132,8 @@ bool GpuRenderer::createPipeline()
 }
 
 bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF> &rects,
-                                     const QVector<QColor> &colors, QImage *output, const QImage *background)
+                                     const QVector<QColor> &colors, QImage *output, const QImage *background,
+                                     const QVector<QColor> *topColors)
 {
 #ifdef Q_OS_WIN
     QElapsedTimer totalTimer; totalTimer.start();
@@ -142,7 +143,8 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
         renderError = QStringLiteral("Invalid render dimensions or rectangle/color arrays."); return false;
     }
     if (!initialize() || !createPipeline()) { ++failedFrames; return false; }
-    if (rects.size() > 128 * 3) { ++failedFrames; renderError = QStringLiteral("Too many rectangles for current vertex buffer."); return false; }
+    if (topColors && topColors->size() != rects.size()) { ++failedFrames; renderError = QStringLiteral("Gradient color count mismatch."); return false; }
+    if (rects.size() > 128 * 6) { ++failedFrames; renderError = QStringLiteral("Too many rectangles for current vertex buffer (maximum 6 per spectrum column)."); return false; }
     // Phase 3: retain the render target, view and staging texture across frames.
     // Rebuild only when the preview size changes. No cross-frame GPU readback is queued.
     QElapsedTimer resourceTimer; resourceTimer.start();
@@ -182,21 +184,27 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     lastResourceMs = resourceTimer.nsecsElapsed() / 1000000.0;
     HRESULT hr = S_OK;
 
-    QVector<Vertex> vertices; vertices.reserve(rects.size() * 6);
+    // Phase 4B.3: retain vector capacity between paints. Rectangle count
+    // changes with glow/column settings, so clear and grow only when needed.
+    cachedVertices.clear();
+    const int requiredVertices = rects.size() * 6;
+    if (cachedVertices.capacity() < requiredVertices)
+        cachedVertices.reserve(requiredVertices);
     auto addVertex = [&](float x, float y, const QColor &c) {
-        vertices.push_back({2.0f * x / float(width) - 1.0f, 1.0f - 2.0f * y / float(height),
-                            float(c.redF()), float(c.greenF()), float(c.blueF()), float(c.alphaF())});
+        cachedVertices.push_back({2.0f * x / float(width) - 1.0f, 1.0f - 2.0f * y / float(height),
+                                  float(c.redF()), float(c.greenF()), float(c.blueF()), float(c.alphaF())});
     };
     for (int i = 0; i < rects.size(); ++i) {
         const QRectF r = rects[i].normalized(); const QColor c = colors[i];
+        const QColor top = topColors ? (*topColors)[i] : c;
         const float x1 = float(r.left()), y1 = float(r.top()), x2 = float(r.right()), y2 = float(r.bottom());
-        addVertex(x1,y1,c); addVertex(x2,y1,c); addVertex(x1,y2,c);
-        addVertex(x1,y2,c); addVertex(x2,y1,c); addVertex(x2,y2,c);
+        addVertex(x1,y1,top); addVertex(x2,y1,top); addVertex(x1,y2,c);
+        addVertex(x1,y2,c); addVertex(x2,y1,top); addVertex(x2,y2,c);
     }
     D3D11_MAPPED_SUBRESOURCE mapped{};
     hr = context->Map(vertexBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
     if (FAILED(hr)) { ++failedFrames; renderError = QStringLiteral("Map vertex buffer failed: %1").arg(hexResult(hr)); return false; }
-    std::memcpy(mapped.pData, vertices.constData(), size_t(vertices.size()) * sizeof(Vertex));
+    std::memcpy(mapped.pData, cachedVertices.constData(), size_t(cachedVertices.size()) * sizeof(Vertex));
     context->Unmap(vertexBuffer.Get(), 0);
 
     // Phase 4A: upload an opaque, CPU-prepared video background into the GPU
@@ -226,7 +234,7 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     context->IASetInputLayout(inputLayout.Get()); context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context->VSSetShader(vertexShader.Get(), nullptr, 0); context->PSSetShader(pixelShader.Get(), nullptr, 0);
-    context->Draw(UINT(vertices.size()), 0);
+    context->Draw(UINT(cachedVertices.size()), 0);
     context->OMSetRenderTargets(0, nullptr, nullptr);
     lastDrawSubmitMs = drawTimer.nsecsElapsed() / 1000000.0;
     QElapsedTimer readbackTimer; readbackTimer.start();

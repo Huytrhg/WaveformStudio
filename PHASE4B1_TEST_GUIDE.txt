@@ -1,0 +1,52 @@
+WaveformStudio — Phase 4B.1 Windows runtime test
+================================================
+
+Package: WaveformStudio-Phase4B1-Windows-x64
+Target: Windows 10/11 x64. Built in CI with Qt 6.8.3 / MSVC 2022.
+
+Before starting
+---------------
+1. Extract the entire ZIP to a normal writable folder. Do not run the EXE from inside the ZIP.
+2. This build currently expects FFmpeg at C:\ffmpeg\bin\ffmpeg.exe.
+   Confirm that exact file exists. The Spectrum Analyzer needs it to animate the bars.
+3. Launch WaveformStudio.exe. If Windows SmartScreen appears, only proceed if you trust
+   the build you downloaded from the WaveformStudio GitHub Actions artifact.
+
+Test checklist
+--------------
+A. Startup
+   [ ] Application opens without crashing.
+   [ ] No missing Qt DLL / platform plugin error.
+   [ ] Help > GPU Renderer Diagnostics opens.
+
+B. Video and spectrum
+   [ ] Import a local MP4 with an audio track.
+   [ ] Video and audio play.
+   [ ] After audio analysis finishes, the spectrum bars move with the sound.
+   [ ] Bars are drawn over the video, not behind it or in a separate black window.
+   [ ] Pause and resume work; seeking to another time works.
+
+C. Native presenter and fallback
+   [ ] The preview remains visible while bars are moving.
+   [ ] Resize the application / preview smaller and larger; no black/blank preview.
+   [ ] Switch Bars -> Waveform -> Circular -> Bars; all three modes remain visible.
+   [ ] If native presentation fails, the preview should fall back rather than crash.
+
+D. Visual controls
+   [ ] Change overlay X/Y position, scale, opacity, colors and column count.
+   [ ] Try glow enabled and disabled.
+   [ ] Check that changes are reflected in the preview.
+
+Report back
+-----------
+Please send:
+- PASS/FAIL for each section (A, B, C, D).
+- Any exact error shown in the status bar or dialog.
+- If possible, a screenshot of the preview and the GPU diagnostics dialog.
+- Whether bars stayed smooth during playback and whether resize caused flicker/black frames.
+
+Important limitation
+--------------------
+A successful GitHub Actions build confirms compilation and packaging only. It cannot
+verify the native D3D11 swap-chain presentation on your actual Intel UHD 730 / Windows
+desktop. Your runtime test is the final acceptance check before merging Phase 4B.1.
