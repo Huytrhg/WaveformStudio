@@ -165,8 +165,13 @@ public:
                            QPointF(cx + qCos(a) * outer, cy + qSin(a) * outer));
             }
         } else {
-            QVector<QPointF> upper, lower;
             const int n = qMax(2, int(bands.size()));
+            // B4.1.5: reserve exact point capacity up front. This avoids
+            // repeated QVector reallocations while constructing every frame's
+            // waveform/filled paths, without changing point order or geometry.
+            QVector<QPointF> upper, lower;
+            upper.reserve(n);
+            lower.reserve(n);
             for (int i = 0; i < n; ++i) {
                 const qreal t = qreal(i) / (n - 1);
                 const qreal taper = s.mode == 3 ?
