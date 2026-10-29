@@ -13,6 +13,7 @@
 #include <QLinearGradient>
 #include <QAbstractItemView>
 #include <algorithm>
+#include <climits>
 #include <QTimer>
 #include <QScrollArea>
 #include <cmath>
@@ -2493,6 +2494,14 @@ MainWindow::MainWindow(QWidget *parent)
                     const qint64 convertStepMs = step.elapsed();
                     metrics->convertMs += convertStepMs;
                     metrics->convertMaxMs = qMax(metrics->convertMaxMs, convertStepMs);
+                    // B4.1.4: reserve the full bounded batch once to avoid
+                    // QByteArray growth/reallocation while appending later frames.
+                    if (framesInBatch == 0) {
+                        const qint64 reserveBytes =
+                            overlay.sizeInBytes() * qint64(writeBatchFrames);
+                        if (reserveBytes > 0 && reserveBytes <= INT_MAX)
+                            batch.reserve(static_cast<int>(reserveBytes));
+                    }
                     QElapsedTimer appendTimer;
                     appendTimer.start();
                     batch.append(reinterpret_cast<const char *>(overlay.constBits()),
