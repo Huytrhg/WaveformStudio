@@ -26,11 +26,11 @@ struct SpectrumRenderSettings {
     bool gradient = true;
     int interpolation = 1;
     qreal gradientPhase = 0;
-    QColor solidColor = QColor("#35B8FF");
+    QColor solidColor = QColor(0x35B8FF);
     QVector<QPair<qreal, QColor>> stops = {
-        {0.0, QColor("#00D5FF")},
-        {0.5, QColor("#376BFF")},
-        {1.0, QColor("#D64DFF")}
+        {0.0, QColor(0x00D5FF)},
+        {0.5, QColor(0x376BFF)},
+        {1.0, QColor(0xD64DFF)}
     };
 };
 
