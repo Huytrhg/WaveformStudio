@@ -2415,6 +2415,10 @@ MainWindow::MainWindow(QWidget *parent)
                 qint64 pipeBytes = 0;
                 qint64 pipeWriteMs = 0;
                 qint64 maxPipeWriteMs = 0;
+                qint64 batchBuildMs = 0;
+                qint64 batchAppendMs = 0;
+                qint64 maxBatchAppendMs = 0;
+                qint64 batchCount = 0;
                 qint64 renderMaxMs = 0;
                 qint64 convertMaxMs = 0;
                 qint64 bytesWrittenSignals = 0;
@@ -2463,6 +2467,8 @@ MainWindow::MainWindow(QWidget *parent)
 
                 // B3.4.2.5 A/B experiment: use a selectable batch size of one or two
                 // frames. Keep the maximum batch bounded and preserve raw frame order.
+                QElapsedTimer batchBuildTimer;
+                batchBuildTimer.start();
                 QByteArray batch;
 
                 int framesInBatch = 0;
@@ -2487,14 +2493,21 @@ MainWindow::MainWindow(QWidget *parent)
                     const qint64 convertStepMs = step.elapsed();
                     metrics->convertMs += convertStepMs;
                     metrics->convertMaxMs = qMax(metrics->convertMaxMs, convertStepMs);
+                    QElapsedTimer appendTimer;
+                    appendTimer.start();
                     batch.append(reinterpret_cast<const char *>(overlay.constBits()),
                                  int(overlay.sizeInBytes()));
+                    const qint64 appendMs = appendTimer.elapsed();
+                    metrics->batchAppendMs += appendMs;
+                    metrics->maxBatchAppendMs = qMax(metrics->maxBatchAppendMs, appendMs);
                     ++framesInBatch;
                 }
 
                 if (framesInBatch == 0)
                     return;
 
+                metrics->batchBuildMs += batchBuildTimer.elapsed();
+                ++metrics->batchCount;
                 metrics->maxBatchBytes = qMax<qint64>(metrics->maxBatchBytes, batch.size());
                 QElapsedTimer pipeStepTimer;
                 pipeStepTimer.start();
@@ -2686,6 +2699,10 @@ MainWindow::MainWindow(QWidget *parent)
                     << "convert_max_ms=" << metrics->convertMaxMs
                     << "pipe_write_total_ms=" << metrics->pipeWriteMs
                     << "pipe_write_max_ms=" << metrics->maxPipeWriteMs
+                     << "batch_build_total_ms=" << metrics->batchBuildMs
+                     << "batch_append_total_ms=" << metrics->batchAppendMs
+                     << "batch_append_max_ms=" << metrics->maxBatchAppendMs
+                     << "batch_count=" << metrics->batchCount
                     << "pipe_bytes=" << metrics->pipeBytes
                     << "batch_max_bytes=" << metrics->maxBatchBytes
                     << "qt_max_queued_bytes=" << metrics->maxQueuedBytes
