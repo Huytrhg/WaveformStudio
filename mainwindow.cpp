@@ -2151,9 +2151,10 @@ MainWindow::MainWindow(QWidget *parent)
             });
             nativeProbe->start();
 
-            connect(process, &QProcess::readyReadStandardOutput, this,
+            // B4.1.6: record FFmpeg-reported progress at 5% milestones.\n            auto lastProgressBucket = std::make_shared<int>(-1);\n            connect(process, &QProcess::readyReadStandardOutput, this,
                     [this, process, progress, ffmpegProgressClock,
-                     lastReportedOutTimeMs, ffmpegProgressEndMs, lastStdoutMs]() {
+                     lastReportedOutTimeMs, ffmpegProgressEndMs, lastStdoutMs,
+                     lastProgressBucket]() {
                 *lastStdoutMs = ffmpegProgressClock->elapsed();
                 const QByteArray output = process->readAllStandardOutput();
                 const QList<QByteArray> lines = output.split('\n');
@@ -2172,6 +2173,16 @@ MainWindow::MainWindow(QWidget *parent)
                                     99
                                     );
                                 progress->setValue(percent);
+                                const int bucket = percent / 5;
+                                if (bucket > *lastProgressBucket) {
+                                    *lastProgressBucket = bucket;
+                                    qDebug().noquote() << "[B4.1.6] FFMPEG PROGRESS"
+                                        << "elapsed_ms=" << ffmpegProgressClock->elapsed()
+                                        << "out_time_ms=" << *lastReportedOutTimeMs
+                                        << "duration_ms=" << durationMs
+                                        << "ui_percent=" << percent
+                                        << "bucket_percent=" << bucket * 5;
+                                }
                             }
                         }
                     } else if (line == "progress=end") {
