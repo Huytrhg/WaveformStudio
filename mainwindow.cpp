@@ -2151,7 +2151,9 @@ MainWindow::MainWindow(QWidget *parent)
             });
             nativeProbe->start();
 
-            // B4.1.6: record FFmpeg-reported progress at 5% milestones.\n            auto lastProgressBucket = std::make_shared<int>(-1);\n            connect(process, &QProcess::readyReadStandardOutput, this,
+            // B4.1.6: record FFmpeg-reported progress at 5% milestones.
+            auto lastProgressBucket = std::make_shared<int>(-1);
+            connect(process, &QProcess::readyReadStandardOutput, this,
                     [this, process, progress, ffmpegProgressClock,
                      lastReportedOutTimeMs, ffmpegProgressEndMs, lastStdoutMs,
                      lastProgressBucket]() {
