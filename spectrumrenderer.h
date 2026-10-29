@@ -129,11 +129,15 @@ public:
             const qreal barW = qMax(0.6, cell * s.thickness / 100.0);
             p.setPen(Qt::NoPen);
 
-            // B4.1.8: isolate Bars-mode CPU costs. Profiling is diagnostic only;
-            // drawing order, geometry, brushes and rendered pixels stay unchanged.
+            // B4.1.9: batch common Bars rendering into one path/draw call.
+            // Preserve the original per-bar path whenever Glow or Peak Hold is active.
             QElapsedTimer barsTimer;
             barsTimer.start();
             qint64 colorNs = 0, geometryNs = 0, glowNs = 0, bodyNs = 0, peakNs = 0;
+            const bool batchBars = (s.glow <= 0 || s.glowIntensity <= 0) &&
+                                   (!s.peakHold || peaks.isEmpty());
+            QPainterPath barsPath;
+            if (batchBars) barsPath.setFillRule(Qt::WindingFill);
             for (int i = 0; i < count; ++i) {
                 QElapsedTimer opTimer;
                 opTimer.start();
@@ -145,29 +149,44 @@ public:
                 opTimer.restart();
                 const QColor c = bandColor(i, count, s);
                 colorNs += opTimer.nsecsElapsed();
-                if (s.glow > 0 && s.glowIntensity > 0) {
-                    opTimer.restart();
-                    QColor halo = c;
-                    halo.setAlpha(qBound(0, qRound(55.0 * s.glow / 100.0 *
-                        s.glowIntensity / 100.0), 55));
-                    p.setBrush(halo);
-                    const qreal r = 0.5 + 4.0 * s.glowRadius / 100.0;
-                    p.drawRoundedRect(bar.adjusted(-r, -r, r, r), 3, 3);
-                    glowNs += opTimer.nsecsElapsed();
-                }
-                opTimer.restart();
-                p.setBrush(c);
-                p.drawRoundedRect(bar, qMin(2.5, barW / 2.0), qMin(2.5, barW / 2.0));
-                bodyNs += opTimer.nsecsElapsed();
-                if (s.peakHold && !peaks.isEmpty()) {
+
+                if (batchBars) {
+                    barsPath.addRoundedRect(bar, qMin(2.5, barW / 2.0),
+                                             qMin(2.5, barW / 2.0));
+                } else {
+                    if (s.glow > 0 && s.glowIntensity > 0) {
+                        opTimer.restart();
+                        QColor halo = c;
+                        halo.setAlpha(qBound(0, qRound(55.0 * s.glow / 100.0 *
+                            s.glowIntensity / 100.0), 55));
+                        p.setBrush(halo);
+                        const qreal r = 0.5 + 4.0 * s.glowRadius / 100.0;
+                        p.drawRoundedRect(bar.adjusted(-r, -r, r, r), 3, 3);
+                        glowNs += opTimer.nsecsElapsed();
+                    }
                     opTimer.restart();
                     p.setBrush(c);
-                    p.drawRect(QRectF(bar.left(), cy - qMax(1.0, sample(peaks,
-                        qreal(i) * (peaks.size() - 1) / qMax(1, count - 1)) * maxH) - 3,
-                        barW, 1.6));
-                    peakNs += opTimer.nsecsElapsed();
+                    p.drawRoundedRect(bar, qMin(2.5, barW / 2.0),
+                                      qMin(2.5, barW / 2.0));
+                    bodyNs += opTimer.nsecsElapsed();
+                    if (s.peakHold && !peaks.isEmpty()) {
+                        opTimer.restart();
+                        p.setBrush(c);
+                        p.drawRect(QRectF(bar.left(), cy - qMax(1.0, sample(peaks,
+                            qreal(i) * (peaks.size() - 1) / qMax(1, count - 1)) * maxH) - 3,
+                            barW, 1.6));
+                        peakNs += opTimer.nsecsElapsed();
+                    }
                 }
             }
+            if (batchBars) {
+                p.setBrush(horizontalGradient());
+                QElapsedTimer drawTimer;
+                drawTimer.start();
+                p.drawPath(barsPath);
+                bodyNs += drawTimer.nsecsElapsed();
+            }
+
             const qint64 barsTotalNs = barsTimer.nsecsElapsed();
             static qint64 barsFrames = 0;
             static qint64 barsGeometryTotal = 0, barsColorTotal = 0;
@@ -181,15 +200,15 @@ public:
             barsPeakTotal += peakNs;
             barsLoopTotal += barsTotalNs;
             if (barsFrames == 1 || barsFrames % 100 == 0) {
-                qDebug().noquote() << "[B4.1.8] BARS PROFILE"
+                qDebug().noquote() << "[B4.1.9] BARS PROFILE"
                     << "frames=" << barsFrames << "columns=" << count
+                    << "batched=" << batchBars
                     << "geometry_total_ms=" << barsGeometryTotal / 1000000.0
                     << "color_total_ms=" << barsColorTotal / 1000000.0
                     << "glow_draw_total_ms=" << barsGlowTotal / 1000000.0
                     << "bar_draw_total_ms=" << barsBodyTotal / 1000000.0
                     << "peak_draw_total_ms=" << barsPeakTotal / 1000000.0
                     << "loop_total_ms=" << barsLoopTotal / 1000000.0;
-            }
         } else if (s.mode == 2) {
             const qreal radius = qMin(stage.width(), stage.height()) * 0.17 * s.scale / 72.0;
             const qreal barMax = qMin(stage.width(), stage.height()) * 0.12 *
