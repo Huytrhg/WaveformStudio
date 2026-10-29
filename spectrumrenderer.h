@@ -128,28 +128,67 @@ public:
             const qreal cell = maxW / count;
             const qreal barW = qMax(0.6, cell * s.thickness / 100.0);
             p.setPen(Qt::NoPen);
+
+            // B4.1.8: isolate Bars-mode CPU costs. Profiling is diagnostic only;
+            // drawing order, geometry, brushes and rendered pixels stay unchanged.
+            QElapsedTimer barsTimer;
+            barsTimer.start();
+            qint64 colorNs = 0, geometryNs = 0, glowNs = 0, bodyNs = 0, peakNs = 0;
             for (int i = 0; i < count; ++i) {
+                QElapsedTimer opTimer;
+                opTimer.start();
                 const qreal idx = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
                 const qreal h = qMax(1.0, sample(bands, idx) * maxH);
                 const QRectF bar(startX + i * cell + (cell - barW) / 2.0,
                                  cy - h, barW, h);
+                geometryNs += opTimer.nsecsElapsed();
+                opTimer.restart();
                 const QColor c = bandColor(i, count, s);
+                colorNs += opTimer.nsecsElapsed();
                 if (s.glow > 0 && s.glowIntensity > 0) {
+                    opTimer.restart();
                     QColor halo = c;
                     halo.setAlpha(qBound(0, qRound(55.0 * s.glow / 100.0 *
                         s.glowIntensity / 100.0), 55));
                     p.setBrush(halo);
                     const qreal r = 0.5 + 4.0 * s.glowRadius / 100.0;
                     p.drawRoundedRect(bar.adjusted(-r, -r, r, r), 3, 3);
+                    glowNs += opTimer.nsecsElapsed();
                 }
+                opTimer.restart();
                 p.setBrush(c);
                 p.drawRoundedRect(bar, qMin(2.5, barW / 2.0), qMin(2.5, barW / 2.0));
+                bodyNs += opTimer.nsecsElapsed();
                 if (s.peakHold && !peaks.isEmpty()) {
+                    opTimer.restart();
                     p.setBrush(c);
                     p.drawRect(QRectF(bar.left(), cy - qMax(1.0, sample(peaks,
                         qreal(i) * (peaks.size() - 1) / qMax(1, count - 1)) * maxH) - 3,
                         barW, 1.6));
+                    peakNs += opTimer.nsecsElapsed();
                 }
+            }
+            const qint64 barsTotalNs = barsTimer.nsecsElapsed();
+            static qint64 barsFrames = 0;
+            static qint64 barsGeometryTotal = 0, barsColorTotal = 0;
+            static qint64 barsGlowTotal = 0, barsBodyTotal = 0, barsPeakTotal = 0;
+            static qint64 barsLoopTotal = 0;
+            ++barsFrames;
+            barsGeometryTotal += geometryNs;
+            barsColorTotal += colorNs;
+            barsGlowTotal += glowNs;
+            barsBodyTotal += bodyNs;
+            barsPeakTotal += peakNs;
+            barsLoopTotal += barsTotalNs;
+            if (barsFrames == 1 || barsFrames % 100 == 0) {
+                qDebug().noquote() << "[B4.1.8] BARS PROFILE"
+                    << "frames=" << barsFrames << "columns=" << count
+                    << "geometry_total_ms=" << barsGeometryTotal / 1000000.0
+                    << "color_total_ms=" << barsColorTotal / 1000000.0
+                    << "glow_draw_total_ms=" << barsGlowTotal / 1000000.0
+                    << "bar_draw_total_ms=" << barsBodyTotal / 1000000.0
+                    << "peak_draw_total_ms=" << barsPeakTotal / 1000000.0
+                    << "loop_total_ms=" << barsLoopTotal / 1000000.0;
             }
         } else if (s.mode == 2) {
             const qreal radius = qMin(stage.width(), stage.height()) * 0.17 * s.scale / 72.0;
