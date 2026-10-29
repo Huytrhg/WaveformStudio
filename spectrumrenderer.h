@@ -17,6 +17,7 @@
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 struct SpectrumRenderSettings {
     int mode = 0; // 0 Bars, 1 Lines, 2 Circular, 3 Filled
@@ -257,7 +258,17 @@ public:
         // B4.1.6: profile stages without changing pixels or paint geometry.
         QElapsedTimer stageTimer;
         stageTimer.start();
-        image.fill(Qt::transparent);
+        // B4.1.7: transparent black is an all-zero pixel for these 32-bit
+        // formats. Clear their contiguous storage directly; retain Qt's
+        // format-aware fill for every other format.
+        if (image.format() == QImage::Format_ARGB32_Premultiplied ||
+            image.format() == QImage::Format_ARGB32) {
+            const qsizetype bytes = image.sizeInBytes();
+            if (bytes > 0)
+                std::memset(image.bits(), 0, size_t(bytes));
+        } else {
+            image.fill(Qt::transparent);
+        }
         const qint64 fillNs = stageTimer.nsecsElapsed();
         stageTimer.restart();
         QPainter painter(&image);
@@ -277,7 +288,7 @@ public:
         endTotal += endNs;
         ++frames;
         if (frames == 1 || frames % 100 == 0) {
-            qDebug().noquote() << "[B4.1.6] PAINT STAGES"
+            qDebug().noquote() << "[B4.1.7] PAINT STAGES"
                 << "frames=" << frames << "mode=" << settings.mode
                 << "fill_total_ms=" << fillTotal / 1000000.0
                 << "begin_total_ms=" << beginTotal / 1000000.0
