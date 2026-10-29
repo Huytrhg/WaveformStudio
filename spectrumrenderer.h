@@ -236,15 +236,31 @@ public:
 
     // Render an RGBA overlay only. Transparent pixels preserve the source video
     // when composited by FFmpeg or another frame encoder.
+    // B4.1.2: render into a caller-owned image so sequential export can reuse
+    // its pixel allocation when dimensions and format remain unchanged.
+    static bool renderOverlayInto(QImage &image, const QSize &size,
+                                  const QVector<float> &bands,
+                                  const SpectrumRenderSettings &settings,
+                                  const QVector<float> &peaks = {},
+                                  QImage::Format outputFormat = QImage::Format_ARGB32_Premultiplied) {
+        if (size.isEmpty() || bands.isEmpty()) return false;
+        if (image.size() != size || image.format() != outputFormat)
+            image = QImage(size, outputFormat);
+        if (image.isNull()) return false;
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        paint(painter, QRectF(QPointF(0, 0), QSizeF(size)), bands, settings, peaks);
+        painter.end();
+        return true;
+    }
+
     static QImage renderOverlay(const QSize &size, const QVector<float> &bands,
                                 const SpectrumRenderSettings &settings,
                                 const QVector<float> &peaks = {},
                                 QImage::Format outputFormat = QImage::Format_ARGB32_Premultiplied) {
-        if (size.isEmpty()) return {};
-        QImage image(size, outputFormat);
-        image.fill(Qt::transparent);
-        QPainter painter(&image);
-        paint(painter, QRectF(QPointF(0, 0), QSizeF(size)), bands, settings, peaks);
+        QImage image;
+        if (!renderOverlayInto(image, size, bands, settings, peaks, outputFormat))
+            return {};
         return image;
     }
 };
