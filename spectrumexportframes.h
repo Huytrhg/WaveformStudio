@@ -110,7 +110,7 @@ public:
                 << "state_max_ms=" << (m_profileStateMaxNs / 1000000.0)
                 << "paint_max_ms=" << (m_profilePaintMaxNs / 1000000.0);
         }
-        return overlay;
+        return m_overlayBuffer;
     }
 
     void setDirectRgba(bool enabled) { m_directRgba = enabled; }
