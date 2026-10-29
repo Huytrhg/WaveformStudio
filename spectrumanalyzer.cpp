@@ -390,10 +390,14 @@ QVector<float> SpectrumAnalyzer::computeSpectrum(
                               ? sum / float(count)
                               : 0.0f;
 
-        // Logarithmic visual response.
-        float value = std::log1p(magnitude * 120.0f)
-                      / std::log1p(120.0f);
-
+        // B4.3.1: compensate gently for bass-heavy music without fabricating
+        // frequencies or mirroring the spectrum. Both preview and export use
+        // this analyzer, so Bars and Circular receive identical balanced data.
+        const float t = (float(band) + 0.5f) / float(bandCount);
+        const float spectralLift = 1.0f + 3.0f * std::pow(t, 1.35f);
+        const float balancedMagnitude = magnitude * spectralLift;
+        const float value = std::log1p(balancedMagnitude * 120.0f)
+                          / std::log1p(120.0f);
         result[band] = qBound(0.0f, value, 1.0f);
     }
 
