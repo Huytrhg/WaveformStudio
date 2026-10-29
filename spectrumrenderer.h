@@ -6,6 +6,8 @@
 // and B3 will use the same drawing path for exported video frames.
 #include <QColor>
 #include <QImage>
+#include <QElapsedTimer>
+#include <QDebug>
 #include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
@@ -252,10 +254,36 @@ public:
         if (image.size() != size || image.format() != outputFormat)
             image = QImage(size, outputFormat);
         if (image.isNull()) return false;
+        // B4.1.6: profile stages without changing pixels or paint geometry.
+        QElapsedTimer stageTimer;
+        stageTimer.start();
         image.fill(Qt::transparent);
+        const qint64 fillNs = stageTimer.nsecsElapsed();
+        stageTimer.restart();
         QPainter painter(&image);
+        const qint64 beginNs = stageTimer.nsecsElapsed();
+        stageTimer.restart();
         paint(painter, QRectF(QPointF(0, 0), QSizeF(size)), bands, settings, peaks);
+        const qint64 drawNs = stageTimer.nsecsElapsed();
+        stageTimer.restart();
         painter.end();
+        const qint64 endNs = stageTimer.nsecsElapsed();
+        // Export calls are sequential; the counters are diagnostic only.
+        static qint64 frames = 0;
+        static qint64 fillTotal = 0, beginTotal = 0, drawTotal = 0, endTotal = 0;
+        fillTotal += fillNs;
+        beginTotal += beginNs;
+        drawTotal += drawNs;
+        endTotal += endNs;
+        ++frames;
+        if (frames == 1 || frames % 100 == 0) {
+            qDebug().noquote() << "[B4.1.6] PAINT STAGES"
+                << "frames=" << frames << "mode=" << settings.mode
+                << "fill_total_ms=" << fillTotal / 1000000.0
+                << "begin_total_ms=" << beginTotal / 1000000.0
+                << "draw_total_ms=" << drawTotal / 1000000.0
+                << "end_total_ms=" << endTotal / 1000000.0;
+        }
         return true;
     }
 
