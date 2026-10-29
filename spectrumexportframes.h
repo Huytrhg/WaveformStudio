@@ -30,6 +30,7 @@ public:
         m_smoothed.clear();
         m_peaks.clear();
         m_peakTicks.clear();
+        m_overlayBuffer = QImage();
         m_profileFrames = 0;
         m_profileSpectrumNs = m_profileStateNs = m_profilePaintNs = 0;
         m_profileSpectrumMaxNs = m_profileStateMaxNs = m_profilePaintMaxNs = 0;
@@ -84,10 +85,13 @@ public:
                 (qreal(index) / m_fps) * m_gradientSpeed / 100.0 * 0.45, 2.0);
         const qint64 stateNs = profileClock.nsecsElapsed();
         profileClock.restart();
-        QImage overlay = SpectrumRenderer::renderOverlay(m_size, m_smoothed, timed,
-                                               timed.peakHold ? m_peaks : QVector<float>(),
-                                               m_directRgba ? QImage::Format_RGBA8888 : QImage::Format_ARGB32_Premultiplied);
+        const QImage::Format outputFormat = m_directRgba
+            ? QImage::Format_RGBA8888 : QImage::Format_ARGB32_Premultiplied;
+        const bool rendered = SpectrumRenderer::renderOverlayInto(
+            m_overlayBuffer, m_size, m_smoothed, timed,
+            timed.peakHold ? m_peaks : QVector<float>(), outputFormat);
         const qint64 paintNs = profileClock.nsecsElapsed();
+        if (!rendered) return {};
         ++m_profileFrames;
         m_profileSpectrumNs += spectrumNs;
         m_profileStateNs += stateNs;
@@ -124,6 +128,7 @@ private:
     QVector<float> m_smoothed;
     QVector<float> m_peaks;
     QVector<int> m_peakTicks;
+    QImage m_overlayBuffer; // Reused across sequential export frames.
     qint64 m_profileFrames = 0;
     qint64 m_profileSpectrumNs = 0, m_profileStateNs = 0, m_profilePaintNs = 0;
     qint64 m_profileSpectrumMaxNs = 0, m_profileStateMaxNs = 0, m_profilePaintMaxNs = 0;
