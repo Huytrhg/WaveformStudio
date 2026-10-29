@@ -209,6 +209,7 @@ public:
                     << "bar_draw_total_ms=" << barsBodyTotal / 1000000.0
                     << "peak_draw_total_ms=" << barsPeakTotal / 1000000.0
                     << "loop_total_ms=" << barsLoopTotal / 1000000.0;
+            }
         } else if (s.mode == 2) {
             const qreal radius = qMin(stage.width(), stage.height()) * 0.17 * s.scale / 72.0;
             const qreal barMax = qMin(stage.width(), stage.height()) * 0.12 *
