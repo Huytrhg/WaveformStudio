@@ -400,6 +400,33 @@ QVector<float> SpectrumAnalyzer::computeSpectrum(
                           / std::log1p(120.0f);
         result[band] = qBound(0.0f, value, 1.0f);
     }
+    // B4.3.1.1: smooth per-frame spectral envelope compensation.
+    // Keep actual FFT peaks; never invent or mirror frequency content.
+    if (bandCount >= 8) {
+        QVector<float> envelope(bandCount, 0.0f);
+        const int radius = qMax(3, bandCount / 10);
+        float total = 0.0f;
+        for (int i = 0; i < bandCount; ++i) {
+            float weighted = 0.0f, weights = 0.0f;
+            for (int j = qMax(0, i - radius); j <= qMin(bandCount - 1, i + radius); ++j) {
+                const float d = float(j - i) / float(radius);
+                const float w = std::exp(-2.0f * d * d);
+                weighted += result[j] * w;
+                weights += w;
+            }
+            envelope[i] = weighted / qMax(0.0001f, weights);
+            total += envelope[i];
+        }
+        const float average = total / float(bandCount);
+        if (average > 0.012f) {
+            for (int i = 0; i < bandCount; ++i) {
+                const float ratio = (average + 0.035f) / (envelope[i] + 0.035f);
+                const float gain = qBound(0.72f, std::pow(ratio, 0.85f), 3.2f);
+                const float adjusted = result[i] * gain;
+                result[i] = qBound(0.0f, 0.18f * result[i] + 0.82f * adjusted, 1.0f);
+            }
+        }
+    }
 
     return result;
 }
