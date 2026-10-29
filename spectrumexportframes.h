@@ -5,6 +5,8 @@
 #include "spectrumrenderer.h"
 
 #include <QImage>
+#include <QElapsedTimer>
+#include <QDebug>
 #include <QSize>
 #include <QVector>
 #include <QtGlobal>
@@ -28,6 +30,9 @@ public:
         m_smoothed.clear();
         m_peaks.clear();
         m_peakTicks.clear();
+        m_profileFrames = 0;
+        m_profileSpectrumNs = m_profileStateNs = m_profilePaintNs = 0;
+        m_profileSpectrumMaxNs = m_profileStateMaxNs = m_profilePaintMaxNs = 0;
     }
 
     qint64 nextFrameIndex() const { return m_nextFrame; }
@@ -43,7 +48,11 @@ public:
             (index * 1000 + m_fps / 2) / m_fps;
         const int timeMs = int(qMin<qint64>(
             presentationMs, m_analyzer->durationMs()));
+        QElapsedTimer profileClock;
+        profileClock.start();
         const QVector<float> target = m_analyzer->spectrumAt(timeMs, 64);
+        const qint64 spectrumNs = profileClock.nsecsElapsed();
+        profileClock.restart();
         if (target.isEmpty()) return {};
         if (m_smoothed.size() != target.size()) {
             m_smoothed = target;
@@ -73,9 +82,31 @@ public:
         timed.gradientPhase = std::fmod(
             m_settings.gradientPhase +
                 (qreal(index) / m_fps) * m_gradientSpeed / 100.0 * 0.45, 2.0);
-        return SpectrumRenderer::renderOverlay(m_size, m_smoothed, timed,
+        const qint64 stateNs = profileClock.nsecsElapsed();
+        profileClock.restart();
+        QImage overlay = SpectrumRenderer::renderOverlay(m_size, m_smoothed, timed,
                                                timed.peakHold ? m_peaks : QVector<float>(),
                                                m_directRgba ? QImage::Format_RGBA8888 : QImage::Format_ARGB32_Premultiplied);
+        const qint64 paintNs = profileClock.nsecsElapsed();
+        ++m_profileFrames;
+        m_profileSpectrumNs += spectrumNs;
+        m_profileStateNs += stateNs;
+        m_profilePaintNs += paintNs;
+        m_profileSpectrumMaxNs = qMax(m_profileSpectrumMaxNs, spectrumNs);
+        m_profileStateMaxNs = qMax(m_profileStateMaxNs, stateNs);
+        m_profilePaintMaxNs = qMax(m_profilePaintMaxNs, paintNs);
+        // Emit occasional cumulative samples without logging every video frame.
+        if (m_profileFrames == 1 || m_profileFrames % 100 == 0) {
+            qDebug().noquote() << "[B4.1.1] RENDER PROFILE"
+                << "frames=" << m_profileFrames
+                << "spectrum_total_ms=" << (m_profileSpectrumNs / 1000000.0)
+                << "state_total_ms=" << (m_profileStateNs / 1000000.0)
+                << "paint_total_ms=" << (m_profilePaintNs / 1000000.0)
+                << "spectrum_max_ms=" << (m_profileSpectrumMaxNs / 1000000.0)
+                << "state_max_ms=" << (m_profileStateMaxNs / 1000000.0)
+                << "paint_max_ms=" << (m_profilePaintMaxNs / 1000000.0);
+        }
+        return overlay;
     }
 
     void setDirectRgba(bool enabled) { m_directRgba = enabled; }
@@ -93,6 +124,9 @@ private:
     QVector<float> m_smoothed;
     QVector<float> m_peaks;
     QVector<int> m_peakTicks;
+    qint64 m_profileFrames = 0;
+    qint64 m_profileSpectrumNs = 0, m_profileStateNs = 0, m_profilePaintNs = 0;
+    qint64 m_profileSpectrumMaxNs = 0, m_profileStateMaxNs = 0, m_profilePaintMaxNs = 0;
 };
 
 #endif // SPECTRUMEXPORTFRAMES_H
