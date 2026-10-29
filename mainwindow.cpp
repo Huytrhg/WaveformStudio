@@ -2448,9 +2448,14 @@ MainWindow::MainWindow(QWidget *parent)
             auto metrics = std::make_shared<ExportMetrics>();
             metrics->wall.start();
 
+            // B4.2: retain the bounded batch allocation between pump calls.
+            // The previous implementation created and destroyed a QByteArray for
+            // every batch, repeatedly allocating the same 1-2 frame buffer.
+            auto batchBuffer = std::make_shared<QByteArray>();
             auto pump = std::make_shared<std::function<void()>>();
             std::weak_ptr<std::function<void()>> weakPump = pump;
-            *pump = [process, frameGenerator, totalFrames, metrics, weakPump, writeBatchFrames]() {
+            *pump = [process, frameGenerator, totalFrames, metrics, weakPump,
+                     writeBatchFrames, batchBuffer]() {
                 metrics->feedScheduled = false;
                 if (metrics->inputClosed || metrics->processFinished ||
                     process->state() != QProcess::Running) {
@@ -2483,7 +2488,8 @@ MainWindow::MainWindow(QWidget *parent)
                 // frames. Keep the maximum batch bounded and preserve raw frame order.
                 QElapsedTimer batchBuildTimer;
                 batchBuildTimer.start();
-                QByteArray batch;
+                QByteArray &batch = *batchBuffer;
+                batch.clear(); // Keeps the capacity for the next batch.
 
                 int framesInBatch = 0;
                 while (framesInBatch < writeBatchFrames &&
@@ -2507,12 +2513,13 @@ MainWindow::MainWindow(QWidget *parent)
                     const qint64 convertStepMs = step.elapsed();
                     metrics->convertMs += convertStepMs;
                     metrics->convertMaxMs = qMax(metrics->convertMaxMs, convertStepMs);
-                    // B4.1.4: reserve the full bounded batch once to avoid
-                    // QByteArray growth/reallocation while appending later frames.
+                    // B4.2: grow the retained buffer only when the current
+                    // batch capacity cannot hold the configured maximum batch.
                     if (framesInBatch == 0) {
                         const qint64 reserveBytes =
                             overlay.sizeInBytes() * qint64(writeBatchFrames);
-                        if (reserveBytes > 0 && reserveBytes <= INT_MAX)
+                        if (reserveBytes > 0 && reserveBytes <= INT_MAX &&
+                            batch.capacity() < reserveBytes)
                             batch.reserve(static_cast<int>(reserveBytes));
                     }
                     QElapsedTimer appendTimer;
