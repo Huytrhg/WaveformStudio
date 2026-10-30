@@ -83,6 +83,9 @@ public:
         timed.gradientPhase = std::fmod(
             m_settings.gradientPhase +
                 (qreal(index) / m_fps) * m_gradientSpeed / 100.0 * 0.45, 2.0);
+        timed.curvePhase = std::fmod(
+            m_settings.curvePhase + (qreal(index) / m_fps) *
+                m_settings.curveTravelSpeed / 100.0 * 0.42, 2.0);
         const qint64 stateNs = profileClock.nsecsElapsed();
         profileClock.restart();
         const QImage::Format outputFormat = m_directRgba
