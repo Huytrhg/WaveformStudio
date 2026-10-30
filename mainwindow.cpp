@@ -413,12 +413,13 @@ protected:
                     // Phase 4C.4: radius and intensity are independent controls.
                     // Four lightweight layers approximate falloff; this is not a Gaussian blur.
                     const qreal strength = (glowPercent / 100.0) * (glowIntensity / 100.0);
-                    const qreal spread = 0.5 + 8.0 * (glowRadius / 100.0);
-                    const qreal layerScale[] = {1.0, 0.74, 0.48, 0.24};
-                    const qreal alphaScale[] = {0.07, 0.12, 0.19, 0.28};
+                    // B4.3.2: broader, softer halo with a brighter inner bloom.
+                    const qreal spread = 1.0 + 12.0 * (glowRadius / 100.0);
+                    const qreal layerScale[] = {1.0, 0.72, 0.46, 0.22};
+                    const qreal alphaScale[] = {0.045, 0.085, 0.16, 0.30};
                     for (int layer = 0; layer < 4; ++layer) {
                         QColor halo = color;
-                        const int alpha = qBound(0, qRound(255.0 * strength * alphaScale[layer]), 36);
+                        const int alpha = qBound(0, qRound(255.0 * strength * alphaScale[layer]), 90);
                         halo.setAlpha(alpha);
                         const qreal radius = spread * layerScale[layer];
                         gpuRects.push_back(bar.adjusted(-radius, -radius, radius, radius));
