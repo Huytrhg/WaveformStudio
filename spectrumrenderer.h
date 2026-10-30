@@ -238,13 +238,16 @@ public:
             const qreal cell = maxW / count;
             const qreal stemWidth = qMax<qreal>(0.75,
                 qMin<qreal>(3.0, stage.width() * 0.0011 * s.thickness / 75.0));
-            const qreal dotRadius = qMax<qreal>(1.8,
-                qMin<qreal>(5.0, stemWidth * 1.55));
+            // Minimum particle diameter is twice the previous default.
+            // The cap grows continuously with its own FFT band energy.
+            const qreal minDotRadius = qMax<qreal>(3.6,
+                qMin<qreal>(10.0, stemWidth * 3.10));
             const qreal strength = s.glow / 100.0 * s.glowIntensity / 100.0;
             const qreal spread = 1.0 + 8.0 * s.glowRadius / 100.0;
             for (int i = 0; i < count; ++i) {
                 const qreal index = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
-                const qreal level = sample(bands, index);
+                const qreal level = qBound(0.0, sample(bands, index), 1.0);
+                const qreal dotRadius = minDotRadius * (1.0 + 0.85 * level);
                 const qreal height = qMax<qreal>(1.0, level * maxH);
                 const qreal x = startX + (i + 0.5) * cell;
                 const qreal y = cy - height;
