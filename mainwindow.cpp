@@ -182,6 +182,7 @@ public:
         setAttribute(Qt::WA_TranslucentBackground, false);
         setAttribute(Qt::WA_AlwaysStackOnTop, false);
         setAutoFillBackground(false);
+        effectClock.start();
         setToolTip("Spectrum Overlay — Bars / Waveform / Circular");
         videoSink = new QVideoSink(this);
         connect(videoSink, &QVideoSink::videoFrameChanged, this,
@@ -236,7 +237,10 @@ public:
                 }
                 changed = true;
             }
-            if (changed) update();
+            if (changed) {
+                gpuBackgroundDirty = true;
+                update();
+            }
         });
         gradientStops = {
             {0.0, QColor("#00D5FF")},
@@ -260,6 +264,22 @@ public:
         }
         targetBands = values;
         if (targetBands.size() > 64) targetBands.resize(64);
+        qreal energySum = 0.0;
+        for (float sample : targetBands) {
+            const qreal v = qBound(0.0, qreal(sample), 1.0);
+            energySum += v * v;
+        }
+        const qreal rawEnergy = targetBands.isEmpty()
+            ? 0.0 : qBound(0.0, qSqrt(energySum / targetBands.size()) * 2.4, 1.0);
+        const auto smoothEnergy = [rawEnergy](qreal previous, int smoothing) {
+            const qreal response = 1.0 - (qBound(0, smoothing, 100) / 100.0) * 0.90;
+            return previous + (rawEnergy - previous) * response;
+        };
+        frameZoomEnergy = smoothEnergy(frameZoomEnergy, zoomSmoothing);
+        frameShakeEnergy = smoothEnergy(frameShakeEnergy, shakeSmoothing);
+        framePulseEnergy = smoothEnergy(framePulseEnergy, pulseSmoothing);
+        frameGradientEnergy = smoothEnergy(frameGradientEnergy, edgeSmoothing);
+        gpuBackgroundDirty = true;
         if (bands.size() != targetBands.size()) {
             bands = targetBands; // First sample: no ramp from stale values.
             peakLevels = targetBands;
@@ -316,6 +336,39 @@ public:
     }
     void setInterpolation(int mode) { interpolation=qBound(0,mode,2); update(); }
 
+    void setAudioZoomEnabled(bool enabled) { audioZoomEnabled = enabled; gpuBackgroundDirty = true; update(); }
+    void setAudioZoomAmount(int value) { zoomAmount = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setAudioZoomSensitivity(int value) { zoomSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setAudioZoomSmoothing(int value) { zoomSmoothing = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+
+    void setAudioShakeEnabled(bool enabled) { audioShakeEnabled = enabled; gpuBackgroundDirty = true; update(); }
+    void setAudioShakeAmount(int value) { shakeAmount = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setAudioShakeSpeed(int value) { shakeSpeed = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setAudioShakeHorizontal(int value) { shakeHorizontal = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setAudioShakeVertical(int value) { shakeVertical = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setAudioShakeSensitivity(int value) { shakeSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setAudioShakeSmoothing(int value) { shakeSmoothing = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+
+    void setExposurePulseEnabled(bool enabled) { exposurePulseEnabled = enabled; gpuBackgroundDirty = true; update(); }
+    void setExposureZoomAmount(int value) { pulseZoomAmount = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setExposureBrightnessAmount(int value) { pulseBrightnessAmount = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setExposureSensitivity(int value) { pulseSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setExposureSmoothing(int value) { pulseSmoothing = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+
+    void setEdgeGlowEnabled(bool enabled) { edgeGlowEnabled = enabled; gpuBackgroundDirty = true; update(); }
+    void setEdgeGlowOpacity(int value) { edgeOpacity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setEdgeGlowSpread(int value) { edgeSpread = qBound(1, value, 50); gpuBackgroundDirty = true; update(); }
+    void setEdgeGlowSensitivity(int value) { edgeSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setEdgeGlowSmoothing(int value) { edgeSmoothing = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setEdgeGlowColors(const QColor &a, const QColor &b, const QColor &c, const QColor &d) {
+        if (a.isValid()) edgeColors[0] = a;
+        if (b.isValid()) edgeColors[1] = b;
+        if (c.isValid()) edgeColors[2] = c;
+        if (d.isValid()) edgeColors[3] = d;
+        gpuBackgroundDirty = true;
+        update();
+    }
+
     void addGradientStop()
     {
         qreal newPos = 0.5;
@@ -351,6 +404,113 @@ public:
     SpectrumRenderSettings exportSettings() const { return currentRenderSettings(); }
     int exportGradientSpeed() const { return gradientSpeed; }
 
+private:
+    qreal effectLevel(qreal smoothed, int sensitivity) const
+    {
+        const qreal gain = 0.25 + qBound(0, sensitivity, 100) / 50.0;
+        return qBound(0.0, smoothed * gain, 1.0);
+    }
+
+    void paintVideoBackground(QPainter &painter, const QRectF &canvas)
+    {
+        painter.fillRect(canvas, QColor("#101114"));
+        if (videoImage.isNull() || canvas.width() < 2 || canvas.height() < 2)
+            return;
+
+        const QSizeF sourceSize(videoImage.size());
+        const qreal scale = qMin(canvas.width() / sourceSize.width(),
+                                 canvas.height() / sourceSize.height());
+        const QSizeF fitted(sourceSize.width() * scale, sourceSize.height() * scale);
+        const QRectF target(canvas.center().x() - fitted.width() / 2.0,
+                            canvas.center().y() - fitted.height() / 2.0,
+                            fitted.width(), fitted.height());
+
+        qreal zoom = 1.0;
+        if (audioZoomEnabled)
+            zoom += 0.16 * (zoomAmount / 100.0) *
+                    effectLevel(frameZoomEnergy, zoomSensitivity);
+        if (exposurePulseEnabled)
+            zoom += 0.10 * (pulseZoomAmount / 100.0) *
+                    effectLevel(framePulseEnergy, pulseSensitivity);
+
+        const qreal shakeLevel = audioShakeEnabled
+            ? effectLevel(frameShakeEnergy, shakeSensitivity) * (shakeAmount / 100.0)
+            : 0.0;
+        const qreal time = effectClock.isValid() ? effectClock.elapsed() / 1000.0 : 0.0;
+        const qreal shakePhase = time * (1.0 + shakeSpeed * 0.22);
+        const qreal shakeX = qSin(shakePhase * 6.28318530718) *
+                             target.width() * 0.025 * shakeLevel * (shakeHorizontal / 100.0);
+        const qreal shakeY = qCos(shakePhase * 7.3) *
+                             target.height() * 0.025 * shakeLevel * (shakeVertical / 100.0);
+
+        if (audioShakeEnabled && shakeLevel > 0.001)
+            zoom = qMax(zoom, 1.055); // Overscan prevents black edges during shake.
+
+        painter.save();
+        painter.setClipRect(target);
+        painter.translate(target.center().x() + shakeX, target.center().y() + shakeY);
+        painter.scale(zoom, zoom);
+        painter.translate(-target.center().x(), -target.center().y());
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter.drawImage(target, videoImage);
+        painter.restore();
+
+        if (exposurePulseEnabled) {
+            const qreal level = effectLevel(framePulseEnergy, pulseSensitivity);
+            const qreal alpha = 0.28 * (pulseBrightnessAmount / 100.0) * level;
+            if (alpha > 0.001) {
+                painter.save();
+                painter.setClipRect(target);
+                painter.fillRect(target, QColor(255, 255, 255,
+                    qBound(0, qRound(alpha * 255.0), 72)));
+                painter.restore();
+            }
+        }
+
+        if (edgeGlowEnabled) {
+            const qreal level = effectLevel(frameGradientEnergy, edgeSensitivity);
+            const qreal strength = (edgeOpacity / 100.0) * level;
+            if (strength > 0.001) {
+                const qreal edgeWidth = qMin(target.width(), target.height()) *
+                                        (edgeSpread / 100.0);
+                const auto withAlpha = [strength](QColor color, qreal factor) {
+                    color.setAlphaF(qBound(0.0, strength * factor, 0.85));
+                    return color;
+                };
+                const QColor clear(0, 0, 0, 0);
+                const QRectF topRect(target.left(), target.top(), target.width(), edgeWidth);
+                const QRectF bottomRect(target.left(), target.bottom() - edgeWidth, target.width(), edgeWidth);
+                const QRectF leftRect(target.left(), target.top(), edgeWidth, target.height());
+                const QRectF rightRect(target.right() - edgeWidth, target.top(), edgeWidth, target.height());
+
+                QLinearGradient topGradient(topRect.topLeft(), topRect.bottomLeft());
+                topGradient.setColorAt(0.0, withAlpha(edgeColors[0], 1.0));
+                topGradient.setColorAt(0.35, withAlpha(edgeColors[0], 0.48));
+                topGradient.setColorAt(1.0, clear);
+                QLinearGradient bottomGradient(bottomRect.bottomLeft(), bottomRect.topLeft());
+                bottomGradient.setColorAt(0.0, withAlpha(edgeColors[2], 1.0));
+                bottomGradient.setColorAt(0.35, withAlpha(edgeColors[2], 0.48));
+                bottomGradient.setColorAt(1.0, clear);
+                QLinearGradient leftGradient(leftRect.topLeft(), leftRect.topRight());
+                leftGradient.setColorAt(0.0, withAlpha(edgeColors[1], 1.0));
+                leftGradient.setColorAt(0.35, withAlpha(edgeColors[1], 0.48));
+                leftGradient.setColorAt(1.0, clear);
+                QLinearGradient rightGradient(rightRect.topRight(), rightRect.topLeft());
+                rightGradient.setColorAt(0.0, withAlpha(edgeColors[3], 1.0));
+                rightGradient.setColorAt(0.35, withAlpha(edgeColors[3], 0.48));
+                rightGradient.setColorAt(1.0, clear);
+
+                painter.save();
+                painter.setClipRect(target);
+                painter.fillRect(topRect, topGradient);
+                painter.fillRect(bottomRect, bottomGradient);
+                painter.fillRect(leftRect, leftGradient);
+                painter.fillRect(rightRect, rightGradient);
+                painter.restore();
+            }
+        }
+    }
+
 protected:
     void paintEvent(QPaintEvent *) override
     {
@@ -375,13 +535,7 @@ protected:
         p.fillRect(rect(), QColor("#101114"));
         // Paint the video frame and the audio visualization in the SAME widget.
         // This avoids QVideoWidget's native surface covering the overlay.
-        if (!videoImage.isNull()) {
-            const QSize fitted = videoImage.size().scaled(size(), Qt::KeepAspectRatio);
-            const QRect target((width() - fitted.width()) / 2,
-                               (height() - fitted.height()) / 2,
-                               fitted.width(), fitted.height());
-            p.drawImage(target, videoImage);
-        }
+        paintVideoBackground(p, QRectF(rect()));
         if (!message.isEmpty()) {
             p.setPen(QColor(235, 238, 242, 210));
             p.drawText(rect().adjusted(10, 10, -10, -10), Qt::AlignCenter, message);
@@ -547,13 +701,10 @@ protected:
                 || cachedGpuBackground.format() != QImage::Format_ARGB32) {
                 cachedGpuBackground = QImage(size(), QImage::Format_ARGB32);
                 cachedGpuBackground.fill(QColor("#101114"));
-                if (!videoImage.isNull()) {
+                {
                     QPainter bgPainter(&cachedGpuBackground);
-                    const QSize fitted = videoImage.size().scaled(size(), Qt::KeepAspectRatio);
-                    const QRect target((width() - fitted.width()) / 2,
-                                       (height() - fitted.height()) / 2,
-                                       fitted.width(), fitted.height());
-                    bgPainter.drawImage(target, videoImage);
+                    bgPainter.setRenderHint(QPainter::Antialiasing, true);
+                    paintVideoBackground(bgPainter, QRectF(cachedGpuBackground.rect()));
                 }
                 gpuBackgroundDirty = false;
                 ++gpuBackgroundBuilds;
@@ -740,6 +891,24 @@ private:
     int curveReleaseSpeed;
     qreal curvePhase;
     QVector<QPair<qreal, QColor>> gradientStops;
+
+    bool audioZoomEnabled = false;
+    int zoomAmount = 30, zoomSensitivity = 60, zoomSmoothing = 65;
+    qreal frameZoomEnergy = 0.0;
+    bool audioShakeEnabled = false;
+    int shakeAmount = 20, shakeSpeed = 50, shakeHorizontal = 50, shakeVertical = 50;
+    int shakeSensitivity = 60, shakeSmoothing = 70;
+    qreal frameShakeEnergy = 0.0;
+    bool exposurePulseEnabled = false;
+    int pulseZoomAmount = 20, pulseBrightnessAmount = 25;
+    int pulseSensitivity = 60, pulseSmoothing = 70;
+    qreal framePulseEnergy = 0.0;
+    bool edgeGlowEnabled = false;
+    int edgeOpacity = 35, edgeSpread = 18, edgeSensitivity = 60, edgeSmoothing = 75;
+    qreal frameGradientEnergy = 0.0;
+    QColor edgeColors[4] = {QColor("#00D5FF"), QColor("#376BFF"),
+                            QColor("#D64DFF"), QColor("#00D5FF")};
+    QElapsedTimer effectClock;
 
     QColor colorAt(qreal t) const
     {
@@ -1658,6 +1827,123 @@ MainWindow::MainWindow(QWidget *parent)
     });
     connect(opacitySlider, &QSlider::valueChanged, this, [overlay, opacityValueLabel](int value) {
         opacityValueLabel->setText(QString::number(value) + "%"); overlay->setOpacityPercent(value);
+    });
+
+    // Whole-frame effects. These affect the video background before Spectrum is drawn.
+    QFrame *frameEffectsDivider = new QFrame;
+    frameEffectsDivider->setFrameShape(QFrame::HLine);
+    frameEffectsDivider->setStyleSheet("color:#45474C;");
+    propertiesLayout->addWidget(frameEffectsDivider);
+
+    QLabel *frameEffectsTitle = new QLabel("FRAME EFFECTS");
+    frameEffectsTitle->setObjectName("sectionTitle");
+    propertiesLayout->addWidget(frameEffectsTitle);
+
+    QCheckBox *audioZoomToggle = new QCheckBox("1 · Audio Zoom");
+    audioZoomToggle->setToolTip("Zoom the entire video frame with audio energy.");
+    propertiesLayout->addWidget(audioZoomToggle);
+    addWaveSlider("Zoom Amount", 0, 100, 30, "%", [this](int v) {
+        spectrumOverlay->setAudioZoomAmount(v); spectrumDisplay->setAudioZoomAmount(v);
+    });
+    addWaveSlider("Zoom Sensitivity", 0, 100, 60, "%", [this](int v) {
+        spectrumOverlay->setAudioZoomSensitivity(v); spectrumDisplay->setAudioZoomSensitivity(v);
+    });
+    addWaveSlider("Zoom Smoothing", 0, 100, 65, "%", [this](int v) {
+        spectrumOverlay->setAudioZoomSmoothing(v); spectrumDisplay->setAudioZoomSmoothing(v);
+    });
+
+    QCheckBox *audioShakeToggle = new QCheckBox("2 · Audio Shake");
+    audioShakeToggle->setToolTip("Shake the entire video frame in response to audio.");
+    propertiesLayout->addWidget(audioShakeToggle);
+    addWaveSlider("Shake Amount", 0, 100, 20, "%", [this](int v) {
+        spectrumOverlay->setAudioShakeAmount(v); spectrumDisplay->setAudioShakeAmount(v);
+    });
+    addWaveSlider("Shake Speed", 0, 100, 50, "%", [this](int v) {
+        spectrumOverlay->setAudioShakeSpeed(v); spectrumDisplay->setAudioShakeSpeed(v);
+    });
+    addWaveSlider("Horizontal Shake", 0, 100, 50, "%", [this](int v) {
+        spectrumOverlay->setAudioShakeHorizontal(v); spectrumDisplay->setAudioShakeHorizontal(v);
+    });
+    addWaveSlider("Vertical Shake", 0, 100, 50, "%", [this](int v) {
+        spectrumOverlay->setAudioShakeVertical(v); spectrumDisplay->setAudioShakeVertical(v);
+    });
+    addWaveSlider("Shake Sensitivity", 0, 100, 60, "%", [this](int v) {
+        spectrumOverlay->setAudioShakeSensitivity(v); spectrumDisplay->setAudioShakeSensitivity(v);
+    });
+    addWaveSlider("Shake Smoothing", 0, 100, 70, "%", [this](int v) {
+        spectrumOverlay->setAudioShakeSmoothing(v); spectrumDisplay->setAudioShakeSmoothing(v);
+    });
+
+    QCheckBox *exposurePulseToggle = new QCheckBox("3 · Zoom + Exposure Pulse");
+    exposurePulseToggle->setToolTip("Combine audio zoom with a soft brightness flash.");
+    propertiesLayout->addWidget(exposurePulseToggle);
+    addWaveSlider("Pulse Zoom", 0, 100, 20, "%", [this](int v) {
+        spectrumOverlay->setExposureZoomAmount(v); spectrumDisplay->setExposureZoomAmount(v);
+    });
+    addWaveSlider("Brightness Pulse", 0, 100, 25, "%", [this](int v) {
+        spectrumOverlay->setExposureBrightnessAmount(v); spectrumDisplay->setExposureBrightnessAmount(v);
+    });
+    addWaveSlider("Pulse Sensitivity", 0, 100, 60, "%", [this](int v) {
+        spectrumOverlay->setExposureSensitivity(v); spectrumDisplay->setExposureSensitivity(v);
+    });
+    addWaveSlider("Pulse Smoothing", 0, 100, 70, "%", [this](int v) {
+        spectrumOverlay->setExposureSmoothing(v); spectrumDisplay->setExposureSmoothing(v);
+    });
+
+    QCheckBox *edgeGlowToggle = new QCheckBox("4 · Gradient Edge Glow");
+    edgeGlowToggle->setToolTip("Soft semi-transparent gradient that fades inward from the video edges.");
+    propertiesLayout->addWidget(edgeGlowToggle);
+    addWaveSlider("Edge Opacity", 0, 100, 35, "%", [this](int v) {
+        spectrumOverlay->setEdgeGlowOpacity(v); spectrumDisplay->setEdgeGlowOpacity(v);
+    });
+    addWaveSlider("Edge Spread", 1, 50, 18, "%", [this](int v) {
+        spectrumOverlay->setEdgeGlowSpread(v); spectrumDisplay->setEdgeGlowSpread(v);
+    });
+    addWaveSlider("Edge Sensitivity", 0, 100, 60, "%", [this](int v) {
+        spectrumOverlay->setEdgeGlowSensitivity(v); spectrumDisplay->setEdgeGlowSensitivity(v);
+    });
+    addWaveSlider("Edge Smoothing", 0, 100, 75, "%", [this](int v) {
+        spectrumOverlay->setEdgeGlowSmoothing(v); spectrumDisplay->setEdgeGlowSmoothing(v);
+    });
+
+    QHBoxLayout *edgeColorRow = new QHBoxLayout;
+    edgeColorRow->addWidget(new QLabel("Gradient Colors"));
+    const QStringList edgeColorNames = {"Top", "Left", "Bottom", "Right"};
+    const QColor edgeDefaults[] = {QColor("#00D5FF"), QColor("#376BFF"),
+                                   QColor("#D64DFF"), QColor("#00D5FF")};
+    for (int colorIndex = 0; colorIndex < 4; ++colorIndex) {
+        QPushButton *colorPick = new QPushButton(edgeColorNames[colorIndex]);
+        colorPick->setMaximumWidth(64);
+        colorPick->setStyleSheet(QString("background:%1;color:#101114;")
+                                 .arg(edgeDefaults[colorIndex].name()));
+        edgeColorRow->addWidget(colorPick);
+        connect(colorPick, &QPushButton::clicked, this,
+                [this, colorPick, colorIndex]() {
+            static QColor stored[4] = {QColor("#00D5FF"), QColor("#376BFF"),
+                                       QColor("#D64DFF"), QColor("#00D5FF")};
+            const QColor color = QColorDialog::getColor(stored[colorIndex], this,
+                                                         "Choose Edge Gradient Color");
+            if (!color.isValid()) return;
+            stored[colorIndex] = color;
+            colorPick->setStyleSheet(QString("background:%1;color:#101114;")
+                                     .arg(color.name()));
+            spectrumOverlay->setEdgeGlowColors(stored[0], stored[1], stored[2], stored[3]);
+            spectrumDisplay->setEdgeGlowColors(stored[0], stored[1], stored[2], stored[3]);
+        });
+    }
+    propertiesLayout->addLayout(edgeColorRow);
+
+    connect(audioZoomToggle, &QCheckBox::toggled, this, [this](bool v) {
+        spectrumOverlay->setAudioZoomEnabled(v); spectrumDisplay->setAudioZoomEnabled(v);
+    });
+    connect(audioShakeToggle, &QCheckBox::toggled, this, [this](bool v) {
+        spectrumOverlay->setAudioShakeEnabled(v); spectrumDisplay->setAudioShakeEnabled(v);
+    });
+    connect(exposurePulseToggle, &QCheckBox::toggled, this, [this](bool v) {
+        spectrumOverlay->setExposurePulseEnabled(v); spectrumDisplay->setExposurePulseEnabled(v);
+    });
+    connect(edgeGlowToggle, &QCheckBox::toggled, this, [this](bool v) {
+        spectrumOverlay->setEdgeGlowEnabled(v); spectrumDisplay->setEdgeGlowEnabled(v);
     });
 
     propertiesLayout->addStretch();
