@@ -422,12 +422,27 @@ protected:
                         + qreal(bands[hi]) * (sourceIndex - lo), 1.0));
                 }
                 std::sort(particleLevels.begin(), particleLevels.end(), std::greater<qreal>());
-                QVector<qreal> interleaved(count);
-                int low = count - 1, high = 0;
+                // Stable pseudo-random placement looks organic without frame-to-frame flicker.
+                QVector<int> order;
+                order.reserve(count);
                 for (int i = 0; i < count; ++i)
-                    interleaved[i] = (i % 2 == 0)
-                        ? particleLevels[high++] : particleLevels[low--];
-                particleLevels.swap(interleaved);
+                    order.push_back(i);
+                const auto particleHash = [](quint32 x) {
+                    x ^= x >> 16;
+                    x *= 0x7feb352dU;
+                    x ^= x >> 15;
+                    x *= 0x846ca68bU;
+                    x ^= x >> 16;
+                    return x;
+                };
+                std::sort(order.begin(), order.end(), [&](int lhs, int rhs) {
+                    return particleHash(quint32(lhs) + 0x9e3779b9U)
+                         < particleHash(quint32(rhs) + 0x9e3779b9U);
+                });
+                QVector<qreal> randomized(count);
+                for (int i = 0; i < count; ++i)
+                    randomized[order[i]] = particleLevels[i];
+                particleLevels.swap(randomized);
             }
             for (int i = 0; i < count; ++i) {
                 qreal v;
