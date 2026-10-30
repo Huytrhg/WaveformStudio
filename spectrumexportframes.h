@@ -62,7 +62,10 @@ public:
         } else {
             for (int i = 0; i < target.size(); ++i) {
                 const float delta = target[i] - m_smoothed[i];
-                const float response = delta > 0.0f ? 0.52f : 0.32f;
+                const float response = delta > 0.0f ? 0.52f :
+                    (m_settings.mode == 1
+                        ? float(0.08 + 0.92 * m_settings.curveReleaseSpeed / 100.0)
+                        : 0.32f);
                 m_smoothed[i] = std::abs(delta) < 0.0005f
                     ? target[i] : m_smoothed[i] + delta * response;
                 if (m_settings.peakHold) {
