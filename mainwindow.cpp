@@ -264,40 +264,35 @@ public:
         }
         targetBands = values;
         if (targetBands.size() > 64) targetBands.resize(64);
-        // Drive frame motion from low-frequency drum energy instead of the full spectrum.
-        // The lower ~22% of ordered bands emphasize kick, toms and lower snare content.
-        qreal bassEnergySum = 0.0;
-        const int bassBandCount = targetBands.isEmpty()
-            ? 0 : qBound(1, int(qCeil(targetBands.size() * 0.22)), targetBands.size());
-        for (int i = 0; i < bassBandCount; ++i) {
-            const qreal v = qBound(0.0, qreal(targetBands[i]), 1.0);
-            const qreal weight = 1.0 - (qreal(i) / qMax(1, bassBandCount)) * 0.35;
-            bassEnergySum += v * v * weight;
-        }
-        const qreal bassRms = bassBandCount > 0
-            ? qBound(0.0, qSqrt(bassEnergySum / bassBandCount) * 2.8, 1.0) : 0.0;
-        // Detect a drum hit as a quick rise, then ease the movement back smoothly.
-        const qreal bassOnset = qBound(0.0, bassRms - previousBassEnergy, 1.0);
-        previousBassEnergy = bassRms;
-        const qreal drumTarget = qBound(0.0, bassRms * 0.78 + bassOnset * 0.65, 1.0);
-        const auto drumEnvelope = [drumTarget](qreal previous, int smoothing) {
-            const qreal smooth = qBound(0, smoothing, 100) / 100.0;
-            const qreal attack = 0.72 - smooth * 0.38;
-            const qreal release = 0.34 - smooth * 0.27;
-            const qreal response = drumTarget > previous ? attack : release;
-            return previous + (drumTarget - previous) * response;
-        };
-        frameZoomEnergy = drumEnvelope(frameZoomEnergy, zoomSmoothing);
-        frameShakeEnergy = drumEnvelope(frameShakeEnergy, shakeSmoothing);
-
-        // Exposure pulse and edge glow continue to use broad musical energy.
+        // React to prominent energy peaks across the entire spectrum, not bass alone.
         qreal energySum = 0.0;
         for (float sample : targetBands) {
             const qreal v = qBound(0.0, qreal(sample), 1.0);
             energySum += v * v;
         }
-        const qreal rawEnergy = targetBands.isEmpty()
+        const qreal fullEnergy = targetBands.isEmpty()
             ? 0.0 : qBound(0.0, qSqrt(energySum / targetBands.size()) * 2.4, 1.0);
+        // Adaptive loudness baseline distinguishes rhythmic accents from sustained sound.
+        const qreal baselineRate = fullEnergy > frameEnergyBaseline ? 0.035 : 0.012;
+        frameEnergyBaseline += (fullEnergy - frameEnergyBaseline) * baselineRate;
+        const qreal positiveOnset = qMax(0.0, fullEnergy - previousFullEnergy);
+        previousFullEnergy = fullEnergy;
+        const qreal prominence = qMax(0.0, fullEnergy - frameEnergyBaseline);
+        const qreal transient = qBound(0.0, prominence * 2.4 + positiveOnset * 2.0, 1.0);
+        const auto motionEnvelope = [transient](qreal previous, int smoothing, bool shake) {
+            const qreal smooth = qBound(0, smoothing, 100) / 100.0;
+            const qreal attack = shake ? (0.85 - smooth * 0.25)
+                                       : (0.70 - smooth * 0.27);
+            const qreal release = shake ? (0.42 - smooth * 0.31)
+                                        : (0.26 - smooth * 0.20);
+            const qreal response = transient > previous ? attack : release;
+            return previous + (transient - previous) * response;
+        };
+        frameZoomEnergy = motionEnvelope(frameZoomEnergy, zoomSmoothing, false);
+        frameShakeEnergy = motionEnvelope(frameShakeEnergy, shakeSmoothing, true);
+
+        // Exposure pulse and edge glow continue to use broad musical energy.
+        const qreal rawEnergy = fullEnergy;
         const auto smoothEnergy = [rawEnergy](qreal previous, int smoothing) {
             const qreal response = 1.0 - (qBound(0, smoothing, 100) / 100.0) * 0.90;
             return previous + (rawEnergy - previous) * response;
@@ -920,7 +915,8 @@ private:
     bool audioZoomEnabled = false;
     int zoomAmount = 30, zoomSensitivity = 60, zoomSmoothing = 65;
     qreal frameZoomEnergy = 0.0;
-    qreal previousBassEnergy = 0.0;
+    qreal previousFullEnergy = 0.0;
+    qreal frameEnergyBaseline = 0.0;
     bool audioShakeEnabled = false;
     int shakeAmount = 20, shakeSpeed = 50, shakeHorizontal = 50, shakeVertical = 50;
     int shakeSensitivity = 60, shakeSmoothing = 70;
