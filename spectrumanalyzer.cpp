@@ -428,5 +428,49 @@ QVector<float> SpectrumAnalyzer::computeSpectrum(
         }
     }
 
+    // B4.3.1.2: add a few musical accent peaks to underrepresented regions.
+    // This is deliberately a visual enhancement, not a literal FFT reading.
+    // Existing values are never reduced. Candidate bands must already contain
+    // signal; deterministic time-based motion keeps Preview/Export consistent.
+    if (bandCount >= 16) {
+        const QVector<float> original = result;
+        float maximum = 0.0f;
+        for (float v : original) maximum = qMax(maximum, v);
+        if (maximum > 0.045f) {
+            const int sectors = qBound(3, bandCount / 12, 8);
+            const int tick = qMax(0, positionMs) / 180;
+            for (int sector = 0; sector < sectors; ++sector) {
+                const int begin = sector * bandCount / sectors;
+                const int end = (sector + 1) * bandCount / sectors;
+                float localMax = 0.0f;
+                for (int i = begin; i < end; ++i)
+                    localMax = qMax(localMax, original[i]);
+                if (localMax >= maximum * 0.70f) continue;
+                int selected = -1;
+                float best = -1.0f;
+                for (int i = begin + 1; i < end - 1; ++i) {
+                    if (original[i] < 0.018f) continue;
+                    // Stable, slowly changing preference for different bands.
+                    const unsigned int seed = unsigned(i * 2654435761u)
+                        ^ unsigned((tick / 4) * 2246822519u);
+                    const float variation = float((seed ^ (seed >> 13)) % 1000u) / 1000.0f;
+                    const float score = original[i] * (0.65f + 0.35f * variation);
+                    if (score > best) { best = score; selected = i; }
+                }
+                if (selected < 0) continue;
+                const float activity = qBound(0.0f, original[selected] / 0.12f, 1.0f);
+                const float accent = qMin(maximum * 0.83f,
+                    original[selected] + (maximum * 0.83f - localMax) * 0.72f * activity);
+                result[selected] = qMax(result[selected], accent);
+                // Small shoulder makes the accent look less like a single spike.
+                for (int delta : {-1, 1}) {
+                    const int neighbor = selected + delta;
+                    if (neighbor >= begin && neighbor < end && original[neighbor] > 0.012f)
+                        result[neighbor] = qMax(result[neighbor], accent * 0.42f);
+                }
+            }
+        }
+    }
+
     return result;
 }
