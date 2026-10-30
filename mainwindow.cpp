@@ -204,14 +204,16 @@ public:
         // Phase 4D.1: animate between 20 Hz FFT samples at ~30 Hz.
         // Stop the animation when the analyzer clears its bands.
         motionTimer = new QTimer(this);
-        motionTimer->setInterval(33);
+        motionTimer->setInterval(16);
         connect(motionTimer, &QTimer::timeout, this, [this]() {
             if (targetBands.isEmpty()) { motionTimer->stop(); return; }
             bool changed = false;
             for (int i = 0; i < bands.size(); ++i) {
                 const float delta = targetBands[i] - bands[i];
-                const float response = delta > 0.0f ? 0.52f :
-                    (visualMode == 1 ? float(0.08 + 0.92 * curveReleaseSpeed / 100.0) : 0.32f);
+                const float response = visualMode == 4
+                    ? (delta > 0.0f ? 0.34f : 0.22f)
+                    : (delta > 0.0f ? 0.52f :
+                        (visualMode == 1 ? float(0.08 + 0.92 * curveReleaseSpeed / 100.0) : 0.32f));
                 const float next = std::abs(delta) < 0.0005f
                     ? targetBands[i] : bands[i] + delta * response;
                 if (next != bands[i]) { bands[i] = next; changed = true; }
@@ -450,11 +452,9 @@ protected:
                     halo.setAlphaF(qBound(0.0,
                         glowPercent / 100.0 * glowIntensity / 100.0 * 0.14, 1.0));
                     const qreal spread = 1.0 + 5.0 * glowRadius / 100.0;
-                    gpuRects.push_back(bar.adjusted(-spread, 0, spread, 0));
-                    gpuColors.push_back(halo);
-                    gpuTopColors.push_back(halo);
-                    const qreal minDotR = qMax<qreal>(3.6, qMin<qreal>(10.0, barW * 3.10));
+                    const qreal minDotR = qMax<qreal>(1.8, qMin<qreal>(5.0, barW * 1.55));
                     const qreal dotR = minDotR * (1.0 + 0.85 * v);
+                    // Glow is rendered around the particle cap only, never the stem.
                     gpuRects.push_back(QRectF(bar.center().x() - dotR - spread,
                         bar.top() - dotR - spread, 2 * (dotR + spread), 2 * (dotR + spread)));
                     gpuColors.push_back(halo);
@@ -466,7 +466,7 @@ protected:
                 if (visualMode == 4) {
                     // GPU-friendly circle silhouette: three stacked rectangles.
                     // Four primitives per particle (stem + 3 cap strips).
-                    const qreal minDotR = qMax<qreal>(3.6, qMin<qreal>(10.0, barW * 3.10));
+                    const qreal minDotR = qMax<qreal>(1.8, qMin<qreal>(5.0, barW * 1.55));
                     const qreal dotR = minDotR * (1.0 + 0.85 * v);
                     const qreal dotX = bar.center().x();
                     const qreal dotY = bar.top();
@@ -1264,7 +1264,7 @@ MainWindow::MainWindow(QWidget *parent)
     QLabel *styleLabel = new QLabel("Visualization Style");
     propertiesLayout->addWidget(styleLabel);
     QComboBox *visualModeCombo = new QComboBox;
-    visualModeCombo->addItems({"A · Vertical Bars", "B · Waveform Lines", "C · Circular", "D · Filled Waveform", "E · Dancing Particles (Hạt nhảy)"});
+    visualModeCombo->addItems({"A · Vertical Bars", "B · Waveform Lines", "C · Circular", "D · Filled Waveform", "E · Dancing Particles"});
     visualModeCombo->setCurrentIndex(0);
     propertiesLayout->addWidget(visualModeCombo);
 
