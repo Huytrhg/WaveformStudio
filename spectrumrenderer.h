@@ -240,8 +240,8 @@ public:
                 qMin<qreal>(3.0, stage.width() * 0.0011 * s.thickness / 75.0));
             // Minimum particle diameter is twice the previous default.
             // The cap grows continuously with its own FFT band energy.
-            const qreal minDotRadius = qMax<qreal>(3.6,
-                qMin<qreal>(10.0, stemWidth * 3.10));
+            const qreal minDotRadius = qMax<qreal>(1.8,
+                qMin<qreal>(5.0, stemWidth * 1.55));
             const qreal strength = s.glow / 100.0 * s.glowIntensity / 100.0;
             const qreal spread = 1.0 + 8.0 * s.glowRadius / 100.0;
             for (int i = 0; i < count; ++i) {
@@ -255,9 +255,7 @@ public:
                 if (strength > 0) {
                     QColor halo = color;
                     halo.setAlphaF(qBound(0.0, strength * 0.16, 1.0));
-                    p.setPen(QPen(halo, stemWidth + spread * 0.65,
-                                  Qt::SolidLine, Qt::RoundCap));
-                    p.drawLine(QPointF(x, cy), QPointF(x, y));
+                    // Glow belongs to the particle only; keep the stem crisp.
                     p.setPen(Qt::NoPen);
                     p.setBrush(halo);
                     p.drawEllipse(QPointF(x, y), dotRadius + spread * 0.65,
