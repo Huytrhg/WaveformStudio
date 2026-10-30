@@ -31,6 +31,7 @@ struct SpectrumRenderSettings {
     qreal gradientPhase = 0;
     // B4.3.4: independent horizontal travel phase for the four-line waveform.
     int curveTravelSpeed = 35;
+    int curveReleaseSpeed = 80; // 0 slow release, 100 near-instant release
     qreal curvePhase = 0;
     QColor solidColor = QColor(0x35B8FF);
     QVector<QPair<qreal, QColor>> stops = {
@@ -241,7 +242,7 @@ public:
             // No peak-hold or temporal smoothing here: each frame's current
             // audio energy determines the curve height, so it straightens
             // immediately when the signal falls.
-            const qreal amplitude = maxH * 0.58 * audioPeak * audioPeak;
+            const qreal amplitude = maxH * 1.74 * audioPeak * audioPeak;
             const qreal travel = 2.0 * reflected(s.curvePhase) - 1.0;
             // Both bend locations travel TOGETHER; the endpoints never move.
             const qreal travelOffset = 0.095 * travel;
