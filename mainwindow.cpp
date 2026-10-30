@@ -375,6 +375,14 @@ public:
     void setExposureSensitivity(int value) { pulseSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setExposureSmoothing(int value) { pulseSmoothing = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
 
+    void setBokehEnabled(bool enabled) { bokehEnabled = enabled; gpuBackgroundDirty = true; update(); }
+    void setBokehCount(int value) { bokehCount = qBound(4, value, 100); gpuBackgroundDirty = true; update(); }
+    void setBokehSize(int value) { bokehSize = qBound(1, value, 100); gpuBackgroundDirty = true; update(); }
+    void setBokehSpeed(int value) { bokehSpeed = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setBokehOpacity(int value) { bokehOpacity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setBokehAudioReactive(bool enabled) { bokehAudioReactive = enabled; gpuBackgroundDirty = true; update(); }
+    void setBokehSensitivity(int value) { bokehSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setBokehColor(const QColor &color) { if (color.isValid()) { bokehColor = color; gpuBackgroundDirty = true; update(); } }
     void setEdgeGlowEnabled(bool enabled) { edgeGlowEnabled = enabled; gpuBackgroundDirty = true; update(); }
     void setEdgeGlowOpacity(int value) { edgeOpacity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setEdgeGlowSpread(int value) { edgeSpread = qBound(1, value, 50); gpuBackgroundDirty = true; update(); }
@@ -431,6 +439,51 @@ private:
         return qBound(0.0, smoothed * gain, 1.0);
     }
 
+    static qreal bokehHash(int n)
+    {
+        const qreal x = qSin(n * 127.1 + 78.233) * 43758.5453;
+        return x - qFloor(x);
+    }
+
+    void paintBokeh(QPainter &painter, const QRectF &area)
+    {
+        if (!bokehEnabled || area.isEmpty()) return;
+        const qreal t = effectClock.isValid() ? effectClock.elapsed() / 1000.0 : 0.0;
+        const qreal minSide = qMin(area.width(), area.height());
+        const qreal energy = bokehAudioReactive
+            ? effectLevel(framePulseEnergy, bokehSensitivity) : 0.0;
+        painter.save();
+        painter.setClipRect(area);
+        painter.setPen(Qt::NoPen);
+        for (int i = 0; i < bokehCount; ++i) {
+            const qreal seedX = bokehHash(i * 7 + 1);
+            const qreal seedY = bokehHash(i * 7 + 2);
+            const qreal sizeVariance = 0.45 + bokehHash(i * 7 + 3) * 1.1;
+            const qreal velocity = (0.012 + bokehHash(i * 7 + 4) * 0.025)
+                                   * (bokehSpeed / 50.0);
+            const qreal y = 1.15 - std::fmod(seedY + t * velocity, 1.35);
+            const qreal x = seedX + qSin(t * 0.35 + i * 2.3) * 0.022;
+            const qreal radius = minSide * (0.008 + bokehSize * 0.00035)
+                                 * sizeVariance * (1.0 + energy * 0.28);
+            const QPointF center(area.left() + x * area.width(),
+                                 area.top() + y * area.height());
+            QColor core = bokehColor;
+            core.setAlphaF(qBound(0.0, (bokehOpacity / 100.0)
+                * (0.22 + energy * 0.28) * (0.55 + bokehHash(i * 7 + 5) * 0.45), 0.85));
+            QColor middle = core;
+            middle.setAlphaF(core.alphaF() * 0.40);
+            QColor clear = core;
+            clear.setAlpha(0);
+            QRadialGradient gradient(center, radius);
+            gradient.setColorAt(0.0, core);
+            gradient.setColorAt(0.38, middle);
+            gradient.setColorAt(1.0, clear);
+            painter.setBrush(gradient);
+            painter.drawEllipse(center, radius, radius);
+        }
+        painter.restore();
+    }
+
     void paintVideoBackground(QPainter &painter, const QRectF &canvas)
     {
         painter.fillRect(canvas, QColor("#101114"));
@@ -474,6 +527,8 @@ private:
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
         painter.drawImage(target, videoImage);
         painter.restore();
+
+        paintBokeh(painter, target);
 
         if (exposurePulseEnabled) {
             const qreal level = effectLevel(framePulseEnergy, pulseSensitivity);
@@ -911,6 +966,12 @@ private:
     int curveReleaseSpeed;
     qreal curvePhase;
     QVector<QPair<qreal, QColor>> gradientStops;
+
+    bool bokehEnabled = false;
+    bool bokehAudioReactive = false;
+    int bokehCount = 28, bokehSize = 35, bokehSpeed = 35;
+    int bokehOpacity = 55, bokehSensitivity = 60;
+    QColor bokehColor = QColor("#A9D9FF");
 
     bool audioZoomEnabled = false;
     int zoomAmount = 30, zoomSensitivity = 60, zoomSmoothing = 65;
@@ -1849,6 +1910,48 @@ MainWindow::MainWindow(QWidget *parent)
     });
     connect(opacitySlider, &QSlider::valueChanged, this, [overlay, opacityValueLabel](int value) {
         opacityValueLabel->setText(QString::number(value) + "%"); overlay->setOpacityPercent(value);
+    });
+
+    // Bokeh is composited above the video and below the spectrum.
+    QFrame *bokehDivider = new QFrame;
+    bokehDivider->setFrameShape(QFrame::HLine);
+    propertiesLayout->addWidget(bokehDivider);
+    QLabel *bokehTitle = new QLabel("OVERLAY EFFECTS");
+    bokehTitle->setObjectName("sectionTitle");
+    propertiesLayout->addWidget(bokehTitle);
+    QCheckBox *bokehToggle = new QCheckBox("Bokeh Overlay");
+    propertiesLayout->addWidget(bokehToggle);
+    connect(bokehToggle, &QCheckBox::toggled, this, [this](bool v) {
+        spectrumOverlay->setBokehEnabled(v); spectrumDisplay->setBokehEnabled(v);
+    });
+    addWaveSlider("Bokeh Density", 4, 100, 28, "", [this](int v) {
+        spectrumOverlay->setBokehCount(v); spectrumDisplay->setBokehCount(v);
+    });
+    addWaveSlider("Bokeh Size", 1, 100, 35, "%", [this](int v) {
+        spectrumOverlay->setBokehSize(v); spectrumDisplay->setBokehSize(v);
+    });
+    addWaveSlider("Bokeh Speed", 0, 100, 35, "%", [this](int v) {
+        spectrumOverlay->setBokehSpeed(v); spectrumDisplay->setBokehSpeed(v);
+    });
+    addWaveSlider("Bokeh Opacity", 0, 100, 55, "%", [this](int v) {
+        spectrumOverlay->setBokehOpacity(v); spectrumDisplay->setBokehOpacity(v);
+    });
+    QCheckBox *bokehReactive = new QCheckBox("Bokeh Audio Reactive");
+    propertiesLayout->addWidget(bokehReactive);
+    connect(bokehReactive, &QCheckBox::toggled, this, [this](bool v) {
+        spectrumOverlay->setBokehAudioReactive(v);
+        spectrumDisplay->setBokehAudioReactive(v);
+    });
+    addWaveSlider("Bokeh Audio Sensitivity", 0, 100, 60, "%", [this](int v) {
+        spectrumOverlay->setBokehSensitivity(v); spectrumDisplay->setBokehSensitivity(v);
+    });
+    QPushButton *bokehColorButton = new QPushButton("Bokeh Color");
+    propertiesLayout->addWidget(bokehColorButton);
+    connect(bokehColorButton, &QPushButton::clicked, this, [this]() {
+        const QColor chosen = QColorDialog::getColor(QColor("#A9D9FF"), this, "Bokeh Color");
+        if (!chosen.isValid()) return;
+        spectrumOverlay->setBokehColor(chosen);
+        spectrumDisplay->setBokehColor(chosen);
     });
 
     // Whole-frame effects. These affect the video background before Spectrum is drawn.
