@@ -410,12 +410,36 @@ protected:
                 : ((glowPercent > 0 ? 5 : 1) + (peakHoldEnabled ? 1 : 0))));
             gpuColors.reserve(gpuRects.capacity());
             gpuTopColors.reserve(gpuRects.capacity());
+            QVector<qreal> particleLevels;
+            if (visualMode == 4) {
+                particleLevels.reserve(count);
+                for (int i = 0; i < count; ++i) {
+                    const qreal sourceIndex = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
+                    const int lo = qBound(0, int(sourceIndex), bands.size() - 1);
+                    const int hi = qMin(lo + 1, bands.size() - 1);
+                    particleLevels.push_back(qBound(0.0,
+                        qreal(bands[lo]) * (1.0 - (sourceIndex - lo))
+                        + qreal(bands[hi]) * (sourceIndex - lo), 1.0));
+                }
+                std::sort(particleLevels.begin(), particleLevels.end(), std::greater<qreal>());
+                QVector<qreal> interleaved(count);
+                int low = count - 1, high = 0;
+                for (int i = 0; i < count; ++i)
+                    interleaved[i] = (i % 2 == 0)
+                        ? particleLevels[high++] : particleLevels[low--];
+                particleLevels.swap(interleaved);
+            }
             for (int i = 0; i < count; ++i) {
-                const qreal sourceIndex = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
-                const int lo = qBound(0, int(sourceIndex), bands.size() - 1);
-                const int hi = qMin(lo + 1, bands.size() - 1);
-                const qreal v = qBound(0.0, qreal(bands[lo]) * (1.0 - (sourceIndex - lo))
-                                              + qreal(bands[hi]) * (sourceIndex - lo), 1.0);
+                qreal v;
+                if (visualMode == 4) {
+                    v = particleLevels[i];
+                } else {
+                    const qreal sourceIndex = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
+                    const int lo = qBound(0, int(sourceIndex), bands.size() - 1);
+                    const int hi = qMin(lo + 1, bands.size() - 1);
+                    v = qBound(0.0, qreal(bands[lo]) * (1.0 - (sourceIndex - lo))
+                                      + qreal(bands[hi]) * (sourceIndex - lo), 1.0);
+                }
                 const qreal h = qMax(1.0, v * maxH);
                 const QRectF bar(startX + i * cellW + (cellW - barW) / 2.0,
                                  baseline - h, barW, h);
@@ -453,7 +477,7 @@ protected:
                         glowPercent / 100.0 * glowIntensity / 100.0 * 0.14, 1.0));
                     const qreal spread = 1.0 + 5.0 * glowRadius / 100.0;
                     const qreal minDotR = qMax<qreal>(1.8, qMin<qreal>(5.0, barW * 1.55));
-                    const qreal dotR = minDotR * (1.0 + 0.85 * v);
+                    const qreal dotR = minDotR * 1.2 * (1.0 + 0.85 * v);
                     // Glow is rendered around the particle cap only, never the stem.
                     gpuRects.push_back(QRectF(bar.center().x() - dotR - spread,
                         bar.top() - dotR - spread, 2 * (dotR + spread), 2 * (dotR + spread)));
@@ -467,7 +491,7 @@ protected:
                     // GPU-friendly circle silhouette: three stacked rectangles.
                     // Four primitives per particle (stem + 3 cap strips).
                     const qreal minDotR = qMax<qreal>(1.8, qMin<qreal>(5.0, barW * 1.55));
-                    const qreal dotR = minDotR * (1.0 + 0.85 * v);
+                    const qreal dotR = minDotR * 1.2 * (1.0 + 0.85 * v);
                     const qreal dotX = bar.center().x();
                     const qreal dotY = bar.top();
                     const qreal widths[] = {1.45, 2.0, 1.45};
