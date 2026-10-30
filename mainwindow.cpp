@@ -406,7 +406,7 @@ protected:
             QVector<QColor> gpuColors;
             QVector<QColor> gpuTopColors;
             gpuRects.reserve(count * (visualMode == 4
-                ? (glowPercent > 0 ? 8 : 4)
+                ? (glowPercent > 0 ? 9 : 6)
                 : ((glowPercent > 0 ? 5 : 1) + (peakHoldEnabled ? 1 : 0))));
             gpuColors.reserve(gpuRects.capacity());
             gpuTopColors.reserve(gpuRects.capacity());
