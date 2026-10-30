@@ -231,49 +231,64 @@ public:
                 }
             }
         } else if (s.mode == 1) {
-            // B4.3.4: four continuous end-to-end paths, with mirrored upper/lower bends.
+            // Four coincident straight lines at silence. During music, every
+            // line has TWO localized bends: a full-strength bend and another
+            // at precisely one third of that strength.
             qreal audioPeak = 0.0;
             for (float band : bands)
                 audioPeak = qMax(audioPeak, qBound(0.0, qreal(band), 1.0));
 
-            const qreal travel = reflected(s.curvePhase);
-            const qreal centerA = 0.12 + 0.76 * travel;
-            const qreal centerB = 0.88 - 0.76 * travel;
-            const qreal amplitudeHigh = maxH * 0.46 * audioPeak;
-            const qreal amplitudeLow = amplitudeHigh / 3.0;
+            // No peak-hold or temporal smoothing here: each frame's current
+            // audio energy determines the curve height, so it straightens
+            // immediately when the signal falls.
+            const qreal amplitude = maxH * 0.58 * audioPeak * audioPeak;
+            const qreal travel = 2.0 * reflected(s.curvePhase) - 1.0;
+            // Both bend locations travel TOGETHER; the endpoints never move.
+            const qreal travelOffset = 0.095 * travel;
+            const qreal bendCenters[2] = {0.32 + travelOffset,
+                                           0.68 + travelOffset};
+            const qreal bendStrengths[2] = {1.0, 1.0 / 3.0};
+            // Offsetting two equally energetic paths causes them to cross
+            // naturally on the slopes of each localized bend.
+            const qreal lineOffsets[2] = {-0.018, 0.018};
+            const qreal bendHalfWidth = 0.105;
             const qreal lineWidth = qMax<qreal>(1.25,
                 stage.width() * 0.0018 * s.thickness / 75.0);
             const QLinearGradient gradient = horizontalGradient();
 
-            auto makeTravelingCurve = [&](qreal center, qreal amplitude, qreal side) {
+            auto makeLine = [&](int lineIndex, qreal verticalSign) {
                 QPainterPath path;
-                constexpr int segments = 180;
-                const qreal halfWidth = 0.19;
+                constexpr int segments = 256;
                 for (int i = 0; i <= segments; ++i) {
                     const qreal t = qreal(i) / segments;
+                    qreal bend = 0.0;
+                    for (int k = 0; k < 2; ++k) {
+                        const qreal u = (t - bendCenters[k] -
+                            lineOffsets[lineIndex]) / bendHalfWidth;
+                        if (qAbs(u) < 1.0) {
+                            const qreal falloff = 1.0 - u * u;
+                            bend += bendStrengths[k] * falloff * falloff;
+                        }
+                    }
                     const qreal x = startX + maxW * t;
-                    const qreal u = (t - center) / halfWidth;
-                    const qreal shape = qAbs(u) < 1.0
-                        ? qPow(1.0 - u * u, 2.0) : 0.0;
-                    const qreal y = cy + side * amplitude * shape;
+                    const qreal y = cy + verticalSign * amplitude * bend;
                     if (i == 0) path.moveTo(x, y);
                     else path.lineTo(x, y);
                 }
                 return path;
             };
 
-            // Opposing horizontal phases make the two same-side bends pass/cross.
-            // The lower pair is an exact vertical mirror of the upper pair.
-            const QPainterPath highUp = makeTravelingCurve(centerA, amplitudeHigh, -1.0);
-            const QPainterPath lowUp = makeTravelingCurve(centerB, amplitudeLow, -1.0);
-            const QPainterPath highDown = makeTravelingCurve(centerA, amplitudeHigh, 1.0);
-            const QPainterPath lowDown = makeTravelingCurve(centerB, amplitudeLow, 1.0);
+            const QPainterPath line1 = makeLine(0, -1.0);
+            const QPainterPath line2 = makeLine(1, -1.0);
+            const QPainterPath line3 = makeLine(0,  1.0);
+            const QPainterPath line4 = makeLine(1,  1.0);
             p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(gradient, lineWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-            p.drawPath(highUp);
-            p.drawPath(lowUp);
-            p.drawPath(highDown);
-            p.drawPath(lowDown);
+            p.setPen(QPen(gradient, lineWidth, Qt::SolidLine,
+                          Qt::RoundCap, Qt::RoundJoin));
+            p.drawPath(line1);
+            p.drawPath(line2);
+            p.drawPath(line3);
+            p.drawPath(line4);
         } else if (s.mode == 2) {
             const qreal radius = qMin(stage.width(), stage.height()) * 0.17 * s.scale / 72.0;
             const qreal barMax = qMin(stage.width(), stage.height()) * 0.12 *
