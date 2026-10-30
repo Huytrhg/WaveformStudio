@@ -1,0 +1,2628 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>WaveCast Studio — Tạo video hiệu ứng waveform</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{
+  --bg:#0b0d10;
+  --panel:#13161b;
+  --panel2:#191d24;
+  --line:#262b33;
+  --txt:#e7e9ec;
+  --sub:#8b929e;
+  --accent1:#39ffd6;
+  --accent2:#ff3df0;
+  --accent3:#ffd23f;
+  --danger:#ff5c5c;
+  --mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;background:var(--bg);color:var(--txt);font-family:var(--mono);}
+body{display:flex;flex-direction:column;min-height:100vh;}
+
+header{
+  padding:22px 28px 16px;border-bottom:1px solid var(--line);
+  display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+}
+header h1{
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size:26px;letter-spacing:0.5px;margin:0;font-weight:700;
+  background:linear-gradient(90deg,var(--accent1),var(--accent2));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+header .tag{color:var(--sub);font-size:12px;text-transform:uppercase;letter-spacing:2px;}
+
+.layout{display:flex;flex:1;min-height:0;}
+.left, .right{
+  width:340px;flex-shrink:0;overflow-y:auto;
+  background:var(--panel);border-right:1px solid var(--line);
+  padding:18px;
+}
+.right{border-right:none;border-left:1px solid var(--line);}
+.center{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;
+  padding:30px;min-width:0;background:
+    radial-gradient(circle at 50% 0%, #14181f 0%, var(--bg) 60%);
+}
+
+.sec{margin-bottom:22px;}
+.sec h2{
+  font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--accent1);
+  margin:0 0 10px;border-bottom:1px dashed var(--line);padding-bottom:6px;
+}
+label.field{display:block;font-size:11px;color:var(--sub);margin:10px 0 4px;}
+.row{display:flex;gap:8px;align-items:center;}
+.row > *{flex:1;}
+
+input[type=file]{
+  width:100%;font-size:11px;color:var(--sub);
+}
+.dropzone{
+  border:1px dashed var(--line);border-radius:6px;padding:14px;text-align:center;
+  font-size:11px;color:var(--sub);cursor:pointer;transition:.15s;background:var(--panel2);
+}
+.dropzone:hover{border-color:var(--accent1);color:var(--accent1);}
+.dropzone.has{border-color:var(--accent1);color:var(--txt);}
+
+select, input[type=range], input[type=color], input[type=number], input[type=text]{
+  width:100%;background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+  border-radius:4px;padding:6px 8px;font-family:var(--mono);font-size:12px;
+}
+input[type=range]{padding:0;accent-color:var(--accent1);}
+select{cursor:pointer;}
+
+.btnrow{display:flex;gap:8px;flex-wrap:wrap;}
+button{
+  font-family:var(--mono);font-size:11px;letter-spacing:1px;text-transform:uppercase;
+  background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+  border-radius:4px;cursor:pointer;transition:.15s;
+}
+button:hover{border-color:var(--accent1);color:var(--accent1);}
+button.primary{
+  background:linear-gradient(90deg,var(--accent1),var(--accent2));
+  color:#0b0d10;border:none;font-weight:700;
+}
+button.primary:hover{filter:brightness(1.1);color:#0b0d10;}
+button.danger:hover{border-color:var(--danger);color:var(--danger);}
+button:disabled{opacity:.4;cursor:not-allowed;}
+
+.chip-toggle{display:flex;gap:6px;}
+.chip-toggle button{flex:1;}
+.chip-toggle button.active{
+  border-color:var(--accent1);color:var(--accent1);background:#0e2622;
+}
+
+.canvas-wrap{
+  width:100%;max-width:880px;aspect-ratio:16/9;background:#000;
+  border:1px solid var(--line);border-radius:8px;overflow:hidden;position:relative;
+  box-shadow:0 0 0 1px #000, 0 20px 60px -20px rgba(57,255,214,.15);
+  transition:aspect-ratio .25s ease, max-width .25s ease;
+}
+#stage{width:100%;height:100%;display:block;}
+.canvas-wrap:fullscreen{ max-width:none; border-radius:0; border:none; }
+.canvas-wrap:fullscreen #stage{ width:100%; height:100%; object-fit:contain; }
+
+.fullscreen-btn{
+  position:absolute; bottom:12px; right:12px; width:34px; height:34px;
+  display:flex; align-items:center; justify-content:center;
+  background:rgba(11,13,16,0.55); border:1px solid rgba(255,255,255,0.15);
+  border-radius:6px; cursor:pointer; z-index:5;
+  opacity:0; transform:translateY(4px);
+  transition:opacity .18s ease, transform .18s ease, background .15s ease, border-color .15s ease;
+  backdrop-filter:blur(4px);
+}
+.canvas-wrap:hover .fullscreen-btn{ opacity:1; transform:translateY(0); }
+.fullscreen-btn:hover{ background:rgba(11,13,16,0.85); border-color:var(--accent1); }
+.fullscreen-btn svg{ width:18px; height:18px; display:block; color:var(--accent1); }
+.fullscreen-btn svg rect, .fullscreen-btn svg line{ stroke:currentColor; }
+.fullscreen-btn svg polygon{ fill:currentColor; }
+
+.transport{
+  margin-top:16px;display:flex;align-items:center;gap:12px;width:100%;max-width:880px;
+}
+.transport button{padding:8px 12px;}
+#scrub{flex:1;}
+.timecode{font-size:11px;color:var(--sub);min-width:90px;text-align:right;}
+
+.status{
+  margin-top:14px;font-size:11px;color:var(--sub);width:100%;max-width:880px;
+  display:flex;justify-content:space-between;
+}
+.status .ok{color:var(--accent1);}
+.status .warn{color:var(--accent3);}
+.status .err{color:var(--danger);}
+
+#progresswrap{width:100%;max-width:880px;margin-top:10px;display:none;}
+#progressbar{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden;border:1px solid var(--line);}
+#progressfill{height:100%;width:0%;background:linear-gradient(90deg,var(--accent1),var(--accent2));transition:width .2s;}
+#progresslabel{font-size:11px;color:var(--sub);margin-top:6px;}
+
+.hint{font-size:10.5px;color:#5b6270;line-height:1.5;margin-top:4px;}
+.check-row{
+  display:flex; align-items:center; gap:8px; margin-top:10px;
+  font-size:12px; color:var(--txt); cursor:pointer; user-select:none;
+}
+.check-row input[type=checkbox]{
+  width:16px; height:16px; accent-color:var(--accent1); cursor:pointer; margin:0;
+}
+.check-row.disabled{ opacity:.45; cursor:not-allowed; }
+.check-row.disabled input{ cursor:not-allowed; }
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.swatch{width:100%;height:30px;border-radius:4px;border:1px solid var(--line);cursor:pointer;}
+
+.gradient-editor{ position:relative; margin-top:18px; height:26px; user-select:none; }
+.gradient-editor-bar{
+  position:absolute; top:0; left:0; right:0; height:26px;
+  border-radius:4px; border:1px solid var(--line); cursor:copy;
+}
+.gradient-stop{
+  position:absolute; top:26px; width:0; height:0;
+  border-left:7px solid transparent; border-right:7px solid transparent;
+  border-bottom:9px solid #fff; transform:translateX(-7px);
+  cursor:grab; filter:drop-shadow(0 1px 2px rgba(0,0,0,.6));
+}
+.gradient-stop::after{
+  content:''; position:absolute; top:9px; left:-6px; width:12px; height:12px;
+  border-radius:50%; background:var(--swatch-color,#fff);
+  border:2px solid #fff; box-sizing:border-box;
+}
+.gradient-stop.selected::after{ border-color:var(--accent1); box-shadow:0 0 0 2px rgba(57,255,214,.5); }
+.gradient-stop:active{ cursor:grabbing; }
+.gradient-stop-del{
+  position:absolute; top:-16px; left:50%; transform:translateX(-50%);
+  width:15px; height:15px; border-radius:50%; background:var(--danger);
+  color:#fff; font-size:10px; line-height:15px; text-align:center;
+  display:none; cursor:pointer; font-family:var(--mono);
+}
+.gradient-stop.selected .gradient-stop-del{ display:block; }
+.gradient-color-input{ position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+
+a#dl{display:none;}
+::-webkit-scrollbar{width:8px;}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px;}
+@media (max-width:1100px){
+  .layout{flex-direction:column;}
+  .left,.right{width:auto;border:none;border-bottom:1px solid var(--line);}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>WaveCast Studio</h1>
+  <div class="tag">trình tạo video waveform — chạy hoàn toàn trên trình duyệt</div>
+</header>
+
+<div class="layout">
+
+  <div class="left">
+    <div class="sec">
+      <h2>00 · Khung hình</h2>
+      <div class="chip-toggle">
+        <button class="aspect-ratio active" data-v="16:9">16:9 (Ngang)</button>
+        <button class="aspect-ratio" data-v="9:16">9:16 (Dọc)</button>
+      </div>
+      <div class="hint">Đổi tỉ lệ sẽ xoay lại khung hiển thị — nền/ảnh/video upload tự scale phủ kín khung mới, không bị méo.</div>
+    </div>
+
+    <div class="sec">
+      <h2>01 · Nền (Ảnh / Video)</h2>
+      <div class="dropzone" id="dzBg">Kéo thả hoặc bấm để chọn ảnh/video nền</div>
+      <input type="file" id="bgInput" accept="image/*,video/*" style="display:none">
+      <div class="hint" id="bgInfo">Chưa có file nền. Tỉ lệ bất kỳ — sẽ tự scale phủ kín khung hình đã chọn ở mục 00.</div>
+      <label class="check-row" id="useOriginalAudioRow">
+        <input type="checkbox" id="useOriginalAudio">
+        Dùng âm thanh gốc
+      </label>
+      <div class="hint" id="useOriginalAudioHint">Lấy âm thanh có sẵn trong video nền để làm waveform, thay cho nhạc upload ở mục 02. Chỉ áp dụng khi nền là video có âm thanh.</div>
+    </div>
+
+    <div class="sec">
+      <h2>02 · Nhạc nền</h2>
+      <div class="dropzone" id="dzAudio">Kéo thả hoặc bấm để chọn file âm thanh</div>
+      <input type="file" id="audioInput" accept="audio/*" style="display:none">
+      <div class="hint" id="audioInfo">Thời lượng audio sẽ quyết định thời lượng video xuất ra.</div>
+    </div>
+
+    <div class="sec">
+      <h2>03 · Overlay video (tuỳ chọn)</h2>
+      <div class="dropzone" id="dzOverlay">Kéo thả hoặc bấm để chọn video overlay</div>
+      <input type="file" id="overlayInput" accept="video/*" style="display:none">
+      <label class="field">Chế độ trộn (blend mode)</label>
+      <select id="overlayBlend">
+        <option value="screen">Screen (sáng cộng — hợp khói/hạt sáng)</option>
+        <option value="lighten">Lighten</option>
+        <option value="overlay">Overlay</option>
+        <option value="normal">Normal (đè trực tiếp)</option>
+      </select>
+      <label class="field">Độ mờ overlay: <span id="overlayOpacityVal">70%</span></label>
+      <input type="range" id="overlayOpacity" min="0" max="100" value="70">
+      <button id="clearOverlay" style="margin-top:8px;width:100%;">Bỏ overlay</button>
+    </div>
+
+    <div class="sec">
+      <h2>03b · Overlay có sẵn</h2>
+      <label class="field">Loại overlay</label>
+      <select id="builtinOverlayType">
+        <option value="none">Không có</option>
+        <option value="bokeh">✨ Bokeh — hạt sáng mờ 3 lớp (parallax)</option>
+        <option value="light">☀️ Light — ánh sáng mặt trời</option>
+      </select>
+      <div class="hint" id="builtinOverlayHint"></div>
+
+      <label class="field" id="bOpaLabel" style="display:none">Độ mờ: <span id="builtinOpacityVal">90%</span></label>
+      <input type="range" id="builtinOpacity" min="0" max="100" value="90" style="display:none">
+
+      <div id="bokehControls" style="display:none">
+        <label class="field">Số lượng hạt (mỗi lớp): <span id="bokehCountVal">60</span></label>
+        <input type="range" id="bokehCount" min="10" max="120" value="60">
+        <label class="field">Kích thước hạt: <span id="bokehSizeVal">50%</span></label>
+        <input type="range" id="bokehSize" min="10" max="100" value="50">
+        <label class="field">Tốc độ trôi: <span id="bokehSpeedVal">x1.5</span></label>
+        <input type="range" id="bokehSpeed" min="0" max="14" step="1" value="0">
+        <label class="field">Màu bokeh</label>
+        <input type="color" id="bokehColor" value="#fff5dc">
+      </div>
+
+      <div id="lightControls" style="display:none">
+        <div class="chip-toggle" style="margin-bottom:8px;">
+          <button class="light-style active" data-v="rays">Tia sáng</button>
+          <button class="light-style" data-v="glow">Vầng sáng</button>
+        </div>
+        <div id="rayCountRow">
+          <label class="field">Số lượng tia: <span id="lightRayCountVal">8</span></label>
+          <input type="range" id="lightRayCount" min="3" max="24" value="8">
+        </div>
+        <div id="raySizeRow">
+          <label class="field">Kích thước hiệu ứng: <span id="lightSizeVal">100%</span></label>
+          <input type="range" id="lightSize" min="30" max="220" value="100">
+        </div>
+        <label class="field">Tốc độ nhấp nháy: <span id="lightSpeedVal">50%</span></label>
+        <input type="range" id="lightSpeed" min="1" max="100" value="50">
+        <label class="field">Màu ánh sáng</label>
+        <input type="color" id="lightColor" value="#fff8e0">
+        <label class="field">Vị trí ngang nguồn sáng (X): <span id="lightPosXVal">62%</span></label>
+        <input type="range" id="lightPosX" min="0" max="100" value="62">
+        <label class="field">Vị trí dọc nguồn sáng (Y): <span id="lightPosYVal">-5%</span></label>
+        <input type="range" id="lightPosY" min="-30" max="100" value="-5">
+        <label class="field">Độ trong suốt: <span id="lightOpacityVal">70%</span></label>
+        <input type="range" id="lightOpacity" min="0" max="100" value="70">
+      </div>
+    </div>
+  </div>
+
+  <div class="center">
+    <div class="canvas-wrap" id="canvasWrap">
+      <canvas id="stage" width="1280" height="720"></canvas>
+      <button class="fullscreen-btn" id="fullscreenBtn" title="Xem toàn màn hình" aria-label="Xem toàn màn hình">
+        <svg viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="92" y="28" width="136" height="136" rx="4" stroke-width="16"/>
+          <rect x="28" y="92" width="136" height="136" rx="4" stroke-width="16"/>
+          <line x1="112" y1="148" x2="148" y2="112" stroke-width="16" stroke-linecap="round"/>
+          <polygon points="176,84 163,128 132,97" fill="currentColor" stroke="none"/>
+        </svg>
+      </button>
+    </div>
+    <div class="transport">
+      <button id="playBtn">▶ Phát</button>
+      <input type="range" id="scrub" min="0" max="1000" value="0">
+      <div class="timecode" id="timecode">00:00 / 00:00</div>
+    </div>
+    <div class="status">
+      <div id="statusLeft">Chưa có audio — hãy upload nhạc nền để bắt đầu.</div>
+      <div id="statusRight"></div>
+    </div>
+    <div id="progresswrap">
+      <div id="progressbar"><div id="progressfill"></div></div>
+      <div id="progresslabel">Đang xử lý…</div>
+    </div>
+    <div class="btnrow" style="margin-top:18px;">
+      <button class="primary" id="exportBtn">⬇ Xuất file MP4 (Thường)</button>
+      <button class="primary" id="exportBtnFast" style="background: linear-gradient(90deg, #ffd23f, #ff5c5c); color: #000;">🚀 Xuất Siêu Tốc (Gối đầu)</button>
+      <button class="primary" id="exportRecordBtn" style="background:linear-gradient(90deg,#39ffd6,#ff3df0);">⏺ Xuất bằng ghi màn hình (1080p60)</button>
+      <button class="primary" id="exportWebCodecsBtn" style="background:linear-gradient(90deg,#7cf29a,#3d8bff);color:#000;">⚡ Xuất bằng WebCodecs (thử nghiệm)</button>
+      <a id="dl" download="wavecast.mp4">tải xuống</a>
+    </div>
+    <div class="hint" id="webcodecsHint" style="max-width:880px;">"Xuất bằng WebCodecs" render offline từng khung (giống 2 nút đầu, dùng độ phân giải/FPS ở mục 08, đúng theo 16:9 hoặc 9:16) rồi mã hoá bằng bộ mã hoá H.264 của trình duyệt (ưu tiên GPU) + AAC (hoặc Opus nếu AAC không có) — <b>không dùng FFmpeg</b>. File MP4 chuẩn, tua được trên Windows Media Player. Cần Chrome/Edge bản mới, mở qua <code>http://localhost:8080</code>. Dùng để so sánh tốc độ/chất lượng với các nút còn lại.</div>
+    <div class="hint" id="recordHint" style="max-width:880px;">"Xuất bằng ghi màn hình" ghi lại đúng những gì hiển thị trong lúc phát — chạy đúng bằng thời lượng bài nhạc (không nhanh/chậm hơn), luôn xuất ở <b>Full HD 60fps</b> theo đúng hướng đã chọn ở mục 00 (1920×1080 nếu 16:9, 1080×1920 nếu 9:16) bất kể lựa chọn độ phân giải/FPS ở mục 08. Giữ tab trình duyệt đang hiển thị (không thu nhỏ/chuyển tab) trong suốt quá trình ghi để hình ảnh không bị giật. Tải xuống trực tiếp file trình duyệt ghi được (MP4 nếu hỗ trợ, WebM nếu không) — không qua xử lý FFmpeg nào thêm, nên có thể <b>không tua được trên Windows Media Player mặc định của Windows 11</b> (các phần mềm phát khác như VLC vẫn tua bình thường).</div>
+  </div>
+
+  <div class="right">
+    <div class="sec">
+      <h2>04 · Kiểu Waveform</h2>
+      <select id="wfType">
+        <option value="bar-center">Nằm ngang — đối xứng 2 chiều</option>
+        <option value="bar-up">Nằm ngang — chỉ hướng lên</option>
+        <option value="bar-spread">Nằm ngang — trải đều từ giữa ra 2 bên</option>
+        <option value="circle">Vòng tròn</option>
+        <option value="dual-curve">2 đường cong đối xứng (mượt)</option>
+        <option value="dual-curve-2color">2 đường cong 2 màu đối xứng trên/dưới (như mẫu)</option>
+        <option value="dual-ring">Vòng đôi (trong/ngoài lệch pha)</option>
+        <option value="particles">Hạt sáng nhảy theo nhạc</option>
+      </select>
+      <div class="hint" id="wfTypeHint">Các cột nhảy đối xứng lên trên và xuống dưới đường nền.</div>
+      <div id="glowIntensityRow">
+        <label class="field">Độ Glow neon: <span id="glowIntensityVal">1.0x</span></label>
+        <input type="range" id="glowIntensity" min="0" max="30" value="10">
+      </div>
+    </div>
+
+    <div class="sec" id="twoColorSec" style="display:none;">
+      <h2>04b · Màu 2 đường cong</h2>
+      <label class="field">Màu nét 1</label>
+      <input type="color" id="wfCurveTopColor" value="#ffffff">
+      <label class="field">Màu nét 2</label>
+      <input type="color" id="wfCurveBottomColor" value="#ffe600">
+      <div class="hint">Mỗi bên (trên và dưới) đều có cả 2 nét màu này chạy song song, lệch nhau nhẹ và chụm lại trùng nhau ở hai đầu mép. Không phụ thuộc vào lựa chọn màu ở mục 05 bên dưới.</div>
+    </div>
+
+    <div class="sec" id="curveTuneSec" style="display:none;">
+      <h2>04c · Tuỳ chỉnh điểm cong nhảy theo nhạc</h2>
+
+      <label class="field">Số điểm cong (tối đa 2, độ cong khác nhau): <span id="curveNumBumpsVal">2</span></label>
+      <div class="chip-toggle">
+        <button class="curve-numbumps" data-v="1">1 điểm</button>
+        <button class="curve-numbumps active" data-v="2">2 điểm</button>
+      </div>
+
+      <label class="field" style="margin-top:14px;">Tốc độ di chuyển ngang: <span id="curveMoveSpeedVal">1.0x</span></label>
+      <input type="range" id="curveMoveSpeed" min="10" max="40" value="10">
+      <div class="hint">Chỉ có thể tăng — kéo sang phải để điểm cong chạy ngang nhanh hơn hiện tại.</div>
+
+      <label class="field">Tốc độ cong lên rồi thẳng lại: <span id="curveShapeSpeedVal">1.0x</span></label>
+      <input type="range" id="curveShapeSpeed" min="10" max="40" value="10">
+      <div class="hint">Chỉ có thể tăng — kéo sang phải để quá trình mọc cong/tan nhanh hơn hiện tại.</div>
+
+      <label class="field">Độ lệch giữa 2 đường: <span id="curveLagVal">0.12</span></label>
+      <input type="range" id="curveLag" min="12" max="150" value="12">
+      <div class="hint">Chỉ có thể tăng — kéo sang phải để 2 đường không còn song song, có thể cắt vào nhau khi cong lên.</div>
+
+      <label class="field">Độ sáng neon: <span id="curveGlowVal">1.0x</span></label>
+      <input type="range" id="curveGlow" min="10" max="30" value="10">
+      <div class="hint">Chỉ có thể tăng — kéo sang phải để hiệu ứng bừng sáng neon mạnh hơn hiện tại.</div>
+    </div>
+
+    <div class="sec">
+      <h2>05 · Màu Waveform</h2>
+      <div class="chip-toggle">
+        <button class="wf-color active" data-v="solid">Đơn sắc</button>
+        <button class="wf-color" data-v="gradient">Gradient động</button>
+      </div>
+      <div id="solidColorRow" style="margin-top:10px;">
+        <label class="field">Chọn màu</label>
+        <input type="color" id="wfSolidColor" value="#39ffd6">
+      </div>
+      <div id="gradientRow" style="margin-top:10px;display:none;">
+        <div class="gradient-editor" id="gradientEditor">
+          <div class="gradient-editor-bar" id="gradientEditorBar"></div>
+          <!-- các điểm neo (stop) được JS chèn vào đây -->
+        </div>
+        <div class="hint">Bấm vào thanh gradient để thêm điểm neo màu mới tại đó. Kéo điểm neo để đổi vị trí, bấm vào điểm neo để đổi màu. Chọn 1 điểm neo rồi bấm nút × phía trên để xoá (tối thiểu 2 điểm neo). Không giới hạn số điểm neo.</div>
+        <input type="color" id="gradientColorInput" class="gradient-color-input">
+        <label class="field" style="margin-top:10px;">Tốc độ cuộn màu: <span id="gradSpeedVal">1.0x</span></label>
+        <input type="range" id="gradSpeed" min="0" max="50" value="10">
+        <div class="hint">Đặt về 0 để giữ nguyên gradient tĩnh đúng như đã thiết kế — kéo lên để gradient tự cuộn động theo thời gian (vẫn giữ đúng các màu đã chọn).</div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h2>06 · Vị trí & Kích thước</h2>
+      <label class="field">Vị trí ngang (X): <span id="posXVal">50%</span></label>
+      <input type="range" id="posX" min="0" max="100" value="50">
+      <label class="field">Vị trí dọc (Y): <span id="posYVal">85%</span></label>
+      <input type="range" id="posY" min="0" max="100" value="85">
+      <label class="field">Kích thước / bán kính: <span id="wfSizeVal">70%</span></label>
+      <input type="range" id="wfSize" min="10" max="100" value="70">
+      <label class="field">Độ cao dao động (amplitude): <span id="wfAmpVal">100%</span></label>
+      <input type="range" id="wfAmp" min="10" max="250" value="100">
+      <label class="field">Số cột / độ dày: <span id="wfBarsVal">64</span></label>
+      <input type="range" id="wfBars" min="16" max="160" value="64">
+    </div>
+
+    <div class="sec">
+      <h2>07 · Hiệu ứng nền theo nhạc</h2>
+      <label class="field">Kiểu hiệu ứng</label>
+      <select id="bgEffect">
+        <option value="none">Không có</option>
+        <option value="flicker">Chớp tắt theo nhạc (mờ nhẹ, không tối đen)</option>
+        <option value="zoom">Zoom nhẹ theo nhịp</option>
+        <option value="zoom-flicker">Zoom + chớp tắt theo nhạc</option>
+        <option value="glow">Viền sáng bùng theo nhịp (đề xuất thêm)</option>
+      </select>
+      <div class="hint" id="effHint">Nền sẽ nhấp nháy mờ đi một chút theo nhịp mạnh của nhạc, không bao giờ tối đen hoàn toàn.</div>
+      <label class="field">Cường độ hiệu ứng: <span id="effIntensityVal">50%</span></label>
+      <input type="range" id="effIntensity" min="0" max="100" value="50">
+    </div>
+
+    <div class="sec">
+      <h2>08 · Xuất file</h2>
+      <label class="field">Độ phân giải</label>
+      <select id="exportRes">
+        <option value="1280x720">1280×720 (HD)</option>
+        <option value="1920x1080" selected>1920×1080 (Full HD)</option>
+        <option value="854x480">854×480 (nhanh hơn)</option>
+      </select>
+      <label class="field">Khung hình / giây (FPS)</label>
+      <select id="exportFps">
+        <option value="24">24</option>
+        <option value="30">30</option>
+        <option value="60" selected>60</option>
+      </select>
+      <div class="hint" style="color:var(--accent3);">⚠️ Xuất MP4 cần chạy qua <b>server.js</b> đi kèm (không dùng được file:// hay python server). Chạy: <code>node server.js</code> → mở <code>http://localhost:8080/wavecast.html</code>. Cần có thư mục <b>vendor/</b> (FFmpeg tự host local, không qua CDN) đặt cùng chỗ với server.js. Bản FFmpeg đa luồng — encode nhanh hơn 2–4 lần tuỳ số lõi CPU.</div>
+    </div>
+  </div>
+
+</div>
+
+<script src="vendor/ffmpeg/ffmpeg.js"></script>
+<script src="vendor/util/index.js"></script>
+<script>
+/* ============================================================
+   WaveCast Studio — client-side video-with-waveform generator
+   ============================================================ */
+
+const $ = (id)=>document.getElementById(id);
+const canvas = $('stage');
+const ctx = canvas.getContext('2d');
+let CW = canvas.width, CH = canvas.height;
+
+// ---------- State ----------
+const state = {
+  aspect: '16:9', // '16:9' (ngang, mặc định) hoặc '9:16' (dọc)
+  bg: { type:null, el:null, url:null, naturalDur:0, file:null },
+  overlay: { el:null, url:null, blend:'screen', opacity:0.7 },
+  builtinOverlay: {
+    type: 'none', // 'none' | 'bokeh' | 'light'
+    opacity: 0.9,
+    // bokeh
+    bokeh: { count:60, size:50, speed:1.5, color:'#fff5dc' },
+    // light
+    light: { style:'rays', rayCount:8, speed:50, color:'#fff8e0', posX:62, posY:-5, opacity:70, size:100 }
+  },
+  audio: { el:null, url:null, ctx:null, analyser:null, source:null, freqData:null, duration:0, file:null },
+  useOriginalAudio: false,   
+  uploadedMusicFile: null,   
+  wf: { type:'bar-center', color:'solid', solidColor:'#39ffd6', gradSpeed:10, posX:50, posY:85, size:70, amp:100, bars:64, curveTopColor:'#ffffff', curveBottomColor:'#ffe600',
+        glowIntensity: 1,
+        gradientStops: [ {pos:0, color:'#ff3df0'}, {pos:0.5, color:'#39ffd6'}, {pos:1, color:'#ffd23f'} ],
+        curve: { numBumps:2, moveSpeed:1.0, shapeSpeed:1.0, lag:0.12, glow:1.0 } },
+  effect: { type:'none', intensity:50 },
+  playing:false,
+  rafId:null,
+  gradPhase:0,
+  exporting:false,
+};
+
+// ---------- Helpers ----------
+
+// ---------- Tỉ lệ khung hình (16:9 / 9:16) ----------
+// Danh sách độ phân giải xuất file cho từng hướng — cùng "hạng" (HD / Full
+// HD / nhanh hơn) chỉ đổi chiều ngang<->dọc, giữ đúng thứ tự lựa chọn khi
+// người dùng đổi hướng qua lại.
+const EXPORT_RES_OPTIONS = {
+  '16:9': [ ['1280x720','1280×720 (HD)'], ['1920x1080','1920×1080 (Full HD)'], ['854x480','854×480 (nhanh hơn)'] ],
+  '9:16': [ ['720x1280','720×1280 (HD)'],  ['1080x1920','1080×1920 (Full HD)'], ['480x854','480×854 (nhanh hơn)'] ],
+};
+function basePreviewSize(aspect){
+  return aspect==='9:16' ? {w:720, h:1280} : {w:1280, h:720};
+}
+function rebuildExportResOptions(){
+  const sel = $('exportRes');
+  const prevIdx = sel.selectedIndex >= 0 ? sel.selectedIndex : 1; // giữ nguyên "hạng" đã chọn (mặc định Full HD)
+  const opts = EXPORT_RES_OPTIONS[state.aspect];
+  sel.innerHTML = opts.map(([v,l],i)=>`<option value="${v}"${i===prevIdx?' selected':''}>${l}</option>`).join('');
+}
+function setAspectRatio(aspect){
+  state.aspect = aspect;
+  const wrap = document.querySelector('.canvas-wrap');
+  if(aspect==='9:16'){
+    wrap.style.aspectRatio = '9/16';
+    wrap.style.maxWidth = '420px'; // giới hạn bề ngang khi dọc, tránh khung cao quá khổ panel
+  } else {
+    wrap.style.aspectRatio = '16/9';
+    wrap.style.maxWidth = '880px';
+  }
+  // Đổi luôn độ phân giải canvas thực (ảnh hưởng preview lẫn xuất file) —
+  // các hàm vẽ (renderFrame, drawBackgroundCover...) đều dùng CW/CH tương
+  // đối nên tự động scale đúng theo khung mới, không cần sửa gì thêm.
+  const base = basePreviewSize(aspect);
+  canvas.width = base.w; canvas.height = base.h;
+  CW = base.w; CH = base.h;
+  _bokehParticles = []; // toạ độ hạt cũ gắn với kích thước canvas trước đó — buộc tạo lại cho khung mới
+  rebuildExportResOptions();
+  if(!state.playing) renderFrame();
+}
+document.querySelectorAll('.aspect-ratio').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.aspect-ratio').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    setAspectRatio(btn.dataset.v);
+  });
+});
+
+function fmtTime(s){
+  if(!isFinite(s)) s=0;
+  const m = Math.floor(s/60), ss = Math.floor(s%60);
+  return String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0');
+}
+function setupAudioGraph(){
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if(!state.audio.ctx) state.audio.ctx = new AC();
+  try{ if(state.audio.source) state.audio.source.disconnect(); }catch(e){}
+  try{ if(state.audio.analyser) state.audio.analyser.disconnect(); }catch(e){}
+  state.audio.analyser = state.audio.ctx.createAnalyser();
+  state.audio.analyser.fftSize = 2048;
+  state.audio.analyser.smoothingTimeConstant = 0.82;
+  state.audio.freqData = new Uint8Array(state.audio.analyser.frequencyBinCount);
+  state.audio.source = state.audio.ctx.createMediaElementSource(state.audio.el);
+  state.audio.source.connect(state.audio.analyser);
+  state.audio.analyser.connect(state.audio.ctx.destination);
+}
+function unlockAudioContext(){
+  if(state.audio.ctx && state.audio.ctx.state === 'suspended'){
+    state.audio.ctx.resume().catch(()=>{});
+  }
+}
+document.addEventListener('click', unlockAudioContext);
+document.addEventListener('touchstart', unlockAudioContext);
+
+// ---------- File dropzones ----------
+function wireDropzone(dzId, inputId, onFile){
+  const dz = $(dzId), input = $(inputId);
+  dz.addEventListener('click', ()=>input.click());
+  dz.addEventListener('dragover', e=>{e.preventDefault(); dz.classList.add('has');});
+  dz.addEventListener('dragleave', ()=>dz.classList.remove('has'));
+  dz.addEventListener('drop', e=>{
+    e.preventDefault(); dz.classList.add('has');
+    if(e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]);
+  });
+  input.addEventListener('change', e=>{
+    if(e.target.files[0]) onFile(e.target.files[0]);
+  });
+}
+
+function applyAudioSource(file, sourceLabel){
+  return new Promise(resolve=>{
+    const url = URL.createObjectURL(file);
+    if(state.audio.url) URL.revokeObjectURL(state.audio.url);
+    state.audio.url = url;
+    state.audio.file = file;
+    if(state.audio.el){ state.audio.el.pause(); }
+    const a = new Audio(); a.src = url; a.crossOrigin = 'anonymous'; a.loop=false;
+    a.addEventListener('loadedmetadata', ()=>{
+      state.audio.duration = a.duration;
+      const suffix = sourceLabel ? ` — ${sourceLabel}` : '';
+      $('audioInfo').textContent = `Audio: ${fmtTime(a.duration)}${suffix} — video xuất ra sẽ dài bằng audio.`;
+      $('statusLeft').innerHTML = `<span class="ok">Sẵn sàng.</span> Thời lượng: ${fmtTime(a.duration)}`;
+      $('scrub').max = Math.floor(a.duration*1000);
+      updateTimecode();
+      resolve();
+    }, {once:true});
+    state.audio.el = a;
+    setupAudioGraph();
+  });
+}
+
+// "Dùng âm thanh gốc": dùng THẲNG video nền (state.bg.el) làm luôn nguồn
+// audio, KHÔNG tạo thêm 1 thẻ <audio> giải mã lại cùng file video lần 2
+// (đó là cách làm cũ, applyAudioSource(state.bg.file,...) — gây ra đúng
+// vấn đề "video chậm hơn nhạc": 2 pipeline cùng giải mã 1 file video song
+// song, gấp đôi tải giải mã ngay lúc đang ghi thời gian thực, khiến phần
+// hình (bg.el) đuối máy và tụt lại sau audio). Khi audio.el và bg.el là
+// CÙNG MỘT element, hình và tiếng không thể nào lệch nhau được nữa — vì
+// chúng dùng chung đúng 1 đồng hồ phát (currentTime).
+function useOriginalVideoAudio(){
+  return new Promise(resolve=>{
+    const v = state.bg.el;
+    v.muted = false; // an toàn: createMediaElementSource() (trong setupAudioGraph)
+                      // đã tự "rút" hẳn audio của video này ra khỏi đường phát
+                      // mặc định của nó — không lo bị phát ra loa 2 lần.
+    if(state.audio.url && state.audio.url !== state.bg.url){
+      URL.revokeObjectURL(state.audio.url);
+    }
+    state.audio.url = state.bg.url; // dùng chung URL với video nền, không tạo bản sao
+    state.audio.file = state.bg.file;
+    state.audio.el = v;
+    const ready = ()=>{
+      state.audio.duration = v.duration;
+      $('audioInfo').textContent = `Audio: ${fmtTime(v.duration)} — âm thanh gốc từ video nền — video xuất ra sẽ dài bằng audio.`;
+      $('statusLeft').innerHTML = `<span class="ok">Sẵn sàng.</span> Thời lượng: ${fmtTime(v.duration)}`;
+      $('scrub').max = Math.floor(v.duration*1000);
+      updateTimecode();
+      setupAudioGraph();
+      resolve();
+    };
+    if(v.readyState >= 1) ready(); else v.addEventListener('loadedmetadata', ready, {once:true});
+  });
+}
+
+wireDropzone('dzBg','bgInput', async file=>{
+  const url = URL.createObjectURL(file);
+  const isVideo = file.type.startsWith('video');
+  $('dzBg').classList.add('has');
+  $('dzBg').textContent = file.name;
+  if(state.bg.url) URL.revokeObjectURL(state.bg.url);
+  state.bg.url = url; state.bg.type = isVideo?'video':'image'; state.bg.file = file;
+  if(isVideo){
+    const v = document.createElement('video');
+    v.src = url; v.muted = true; v.loop = true; v.playsInline = true; v.crossOrigin='anonymous';
+    v.addEventListener('loadedmetadata', ()=>{
+      state.bg.naturalDur = v.duration;
+      $('bgInfo').textContent = `Video nền: ${v.videoWidth}×${v.videoHeight}, dài ${fmtTime(v.duration)}. Sẽ lặp lại hoặc cắt cho vừa nhạc.`;
+    });
+    state.bg.el = v;
+    if(state.useOriginalAudio){
+      await useOriginalVideoAudio();
+    }
+  } else {
+    const img = new Image();
+    img.src = url;
+    img.onload = ()=>{
+      $('bgInfo').textContent = `Ảnh nền: ${img.naturalWidth}×${img.naturalHeight}. Sẽ hiển thị xuyên suốt video.`;
+    };
+    state.bg.el = img;
+    if(state.useOriginalAudio){
+      state.useOriginalAudio = false;
+      $('useOriginalAudio').checked = false;
+      alert('Ảnh nền không có âm thanh — đã tắt "Dùng âm thanh gốc".');
+      if(state.uploadedMusicFile){
+        await applyAudioSource(state.uploadedMusicFile);
+      }
+    }
+  }
+});
+
+wireDropzone('dzAudio','audioInput', async file=>{
+  $('dzAudio').classList.add('has');
+  $('dzAudio').textContent = file.name;
+  state.uploadedMusicFile = file;
+  if(state.useOriginalAudio){
+    $('audioInfo').textContent = `Đã lưu nhạc nền "${file.name}" — sẽ dùng khi bạn tắt "Dùng âm thanh gốc".`;
+    return;
+  }
+  await applyAudioSource(file);
+});
+
+$('useOriginalAudio').addEventListener('change', async e=>{
+  const checked = e.target.checked;
+  if(checked){
+    if(state.bg.type==='video' && state.bg.file){
+      state.useOriginalAudio = true;
+      await useOriginalVideoAudio();
+    } else {
+      alert('Cần upload video nền có âm thanh trước khi bật "Dùng âm thanh gốc".');
+      e.target.checked = false;
+    }
+  } else {
+    state.useOriginalAudio = false;
+    if(state.uploadedMusicFile){
+      await applyAudioSource(state.uploadedMusicFile);
+    } else {
+      $('audioInfo').textContent = 'Chưa có nhạc nền — hãy upload ở mục 02, hoặc bật lại "Dùng âm thanh gốc".';
+    }
+  }
+});
+
+wireDropzone('dzOverlay','overlayInput', file=>{
+  const url = URL.createObjectURL(file);
+  $('dzOverlay').classList.add('has');
+  $('dzOverlay').textContent = file.name;
+  if(state.overlay.url) URL.revokeObjectURL(state.overlay.url);
+  state.overlay.url = url;
+  const v = document.createElement('video');
+  v.src = url; v.muted = true; v.loop = true; v.playsInline = true; v.crossOrigin='anonymous';
+  state.overlay.el = v;
+});
+$('clearOverlay').addEventListener('click', ()=>{
+  state.overlay.el = null; state.overlay.url=null;
+  $('dzOverlay').classList.remove('has');
+  $('dzOverlay').textContent = 'Kéo thả hoặc bấm để chọn video overlay';
+});
+
+// ---------- Built-in overlay controls ----------
+const BUILTIN_HINTS = {
+  none: '',
+  bokeh: 'Hạt ánh sáng mờ ảo (bokeh) 3 lớp tạo chiều sâu parallax — lớp xa mờ & chậm, lớp gần rõ & nhanh hơn.',
+  light: 'Ánh sáng mặt trời kiểu lens-flare (tia sao + vòng sáng + hạt lấp lánh + vòng flare phụ) hoặc vầng sáng đơn giản — chỉnh vị trí, kích thước, tốc độ, màu.'
+};
+$('builtinOverlayType').addEventListener('change', e=>{
+  const v = e.target.value;
+  state.builtinOverlay.type = v;
+  $('builtinOverlayHint').textContent = BUILTIN_HINTS[v] || '';
+  $('bokehControls').style.display  = v==='bokeh' ? '' : 'none';
+  $('lightControls').style.display  = v==='light' ? '' : 'none';
+  $('builtinOpacity').style.display = v==='bokeh' ? '' : 'none';
+  $('bOpaLabel').style.display      = v==='bokeh' ? '' : 'none';
+  if(v==='bokeh') initBokehParticles();
+});
+$('builtinOpacity').addEventListener('input', e=>{
+  state.builtinOverlay.opacity = +e.target.value/100;
+  $('builtinOpacityVal').textContent = e.target.value+'%';
+});
+$('bokehCount').addEventListener('input', e=>{ state.builtinOverlay.bokeh.count=+e.target.value; $('bokehCountVal').textContent=e.target.value; initBokehParticles(); });
+$('bokehSize').addEventListener('input',  e=>{ state.builtinOverlay.bokeh.size=+e.target.value;  $('bokehSizeVal').textContent=e.target.value+'%'; });
+const BOKEH_SPEED_STEPS = [1.5, 2, 2.5, 3, 3.5, 4, 6, 8, 9, 10, 12, 14, 16, 18, 20];
+$('bokehSpeed').addEventListener('input', e=>{
+  const mul = BOKEH_SPEED_STEPS[+e.target.value];
+  state.builtinOverlay.bokeh.speed = mul;
+  $('bokehSpeedVal').textContent = 'x' + mul;
+});
+$('bokehColor').addEventListener('input', e=>  state.builtinOverlay.bokeh.color=e.target.value);
+$('lightRayCount').addEventListener('input', e=>{ state.builtinOverlay.light.rayCount=+e.target.value; $('lightRayCountVal').textContent=e.target.value; initLightFlareLayout(); });
+$('lightSize').addEventListener('input', e=>{ state.builtinOverlay.light.size=+e.target.value; $('lightSizeVal').textContent=e.target.value+'%'; });
+$('lightSpeed').addEventListener('input',    e=>{ state.builtinOverlay.light.speed=+e.target.value; $('lightSpeedVal').textContent=e.target.value+'%'; });
+$('lightColor').addEventListener('input',    e=>  state.builtinOverlay.light.color=e.target.value);
+$('lightPosX').addEventListener('input', e=>{ state.builtinOverlay.light.posX=+e.target.value; $('lightPosXVal').textContent=e.target.value+'%'; });
+$('lightPosY').addEventListener('input', e=>{ state.builtinOverlay.light.posY=+e.target.value; $('lightPosYVal').textContent=e.target.value+'%'; });
+$('lightOpacity').addEventListener('input', e=>{ state.builtinOverlay.light.opacity=+e.target.value; $('lightOpacityVal').textContent=e.target.value+'%'; });
+document.querySelectorAll('.light-style').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.light-style').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    state.builtinOverlay.light.style = btn.dataset.v;
+    $('rayCountRow').style.display = btn.dataset.v==='rays' ? '' : 'none';
+  });
+});
+$('overlayBlend').addEventListener('change', e=> state.overlay.blend = e.target.value);
+$('overlayOpacity').addEventListener('input', e=>{
+  state.overlay.opacity = e.target.value/100;
+  $('overlayOpacityVal').textContent = e.target.value+'%';
+});
+
+// ---------- Waveform / effect controls ----------
+const WF_HINTS = {
+  'bar-center': 'Các cột nhảy đối xứng lên trên và xuống dưới đường nền — kiểu kinh điển, dễ nhìn.',
+  'bar-up': 'Các cột chỉ vươn lên từ đáy, giống biểu đồ cột âm thanh hoặc equalizer.',
+  'bar-spread': 'Các cột thấp ở giữa, cao dần ra hai bên — tạo cảm giác lan toả, hợp đặt sát viền dưới video.',
+  'circle': 'Các tia toả ra từ vòng tròn trung tâm, nhảy theo nhịp — hợp video nhạc, podcast hình tròn.',
+  'dual-curve': 'Hai đường cong mượt đối xứng trên/dưới, tô màu mềm — trông như waveform Audacity/Spotify Canvas.',
+  'dual-curve-2color': 'Một nét cong mượt chạy từ mép này sang mép kia, độ cong giảm dần ra hai đầu như sóng. Có 2 màu lệch nhau nhẹ ở trên và đối xứng 2 màu tương tự ở dưới — cả 4 nét đều chụm lại trùng nhau ở hai đầu mép.',
+  'dual-ring': 'Hai vòng tròn lệch pha nhau lồng vào nhau, tạo chuyển động xoáy nhẹ rất bắt mắt.',
+  'particles': 'Các hạt sáng bay nhảy theo biên độ nhạc, tạo cảm giác lấp lánh, hiện đại.'
+};
+$('wfType').addEventListener('change', e=>{
+  state.wf.type = e.target.value;
+  $('wfTypeHint').textContent = WF_HINTS[state.wf.type] || '';
+  const isCurve2 = state.wf.type==='dual-curve-2color';
+  $('twoColorSec').style.display = isCurve2 ? '' : 'none';
+  $('curveTuneSec').style.display = isCurve2 ? '' : 'none';
+  $('glowIntensityRow').style.display = isCurve2 ? 'none' : '';
+});
+$('glowIntensity').addEventListener('input', e=>{
+  state.wf.glowIntensity = (+e.target.value)/10;
+  $('glowIntensityVal').textContent = state.wf.glowIntensity.toFixed(1)+'x';
+});
+$('wfCurveTopColor').addEventListener('input', e=> state.wf.curveTopColor = e.target.value);
+$('wfCurveBottomColor').addEventListener('input', e=> state.wf.curveBottomColor = e.target.value);
+
+document.querySelectorAll('.curve-numbumps').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.curve-numbumps').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    state.wf.curve.numBumps = +btn.dataset.v;
+    $('curveNumBumpsVal').textContent = btn.dataset.v;
+  });
+});
+$('curveMoveSpeed').addEventListener('input', e=>{
+  state.wf.curve.moveSpeed = (+e.target.value)/10;
+  $('curveMoveSpeedVal').textContent = state.wf.curve.moveSpeed.toFixed(1)+'x';
+});
+$('curveShapeSpeed').addEventListener('input', e=>{
+  state.wf.curve.shapeSpeed = (+e.target.value)/10;
+  $('curveShapeSpeedVal').textContent = state.wf.curve.shapeSpeed.toFixed(1)+'x';
+});
+$('curveLag').addEventListener('input', e=>{
+  state.wf.curve.lag = (+e.target.value)/100;
+  $('curveLagVal').textContent = state.wf.curve.lag.toFixed(2);
+});
+$('curveGlow').addEventListener('input', e=>{
+  state.wf.curve.glow = (+e.target.value)/10;
+  $('curveGlowVal').textContent = state.wf.curve.glow.toFixed(1)+'x';
+});
+document.querySelectorAll('.wf-color').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.wf-color').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active'); state.wf.color = btn.dataset.v;
+    $('solidColorRow').style.display = state.wf.color==='solid' ? '' : 'none';
+    $('gradientRow').style.display = state.wf.color==='gradient' ? '' : 'none';
+    if(state.wf.color==='gradient') renderGradientEditor();
+  });
+});
+$('wfSolidColor').addEventListener('input', e=> state.wf.solidColor = e.target.value);
+$('gradSpeed').addEventListener('input', e=>{
+  state.wf.gradSpeed = +e.target.value;
+  $('gradSpeedVal').textContent = (e.target.value/10).toFixed(1)+'x';
+});
+
+// ---------- Gradient editor kiểu Photoshop: điểm neo tự do, không giới hạn số lượng ----------
+let _gradSelectedStop = null; // tham chiếu tới object stop đang được chọn
+
+function sortedStops(){
+  state.wf.gradientStops.sort((a,b)=>a.pos-b.pos);
+  return state.wf.gradientStops;
+}
+
+function hexToRgbObj(hex){
+  // Phòng vệ: nếu lỡ nhận vào chuỗi "rgb(r,g,b)" (từ dữ liệu cũ hoặc nguồn
+  // khác) thay vì hex, parse trực tiếp luôn để không bao giờ ra NaN.
+  const rgbMatch = /^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i.exec(hex);
+  if(rgbMatch){
+    return { r:+rgbMatch[1], g:+rgbMatch[2], b:+rgbMatch[3] };
+  }
+  hex = hex.replace('#','');
+  if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+  const r = parseInt(hex.substring(0,2),16);
+  const g = parseInt(hex.substring(2,4),16);
+  const b = parseInt(hex.substring(4,6),16);
+  // Nếu chuỗi màu không hợp lệ vì lý do gì đó, trả về trắng thay vì NaN —
+  // không bao giờ để 1 màu hỏng làm vỡ cả gradient.
+  return {
+    r: Number.isFinite(r) ? r : 255,
+    g: Number.isFinite(g) ? g : 255,
+    b: Number.isFinite(b) ? b : 255
+  };
+}
+function to2Hex(n){
+  const v = Math.max(0, Math.min(255, Math.round(n)));
+  return v.toString(16).padStart(2,'0');
+}
+function lerpColorHex(c1, c2, t){
+  const a = hexToRgbObj(c1), b = hexToRgbObj(c2);
+  const r = a.r + (b.r-a.r)*t;
+  const g = a.g + (b.g-a.g)*t;
+  const bl = a.b + (b.b-a.b)*t;
+  // Luôn trả về đúng định dạng #rrggbb để có thể dùng lại an toàn trong
+  // các lần nội suy tiếp theo (vd. hiệu ứng cuộn gradient) mà không bao
+  // giờ tạo ra NaN.
+  return `#${to2Hex(r)}${to2Hex(g)}${to2Hex(bl)}`;
+}
+// Nội suy màu tại 1 vị trí bất kỳ (0..1) dựa trên các điểm neo hiện có —
+// dùng để: (a) tô nền thanh gradient-editor-bar, (b) chọn màu mặc định hợp lý
+// khi người dùng bấm thêm điểm neo mới ở giữa 2 điểm neo khác.
+function colorAtPosition(pos){
+  const stops = sortedStops();
+  if(stops.length===0) return '#ffffff';
+  if(pos <= stops[0].pos) return stops[0].color;
+  if(pos >= stops[stops.length-1].pos) return stops[stops.length-1].color;
+  for(let i=0;i<stops.length-1;i++){
+    const a = stops[i], b = stops[i+1];
+    if(pos>=a.pos && pos<=b.pos){
+      const t = (b.pos-a.pos)>1e-9 ? (pos-a.pos)/(b.pos-a.pos) : 0;
+      return lerpColorHex(a.color, b.color, t);
+    }
+  }
+  return stops[stops.length-1].color;
+}
+
+function renderGradientEditor(){
+  const stops = sortedStops();
+  const bar = $('gradientEditorBar');
+  // Tô nền thanh bar bằng chính các điểm neo hiện có (linear-gradient CSS)
+  const cssStops = stops.map(s => `${s.color} ${(s.pos*100).toFixed(2)}%`).join(', ');
+  bar.style.background = stops.length>=2
+    ? `linear-gradient(90deg, ${cssStops})`
+    : (stops[0] ? stops[0].color : '#000');
+
+  const editor = $('gradientEditor');
+  // Xoá các handle cũ, giữ lại thanh bar
+  editor.querySelectorAll('.gradient-stop').forEach(el=>el.remove());
+
+  stops.forEach(stop=>{
+    const el = document.createElement('div');
+    el.className = 'gradient-stop' + (stop===_gradSelectedStop ? ' selected' : '');
+    el.style.left = (stop.pos*100) + '%';
+    el.style.setProperty('--swatch-color', stop.color);
+
+    const delBtn = document.createElement('div');
+    delBtn.className = 'gradient-stop-del';
+    delBtn.textContent = '×';
+    delBtn.title = 'Xoá điểm neo này';
+    // Chặn mousedown nổi bọt lên điểm neo cha — nếu không, logic "bắt đầu
+    // kéo + vẽ lại toàn bộ DOM" của điểm neo cha sẽ chạy trước, làm nút
+    // xoá này biến mất trước khi sự kiện click kịp xử lý xoá.
+    delBtn.addEventListener('mousedown', ev=> ev.stopPropagation());
+    delBtn.addEventListener('click', ev=>{
+      ev.stopPropagation();
+      if(state.wf.gradientStops.length<=2){ return; } // luôn giữ tối thiểu 2 điểm neo
+      const idx = state.wf.gradientStops.indexOf(stop);
+      if(idx>=0) state.wf.gradientStops.splice(idx,1);
+      _gradSelectedStop = null;
+      renderGradientEditor();
+    });
+    el.appendChild(delBtn);
+
+    // Kéo để đổi vị trí, hoặc bấm (không kéo) để mở bảng chọn màu — gộp
+    // chung 1 luồng xử lý dựa trên mousedown/mousemove/mouseup, KHÔNG dùng
+    // sự kiện 'click' riêng: vì nếu vẽ lại DOM ngay trong lúc mousedown,
+    // phần tử gốc bị gỡ khỏi DOM giữa chừng khiến trình duyệt không bao
+    // giờ bắn sự kiện click nữa (đây chính là lỗi khiến trước đây không
+    // đổi được màu điểm neo cũ, phải xoá đi tạo lại).
+    el.addEventListener('mousedown', ev=>{
+      ev.preventDefault();
+      ev.stopPropagation();
+      const startX = ev.clientX;
+      const barRect = bar.getBoundingClientRect();
+      let dragged = false;
+
+      const onMove = (moveEv)=>{
+        if(!dragged && Math.abs(moveEv.clientX - startX) > 3) dragged = true;
+        if(dragged){
+          let p = (moveEv.clientX - barRect.left) / barRect.width;
+          p = Math.min(1, Math.max(0, p));
+          stop.pos = p;
+          renderGradientEditor();
+        }
+      };
+      const onUp = ()=>{
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        _gradSelectedStop = stop;
+        renderGradientEditor();
+        if(!dragged){
+          // Bấm thực sự (không kéo) → mở bảng chọn màu cho điểm neo này
+          openColorPickerForStop(stop);
+        }
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+
+    editor.appendChild(el);
+  });
+}
+
+// Bấm vào khoảng trống trên thanh bar → thêm điểm neo mới tại đúng vị trí đó,
+// màu mặc định lấy nội suy từ gradient hiện có để chèn liền mạch.
+function openColorPickerForStop(stop){
+  const colorInput = $('gradientColorInput');
+  colorInput.value = stop.color;
+  colorInput.oninput = ()=>{ stop.color = colorInput.value; renderGradientEditor(); };
+  colorInput.click();
+}
+
+$('gradientEditorBar').addEventListener('click', ev=>{
+  const rect = ev.currentTarget.getBoundingClientRect();
+  let pos = (ev.clientX - rect.left) / rect.width;
+  pos = Math.min(1, Math.max(0, pos));
+  const newStop = { pos, color: colorAtPosition(pos) };
+  state.wf.gradientStops.push(newStop);
+  _gradSelectedStop = newStop;
+  renderGradientEditor();
+  // Mở ngay bảng chọn màu cho điểm neo vừa thêm để người dùng chỉnh luôn
+  openColorPickerForStop(newStop);
+});
+
+// Khởi tạo lần đầu (phòng khi mặc định đã ở chế độ gradient)
+renderGradientEditor();
+$('posX').addEventListener('input', e=>{ state.wf.posX=+e.target.value; $('posXVal').textContent=e.target.value+'%';});
+$('posY').addEventListener('input', e=>{ state.wf.posY=+e.target.value; $('posYVal').textContent=e.target.value+'%';});
+$('wfSize').addEventListener('input', e=>{ state.wf.size=+e.target.value; $('wfSizeVal').textContent=e.target.value+'%';});
+$('wfAmp').addEventListener('input', e=>{ state.wf.amp=+e.target.value; $('wfAmpVal').textContent=e.target.value+'%';});
+$('wfBars').addEventListener('input', e=>{ state.wf.bars=+e.target.value; $('wfBarsVal').textContent=e.target.value;});
+const EFFECT_HINTS = {
+  none: '',
+  flicker: 'Nền sẽ nhấp nháy mờ đi một chút theo nhịp mạnh của nhạc, không bao giờ tối đen hoàn toàn.',
+  zoom: 'Nền phình to nhẹ theo nhịp trầm, tạo cảm giác "thở" theo nhạc.',
+  'zoom-flicker': 'Kết hợp: nền vừa phình to theo nhịp vừa chớp tắt mờ nhẹ — hai hiệu ứng chạy đồng thời, sinh động hơn khi nghe nhạc remix.',
+  glow: 'Một lớp sáng viền màu (theo màu waveform) bùng lên ở mép khung mỗi khi nhạc lớn — hiệu ứng đề xuất thêm, tạo điểm nhấn ấn tượng.'
+};
+$('bgEffect').addEventListener('change', e=>{
+  state.effect.type = e.target.value;
+  $('effHint').textContent = EFFECT_HINTS[state.effect.type] || '';
+});
+$('effIntensity').addEventListener('input', e=>{ state.effect.intensity=+e.target.value; $('effIntensityVal').textContent=e.target.value+'%';});
+
+// ---------- Drawing ----------
+function drawBackgroundCover(srcEl, sw, sh, dx,dy,dw,dh){
+  const srcRatio = sw/sh, dstRatio = dw/dh;
+  let cropW, cropH, cropX, cropY;
+  if(srcRatio > dstRatio){
+    cropH = sh; cropW = sh*dstRatio; cropX = (sw-cropW)/2; cropY = 0;
+  } else {
+    cropW = sw; cropH = sw/dstRatio; cropX = 0; cropY = (sh-cropH)/2;
+  }
+  ctx.drawImage(srcEl, cropX, cropY, cropW, cropH, dx, dy, dw, dh);
+}
+
+function getAudioLevel(overrideFreq){
+  if(overrideFreq){
+    let sum=0;
+    for(let i=0;i<overrideFreq.length;i++) sum+=overrideFreq[i];
+    return {avg: sum/overrideFreq.length/255, freq: overrideFreq};
+  }
+  if(!state.audio.analyser) return {avg:0, freq:null};
+  state.audio.analyser.getByteFrequencyData(state.audio.freqData);
+  let sum=0;
+  for(let i=0;i<state.audio.freqData.length;i++) sum+=state.audio.freqData[i];
+  const avg = sum/state.audio.freqData.length/255;
+  return {avg, freq:state.audio.freqData};
+}
+
+function renderFrame(overrideFreq, overrideTime){
+  const {avg, freq} = getAudioLevel(overrideFreq);
+  const t = (overrideTime!=null) ? overrideTime : (state.audio.el ? state.audio.el.currentTime : 0);
+  const intensity = state.effect.intensity/100;
+
+  ctx.save();
+  ctx.clearRect(0,0,CW,CH);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0,0,CW,CH);
+
+  let scale=1, brightness=1;
+  if(state.effect.type==='zoom' || state.effect.type==='zoom-flicker'){
+    scale = 1 + 0.12*intensity*avg;
+  }
+  if(state.effect.type==='flicker' || state.effect.type==='zoom-flicker'){
+    const flickerChance = 0.12 + avg*0.55;
+    const isDim = Math.random() < flickerChance*Math.max(0.15,intensity);
+    brightness = isDim ? (1 - 0.45*intensity) : 1;
+  }
+
+  ctx.translate(CW/2, CH/2);
+  ctx.scale(scale, scale);
+  ctx.translate(-CW/2, -CH/2);
+
+  if(brightness !== 1){
+    ctx.filter = `brightness(${brightness})`;
+  }
+
+  if(state.bg.el){
+    const sw = state.bg.type==='video' ? state.bg.el.videoWidth : state.bg.el.naturalWidth;
+    const sh = state.bg.type==='video' ? state.bg.el.videoHeight : state.bg.el.naturalHeight;
+    if(sw && sh) drawBackgroundCover(state.bg.el, sw, sh, 0,0,CW,CH);
+  } else {
+    ctx.fillStyle = '#15181d';
+    ctx.fillRect(0,0,CW,CH);
+    ctx.fillStyle = '#3a4250'; ctx.font='28px monospace'; ctx.textAlign='center';
+    ctx.fillText('Chưa có nền — upload ảnh hoặc video', CW/2, CH/2);
+  }
+  ctx.filter = 'none';
+  ctx.restore();
+
+  if(state.overlay.el && state.overlay.el.videoWidth){
+    ctx.save();
+    ctx.globalCompositeOperation = state.overlay.blend;
+    ctx.globalAlpha = state.overlay.opacity;
+    drawBackgroundCover(state.overlay.el, state.overlay.el.videoWidth, state.overlay.el.videoHeight, 0,0,CW,CH);
+    ctx.restore();
+  }
+
+  if(state.builtinOverlay.type !== 'none'){
+    drawBuiltinOverlay(t || 0);
+  }
+
+  drawWaveform(freq, t);
+
+  if(state.effect.type==='glow'){
+    drawGlowPulse(avg, intensity);
+  }
+
+  ctx.restore();
+}
+
+function drawGlowPulse(avg, intensity){
+  const color = state.wf.color==='solid'
+    ? state.wf.solidColor
+    : `hsl(${(state.gradPhase*360)%360},100%,60%)`;
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  ctx.globalAlpha = Math.max(0, Math.min(0.85, avg*intensity*1.6));
+  const grad = ctx.createRadialGradient(CW/2,CH/2, CH*0.32, CW/2, CH/2, CH*0.78);
+  grad.addColorStop(0, 'rgba(0,0,0,0)');
+  grad.addColorStop(1, color);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,CW,CH);
+  ctx.restore();
+}
+
+// BOKEH, LIGHT & WAVEFORM logic giữ nguyên...
+let _bokehParticles = [];
+function initBokehParticles(){
+  _bokehParticles = [];
+  const cfg = state.builtinOverlay.bokeh;
+  const n   = cfg.count;
+  const LAYERS = [
+    { count: Math.round(n*0.4), rMin:0.06, rMax:0.12, vMax:0.08, alphaMin:0.16, alphaMax:0.34 },
+    { count: Math.round(n*0.4), rMin:0.025,rMax:0.06, vMax:0.18, alphaMin:0.30, alphaMax:0.58 },
+    { count: Math.round(n*0.2), rMin:0.01, rMax:0.03, vMax:0.35, alphaMin:0.55, alphaMax:0.90 },
+  ];
+  LAYERS.forEach((L, li)=>{
+    for(let i=0;i<L.count;i++){
+      const angle = Math.random()*Math.PI*2;
+      const speed = L.vMax*(0.3+Math.random()*0.7);
+      _bokehParticles.push({
+        x: Math.random()*CW, y: Math.random()*CH,
+        r: (L.rMin + Math.random()*(L.rMax-L.rMin)) * Math.min(CW,CH),
+        alpha: L.alphaMin + Math.random()*(L.alphaMax-L.alphaMin),
+        vx: Math.cos(angle)*speed, vy: Math.sin(angle)*speed,
+        layer: li, phase: Math.random()*Math.PI*2, phaseSpeed: 0.3 + Math.random()*0.7
+      });
+    }
+  });
+}
+
+function drawBokeh(t){
+  if(_bokehParticles.length === 0) initBokehParticles();
+  const cfg = state.builtinOverlay.bokeh;
+  const sizeMul = cfg.size / 50, speedMul = cfg.speed;
+  const bc = cfg.color || '#fff5dc';
+  const cr = parseInt(bc.slice(1,3),16), cg = parseInt(bc.slice(3,5),16), cb = parseInt(bc.slice(5,7),16);
+  const dr = Math.round(cr*0.9), dg = Math.round(cg*0.88), db = Math.round(cb*0.75);
+  const BLUR = [14, 6, 2];
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = state.builtinOverlay.opacity;
+  _bokehParticles.forEach(p=>{
+    p.x += p.vx * speedMul; p.y += p.vy * speedMul;
+    if(p.x < -p.r*2) p.x = CW + p.r; if(p.x > CW+p.r*2) p.x = -p.r;
+    if(p.y < -p.r*2) p.y = CH + p.r; if(p.y > CH+p.r*2) p.y = -p.r;
+    const tw = 0.7 + 0.3*Math.sin(p.phase + t * p.phaseSpeed * 1.8);
+    const r  = p.r * sizeMul;
+    ctx.save();
+    ctx.filter = `blur(${BLUR[p.layer] * sizeMul}px)`;
+    const g = ctx.createRadialGradient(p.x,p.y,0, p.x,p.y,r);
+    g.addColorStop(0,   `rgba(${cr},${cg},${cb},${p.alpha*tw})`);
+    g.addColorStop(0.35,`rgba(${cr},${cg},${cb},${p.alpha*tw*0.75})`);
+    g.addColorStop(0.7, `rgba(${dr},${dg},${db},${p.alpha*tw*0.35})`);
+    g.addColorStop(1,   `rgba(${dr},${dg},${db},0)`);
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  });
+  ctx.restore();
+}
+
+let _lightFlareLayout = null;
+function initLightFlareLayout(){
+  const rayCount = state.builtinOverlay.light.rayCount;
+  const spikes = [];
+  for(let i=0;i<rayCount;i++){
+    const baseFrac = i/rayCount, jitter = (prand(i*17.31 + 4.2) - 0.5) * (1/rayCount) * 0.6;
+    const angle = (baseFrac + jitter) * Math.PI * 2;
+    const lengthFactor = 0.5 + prand(i*23.9 + 12.1) * 1.0;
+    const widthFactor  = 0.35 + prand(i*9.77 + 91.3) * 1.4;
+    const phaseOff = prand(i*5.5 + 61.2) * Math.PI * 2;
+    spikes.push({ angle, lengthFactor, widthFactor, phaseOff });
+  }
+  const sparkles = [];
+  for(let i=0;i<14;i++){
+    sparkles.push({
+      angle: prand(i*31.7 + 200) * Math.PI * 2, dist: 0.15 + prand(i*13.3 + 77) * 0.85,
+      size: 0.15 + prand(i*4.4+8)*0.55, phaseOff: prand(i*2.2+3)*Math.PI*2
+    });
+  }
+  const artifacts = [];
+  for(let i=0;i<5;i++){
+    artifacts.push({
+      t: 0.35 + (i/4) * 1.25, size: 0.10 + prand(i*7.1+40)*0.16,
+      alpha: 0.10 + prand(i*11.9+55)*0.22, hex: prand(i*3.3+90) > 0.4
+    });
+  }
+  _lightFlareLayout = { rayCount, spikes, sparkles, artifacts };
+}
+
+function drawSunGlow(t, sx, sy, cr, cg, cb, opa, sizeMul, pulse, speed){
+  const baseR = Math.min(CW,CH) * 0.30 * sizeMul * (0.92 + pulse*0.16);
+  const outerR = baseR * 3.4;
+  const gOuter = ctx.createRadialGradient(sx,sy,0, sx,sy,outerR);
+  gOuter.addColorStop(0, `rgba(${cr},${cg},${cb},${0.30*opa})`);
+  gOuter.addColorStop(0.30, `rgba(${cr},${cg},${cb},${0.14*opa})`);
+  gOuter.addColorStop(0.6, `rgba(${cr},${cg},${cb},${0.05*opa})`);
+  gOuter.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = gOuter; ctx.beginPath(); ctx.arc(sx,sy,outerR,0,Math.PI*2); ctx.fill();
+
+  if(_lightFlareLayout){
+    ctx.save();
+    ctx.filter = `blur(${Math.max(2, baseR*0.05)}px)`;
+    _lightFlareLayout.spikes.forEach(sp=>{
+      const spPulse = 0.5 + 0.35*Math.sin(t*speed*0.9 + sp.phaseOff);
+      const len = baseR * (0.9 + sp.lengthFactor*0.6) * (0.8+spPulse*0.3);
+      const halfW = baseR * 0.05 * sp.widthFactor;
+      const ex = sx + Math.cos(sp.angle)*len, ey = sy + Math.sin(sp.angle)*len;
+      const nx = -Math.sin(sp.angle), ny = Math.cos(sp.angle);
+      const g = ctx.createLinearGradient(sx,sy,ex,ey);
+      g.addColorStop(0, `rgba(${cr},${cg},${cb},${0.18*opa*(0.7+spPulse*0.5)})`);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(ex+nx*halfW, ey+ny*halfW); ctx.lineTo(ex-nx*halfW, ey-ny*halfW); ctx.closePath();
+      ctx.fillStyle = g; ctx.fill();
+    });
+    ctx.restore();
+  }
+
+  const midR = baseR * 1.4;
+  const gMid = ctx.createRadialGradient(sx,sy,0, sx,sy,midR);
+  gMid.addColorStop(0, `rgba(${Math.min(255,cr+25)},${Math.min(255,cg+15)},${Math.max(0,cb-30)},${0.65*opa})`);
+  gMid.addColorStop(0.45,`rgba(${cr},${cg},${cb},${0.30*opa})`);
+  gMid.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = gMid; ctx.beginPath(); ctx.arc(sx,sy,midR,0,Math.PI*2); ctx.fill();
+
+  const coreR = baseR * (0.5 + pulse*0.12);
+  const gCore = ctx.createRadialGradient(sx,sy,0, sx,sy,coreR);
+  gCore.addColorStop(0, `rgba(255,255,255,${Math.min(1,0.95*opa)})`);
+  gCore.addColorStop(0.25, `rgba(255,${Math.min(255,cg+50)},${Math.min(255,cb+80)},${0.88*opa})`);
+  gCore.addColorStop(0.55, `rgba(${Math.min(255,cr+20)},${cg},${Math.max(0,cb-20)},${0.45*opa})`);
+  gCore.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = gCore; ctx.beginPath(); ctx.arc(sx,sy,coreR,0,Math.PI*2); ctx.fill();
+
+  const axisDx = (CW/2 - sx), axisDy = (CH/2 - sy);
+  const HUES = [[cr,cg,cb], [Math.min(255,cr+10), Math.max(0,cg-20), Math.max(0,cb-60)], [Math.max(0,cr-80), Math.max(0,cg-30), Math.min(255,cb+90)], [cr,cg,cb], [Math.min(255,cr+30),Math.min(255,cg+10),Math.max(0,cb-40)]];
+  if(_lightFlareLayout){
+    _lightFlareLayout.artifacts.forEach((a,i)=>{
+      const px = sx + axisDx * a.t, py = sy + axisDy * a.t;
+      const r  = Math.min(CW,CH) * a.size * sizeMul * 1.3;
+      const [hr,hg,hb] = HUES[i % HUES.length];
+      const alpha = a.alpha * opa * (0.7+pulse*0.4) * 0.85;
+      ctx.save(); ctx.filter = `blur(${Math.max(1,r*0.15)}px)`;
+      const g = ctx.createRadialGradient(px,py,0, px,py,r);
+      g.addColorStop(0, `rgba(${hr},${hg},${hb},0)`); g.addColorStop(0.6, `rgba(${hr},${hg},${hb},${alpha})`);
+      g.addColorStop(0.85,`rgba(${hr},${hg},${hb},${alpha*0.5})`); g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px,py,r,0,Math.PI*2); ctx.fill(); ctx.restore();
+    });
+  }
+}
+
+function drawLight(t){
+  const lcfg = state.builtinOverlay.light;
+  const speed = lcfg.speed / 50, color = lcfg.color, opa = lcfg.opacity / 100, sizeMul = lcfg.size / 100;
+  if(!_lightFlareLayout || _lightFlareLayout.rayCount !== lcfg.rayCount) initLightFlareLayout();
+  const cr = parseInt(color.slice(1,3),16), cg = parseInt(color.slice(3,5),16), cb = parseInt(color.slice(5,7),16);
+  const sx = CW * (lcfg.posX/100), sy = CH * (lcfg.posY/100);
+  const pulse = 0.45 + 0.30*Math.sin(t*speed*0.8) + 0.15*Math.sin(t*speed*1.9+1.2) + 0.10*Math.sin(t*speed*3.1+2.4);
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  if(lcfg.style === 'glow'){ drawSunGlow(t, sx, sy, cr, cg, cb, opa, sizeMul, pulse, speed); ctx.restore(); return; }
+
+  const coronaR = Math.min(CW,CH) * 0.34 * sizeMul * (0.9 + pulse*0.2);
+  const spikeLen = Math.min(CW,CH) * 0.62 * sizeMul;
+
+  _lightFlareLayout.spikes.forEach(sp=>{
+    const spPulse = 0.5 + 0.30*Math.sin(t*speed*0.9 + sp.phaseOff) + 0.20*Math.sin(t*speed*2.1 + sp.phaseOff*1.4 + 0.8);
+    const len = spikeLen * sp.lengthFactor * (0.75 + spPulse*0.4);
+    const halfW = (spikeLen*0.012) * sp.widthFactor * (0.6 + spPulse*0.5);
+    const ex = sx + Math.cos(sp.angle)*len, ey = sy + Math.sin(sp.angle)*len;
+    const nx = -Math.sin(sp.angle), ny = Math.cos(sp.angle);
+    const g = ctx.createLinearGradient(sx,sy, ex,ey);
+    g.addColorStop(0, `rgba(${cr},${cg},${cb},${(0.55+spPulse*0.3)*opa})`); g.addColorStop(0.12, `rgba(${cr},${cg},${cb},${(0.22+spPulse*0.15)*opa})`);
+    g.addColorStop(0.4, `rgba(${cr},${cg},${cb},${0.05*opa})`); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.beginPath(); ctx.moveTo(sx + nx*halfW*0.3, sy + ny*halfW*0.3); ctx.lineTo(ex + nx*halfW, ey + ny*halfW);
+    ctx.lineTo(ex - nx*halfW, ey - ny*halfW); ctx.lineTo(sx - nx*halfW*0.3, sy - ny*halfW*0.3); ctx.closePath();
+    ctx.fillStyle = g; ctx.fill();
+  });
+
+  [1.0, 1.7].forEach((mul, i)=>{
+    const r = coronaR * mul;
+    ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI*2);
+    ctx.lineWidth = coronaR * (i===0 ? 0.05 : 0.025);
+    ctx.strokeStyle = `rgba(${cr},${cg},${cb},${(0.10 - i*0.04)*opa*(0.7+pulse*0.5)})`; ctx.stroke();
+  });
+
+  const coreR = coronaR * (0.42 + pulse*0.10);
+  const coreG = ctx.createRadialGradient(sx,sy,0, sx,sy,coreR);
+  coreG.addColorStop(0, `rgba(255,255,255,${Math.min(1,0.95*opa)})`);
+  coreG.addColorStop(0.18, `rgba(${Math.min(255,cr+40)},${Math.min(255,cg+40)},${Math.min(255,cb+20)},${0.85*opa})`);
+  coreG.addColorStop(0.45, `rgba(${cr},${cg},${cb},${0.35*opa})`); coreG.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = coreG; ctx.beginPath(); ctx.arc(sx, sy, coreR, 0, Math.PI*2); ctx.fill();
+
+  const coronaG = ctx.createRadialGradient(sx,sy,0, sx,sy,coronaR*1.3);
+  coronaG.addColorStop(0, `rgba(${cr},${cg},${cb},${0.30*opa})`); coronaG.addColorStop(0.5, `rgba(${cr},${cg},${cb},${0.10*opa})`);
+  coronaG.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = coronaG; ctx.beginPath(); ctx.arc(sx, sy, coronaR*1.3, 0, Math.PI*2); ctx.fill();
+
+  _lightFlareLayout.sparkles.forEach(sp=>{
+    const tw = 0.4 + 0.6*Math.max(0, Math.sin(t*speed*2.4 + sp.phaseOff));
+    const dist = sp.dist * coronaR * 1.6;
+    const px = sx + Math.cos(sp.angle)*dist, py = sy + Math.sin(sp.angle)*dist;
+    const r = coronaR * 0.045 * sp.size * (0.5+tw*0.6);
+    if(r<=0 || tw<0.05) return;
+    const g = ctx.createRadialGradient(px,py,0, px,py,r);
+    g.addColorStop(0, `rgba(255,255,255,${0.85*tw*opa})`); g.addColorStop(0.5,`rgba(${cr},${cg},${cb},${0.4*tw*opa})`);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px,py,r,0,Math.PI*2); ctx.fill();
+  });
+
+  const axisDx = (CW/2 - sx), axisDy = (CH/2 - sy);
+  _lightFlareLayout.artifacts.forEach(a=>{
+    const px = sx + axisDx * a.t, py = sy + axisDy * a.t;
+    const r = Math.min(CW,CH) * a.size * sizeMul;
+    const alpha = a.alpha * opa * (0.7+pulse*0.4);
+    ctx.save(); ctx.globalAlpha = alpha;
+    if(a.hex){
+      ctx.beginPath();
+      for(let k=0;k<6;k++){
+        const ang = Math.PI/3*k + Math.PI/6, hx = px + Math.cos(ang)*r, hy = py + Math.sin(ang)*r;
+        if(k===0) ctx.moveTo(hx,hy); else ctx.lineTo(hx,hy);
+      }
+      ctx.closePath(); ctx.strokeStyle = `rgba(${cr},${cg},${cb},1)`; ctx.lineWidth = r*0.12; ctx.stroke();
+    } else {
+      const g = ctx.createRadialGradient(px,py,r*0.5, px,py,r);
+      g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(0.75, `rgba(${cr},${cg},${cb},1)`); g.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px,py,r,0,Math.PI*2); ctx.fill();
+    }
+    ctx.restore();
+  });
+  ctx.restore();
+}
+
+function drawBuiltinOverlay(t){
+  switch(state.builtinOverlay.type){
+    case 'bokeh': drawBokeh(t); break;
+    case 'light': drawLight(t); break;
+  }
+}
+
+function avgFromBars(bars){ let s=0; for(let i=0;i<bars.length;i++) s+=bars[i]; return s/bars.length; }
+
+function getWfColorStyle(cx, cy, r){
+  if(state.wf.color==='solid') return state.wf.solidColor;
+
+  state.gradPhase += (state.wf.gradSpeed/1000);
+  try{
+    const stops = getScrollingGradientStops();
+    const grad = ctx.createLinearGradient(cx-r, cy-r, cx+r, cy+r);
+    stops.forEach(s => grad.addColorStop(Math.min(1, Math.max(0, s.pos)), s.color));
+    return grad;
+  } catch(e){
+    // Không bao giờ để 1 điểm neo có dữ liệu màu lỗi làm cả waveform biến
+    // mất — nếu có gì bất thường, tạm dùng màu điểm neo đầu tiên cho khung
+    // hình này, khung hình kế tiếp sẽ tự thử lại bình thường.
+    console.warn('Gradient render fallback:', e);
+    const first = state.wf.gradientStops[0];
+    return (first && first.color) || '#39ffd6';
+  }
+}
+
+// Trả về danh sách điểm neo (đã sắp xếp 0..1) dùng để vẽ ngay tại thời điểm
+// hiện tại. Nếu "Tốc độ cuộn màu" = 0, trả về đúng y hệt các điểm neo người
+// dùng đã thiết kế (tĩnh). Nếu > 0, coi dải màu là TUẦN HOÀN (điểm cuối nối
+// liền điểm đầu) và dịch chuyển toàn bộ theo pha thời gian — vẫn dùng đúng
+// các màu người dùng đã chọn, chỉ là cuộn qua lại liên tục.
+function getScrollingGradientStops(){
+  const raw = sortedStops();
+  if(raw.length===0) return [{pos:0,color:'#39ffd6'},{pos:1,color:'#39ffd6'}];
+  if(raw.length===1) return [{pos:0,color:raw[0].color},{pos:1,color:raw[0].color}];
+
+  const phase = ((state.gradPhase % 1) + 1) % 1;
+  if(phase < 1e-6) return raw;
+
+  const n = raw.length;
+  function colorAtCyclic(pos){
+    for(let i=0;i<n;i++){
+      const a = raw[i];
+      const b = raw[(i+1)%n];
+      let bPos = b.pos;
+      if(i===n-1) bPos += 1; // đoạn nối từ điểm cuối vòng về điểm đầu (thêm 1 chu kỳ)
+      if(pos>=a.pos && pos<=bPos){
+        const t = (bPos-a.pos)>1e-9 ? (pos-a.pos)/(bPos-a.pos) : 0;
+        return lerpColorHex(a.color, b.color, t);
+      }
+    }
+    return raw[0].color;
+  }
+
+  const result = [{ pos:0, color: colorAtCyclic(phase) }];
+  raw.forEach(s=>{
+    let p = s.pos - phase;
+    if(p<0) p += 1;
+    if(p>1e-6 && p<1-1e-6) result.push({ pos:p, color:s.color });
+  });
+  result.push({ pos:1, color: colorAtCyclic(phase) });
+  result.sort((a,b)=>a.pos-b.pos);
+
+  // loại bỏ các điểm trùng/gần trùng vị trí (sai số nổi) để addColorStop
+  // không bị lỗi do offset không tăng dần nghiêm ngặt
+  const dedup = [];
+  result.forEach(r=>{
+    if(dedup.length===0 || r.pos > dedup[dedup.length-1].pos + 1e-6) dedup.push(r);
+    else dedup[dedup.length-1] = r;
+  });
+  return dedup;
+}
+
+let _barPermCache = null;
+function getBarPermutation(n){
+  if(_barPermCache && _barPermCache.n===n) return _barPermCache.arr;
+  const arr = Array.from({length:n}, (_,i)=>i);
+  for(let i=n-1;i>0;i--){
+    const r = Math.floor(prand(i*13.37 + n*0.913) * (i+1));
+    const tmp = arr[i]; arr[i] = arr[r]; arr[r] = tmp;
+  }
+  _barPermCache = {n, arr}; return arr;
+}
+
+function drawWaveform(freq, t){
+  const n = state.wf.bars, cx = CW * state.wf.posX/100, cy = CH * state.wf.posY/100, ampMul = state.wf.amp/100;
+  const usableLen = freq ? Math.floor(freq.length*0.75) : 0, perm = getBarPermutation(n), bars = new Array(n);
+  for(let i=0;i<n;i++){
+    if(!freq){ bars[i]=0.05; continue; }
+    const idx = Math.floor((perm[i]/n)*usableLen); bars[i] = freq[idx]/255;
+  }
+  switch(state.wf.type){
+    case 'bar-center': drawBarCenter(bars,n,cx,cy,ampMul); break;
+    case 'bar-up': drawBarUp(bars,n,cx,cy,ampMul); break;
+    case 'bar-spread': drawBarSpread(bars,n,cx,cy,ampMul); break;
+    case 'circle': drawCircle(bars,n,cx,cy,ampMul); break;
+    case 'dual-curve': drawDualCurve(bars,n,cx,cy,ampMul); break;
+    case 'dual-curve-2color': drawDualCurveTwoColor(bars,n,cx,cy,ampMul,avgFromBars(bars),t); break;
+    case 'dual-ring': drawDualRing(bars,n,cx,cy,ampMul); break;
+    case 'particles': drawParticles(bars,n,cx,cy,ampMul); break;
+    default: drawBarCenter(bars,n,cx,cy,ampMul);
+  }
+}
+function wfTotalWidth(){ return CW * (state.wf.size/100); }
+function glowColorFor(){ return state.wf.color==='solid' ? state.wf.solidColor : 'rgba(255,255,255,0.55)'; }
+
+function drawBarCenter(bars,n,cx,cy,ampMul){
+  const totalW = wfTotalWidth(), barW = totalW/n, maxH = (CH*0.42) * ampMul, startX = cx - totalW/2;
+  ctx.save(); ctx.fillStyle = getWfColorStyle(cx, cy, totalW/2); ctx.shadowColor = glowColorFor(); ctx.shadowBlur = 14 * state.wf.glowIntensity;
+  for(let i=0;i<n;i++){
+    const h = 6 + bars[i]*maxH, x = startX + i*barW, w = Math.max(1, barW*0.7);
+    roundRect(x, cy-h/2, w, h, Math.min(3,w/2)); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawBarUp(bars,n,cx,cy,ampMul){
+  const totalW = wfTotalWidth(), barW = totalW/n, maxH = (CH*0.5) * ampMul, startX = cx - totalW/2;
+  ctx.save(); ctx.fillStyle = getWfColorStyle(cx, cy, totalW/2); ctx.shadowColor = glowColorFor(); ctx.shadowBlur = 14 * state.wf.glowIntensity;
+  for(let i=0;i<n;i++){
+    const h = 4 + bars[i]*maxH, x = startX + i*barW, w = Math.max(1, barW*0.7);
+    roundRect(x, cy-h, w, h, Math.min(3,w/2)); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawBarSpread(bars,n,cx,cy,ampMul){
+  const totalW = wfTotalWidth(), barW = totalW/n, maxH = (CH*0.42) * ampMul, startX = cx - totalW/2;
+  ctx.save(); ctx.fillStyle = getWfColorStyle(cx, cy, totalW/2); ctx.shadowColor = glowColorFor(); ctx.shadowBlur = 14 * state.wf.glowIntensity;
+  for(let i=0;i<n;i++){
+    const spreadFactor = 0.25 + Math.abs(i-(n-1)/2)/((n-1)/2)*0.95;
+    const h = 5 + bars[i]*maxH*spreadFactor, x = startX + i*barW, w = Math.max(1, barW*0.7);
+    roundRect(x, cy-h/2, w, h, Math.min(3,w/2)); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawCircle(bars,n,cx,cy,ampMul){
+  const radius = (Math.min(CW,CH)*0.22) * (state.wf.size/100), maxLen = radius * 0.9 * ampMul;
+  ctx.save(); ctx.strokeStyle = getWfColorStyle(cx, cy, radius+maxLen); ctx.shadowColor = glowColorFor(); ctx.shadowBlur = 12 * state.wf.glowIntensity; ctx.lineCap = 'round';
+  ctx.lineWidth = Math.max(2, (radius*2*Math.PI/n)*0.55);
+  for(let i=0;i<n;i++){
+    const ang = (i/n)*Math.PI*2 - Math.PI/2, len = 4 + bars[i]*maxLen;
+    const x1 = cx + Math.cos(ang)*radius, y1 = cy + Math.sin(ang)*radius, x2 = cx + Math.cos(ang)*(radius+len), y2 = cy + Math.sin(ang)*(radius+len);
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawDualRing(bars,n,cx,cy,ampMul){
+  const radius = (Math.min(CW,CH)*0.20) * (state.wf.size/100), maxLen = radius * 0.7 * ampMul;
+  ctx.save(); ctx.lineCap = 'round'; ctx.shadowColor = glowColorFor(); ctx.shadowBlur = 12 * state.wf.glowIntensity; ctx.lineWidth = Math.max(2, (radius*2*Math.PI/n)*0.4);
+  ctx.strokeStyle = getWfColorStyle(cx, cy, radius+maxLen);
+  for(let i=0;i<n;i++){
+    const ang = (i/n)*Math.PI*2 - Math.PI/2, len = 3 + bars[i]*maxLen;
+    ctx.beginPath(); ctx.moveTo(cx + Math.cos(ang)*radius, cy + Math.sin(ang)*radius); ctx.lineTo(cx + Math.cos(ang)*(radius+len), cy + Math.sin(ang)*(radius+len)); ctx.stroke();
+  }
+  const innerR = radius*0.62; ctx.strokeStyle = getWfColorStyle(cx, cy, innerR);
+  for(let i=0;i<n;i++){
+    const idx = (i + Math.floor(n/2)) % n, ang = (i/n)*Math.PI*2 - Math.PI/2 + (Math.PI/n), len = 3 + bars[idx]*maxLen*0.6;
+    ctx.beginPath(); ctx.moveTo(cx + Math.cos(ang)*innerR, cy + Math.sin(ang)*innerR); ctx.lineTo(cx + Math.cos(ang)*(innerR-len), cy + Math.sin(ang)*(innerR-len)); ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawDualCurve(bars,n,cx,cy,ampMul){
+  const totalW = wfTotalWidth(), maxH = (CH*0.30) * ampMul, startX = cx - totalW/2, step = totalW/(n-1), topPts = [], botPts = [];
+  for(let i=0;i<n;i++){
+    const h = 4 + bars[i]*maxH; topPts.push([startX+i*step, cy-h]); botPts.push([startX+i*step, cy+h]);
+  }
+  ctx.save(); ctx.shadowColor = glowColorFor(); ctx.shadowBlur = 16 * state.wf.glowIntensity; ctx.fillStyle = getWfColorStyle(cx, cy, totalW/2);
+  ctx.beginPath(); ctx.moveTo(topPts[0][0], topPts[0][1]); smoothLineTo(topPts);
+  for(let i=botPts.length-1;i>=0;i--) if(i===botPts.length-1) ctx.lineTo(botPts[i][0],botPts[i][1]);
+  smoothLineTo(botPts.slice().reverse()); ctx.closePath();
+  ctx.globalAlpha = 0.85; ctx.fill(); ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  ctx.strokeStyle = getWfColorStyle(cx, cy, totalW/2); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(startX, cy); ctx.lineTo(startX+totalW, cy); ctx.stroke();
+  ctx.restore();
+}
+function smoothLineTo(pts){
+  for(let i=1;i<pts.length-1;i++){
+    const xc = (pts[i][0]+pts[i+1][0])/2, yc=(pts[i][1]+pts[i+1][1])/2;
+    ctx.quadraticCurveTo(pts[i][0],pts[i][1], xc, yc);
+  }
+  ctx.lineTo(pts[pts.length-1][0], pts[pts.length-1][1]);
+}
+function lightenColor(hex, amt){
+  const h = hex.replace('#',''), r = parseInt(h.substring(0,2),16), g = parseInt(h.substring(2,4),16), b = parseInt(h.substring(4,6),16);
+  return `rgb(${Math.round(r+(255-r)*amt)},${Math.round(g+(255-g)*amt)},${Math.round(b+(255-b)*amt)})`;
+}
+function strokeSmoothCurve(pts, color, lineWidth, glowBoost){
+  glowBoost = glowBoost==null ? 1 : glowBoost;
+  ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = lineWidth; ctx.lineCap = 'round'; ctx.shadowColor = color; ctx.shadowBlur = lineWidth*2.2*glowBoost;
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); smoothLineTo(pts); ctx.stroke();
+  if(glowBoost > 1.05){
+    ctx.shadowBlur = lineWidth*3.4*glowBoost; ctx.lineWidth = lineWidth*1.05;
+    ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); smoothLineTo(pts); ctx.stroke();
+  }
+  ctx.shadowBlur = 0; ctx.strokeStyle = glowBoost > 1.05 ? lightenColor(color, Math.min(0.85,(glowBoost-1)*0.7)) : color;
+  ctx.lineWidth = Math.max(1, lineWidth*0.4); ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); smoothLineTo(pts); ctx.stroke();
+  ctx.restore();
+}
+function prand(seed){ const x = Math.sin(seed*127.1 + 311.7)*43758.5453123; return x - Math.floor(x); }
+function smoothstep(x){ return x*x*(3-2*x); }
+const BUMP_AMP_FACTORS = [1.0, 0.62];
+function bumpHeightAt(f, t, audioLevel){
+  const cfg = state.wf.curve; let total = 0;
+  for(let k=0;k<cfg.numBumps;k++){
+    const cycleLen = (1.1 + k*0.6) / cfg.moveSpeed, cyclePos = t/cycleLen, cycleIdx = Math.floor(cyclePos), phase = cyclePos - cycleIdx;
+    const pos = (0.12 + prand(k*97.13 + cycleIdx) * 0.76) + ((0.12 + prand(k*97.13 + cycleIdx + 1) * 0.76) - (0.12 + prand(k*97.13 + cycleIdx) * 0.76))*smoothstep(phase);
+    const env = Math.pow(Math.min(1, phase/(0.09 / cfg.shapeSpeed)),1.5) * Math.exp(-phase*(4.2 * cfg.shapeSpeed));
+    total += env * Math.exp(-Math.pow((f-pos)/0.16, 2)*0.5) * BUMP_AMP_FACTORS[k];
+  }
+  return Math.min(1.4, total) * (0.35 + audioLevel*1.1);
+}
+function bumpEnergyAt(t, audioLevel){
+  const cfg = state.wf.curve; let peak = 0;
+  for(let k=0;k<cfg.numBumps;k++){
+    const cyclePos = t/((1.1 + k*0.6) / cfg.moveSpeed), phase = cyclePos - Math.floor(cyclePos);
+    peak = Math.max(peak, Math.pow(Math.min(1, phase/(0.09 / cfg.shapeSpeed)),1.5) * Math.exp(-phase*(4.2 * cfg.shapeSpeed)) * BUMP_AMP_FACTORS[k]);
+  }
+  return Math.min(1.5, peak*(0.35 + audioLevel*1.1));
+}
+function drawDualCurveTwoColor(bars,n,cx,cy,ampMul,audioLevel,t){
+  const cfg = state.wf.curve, totalW = wfTotalWidth(), maxH = (CH*0.20) * ampMul, startX = cx - totalW/2, step = totalW/(n-1), lineWidth = Math.max(2, (totalW/n)*0.16), tt = t||0;
+  const glowBoost = 1 + bumpEnergyAt(tt, audioLevel)*1.6*cfg.glow;
+  const line1Top = [], line2Top = [], line1Bot = [], line2Bot = [];
+  for(let i=0;i<n;i++){
+    const x = startX + i*step, f = i/(n-1), edge = Math.sin(Math.PI * f);
+    const h1 = edge * maxH * bumpHeightAt(f, tt, audioLevel), h2 = edge * maxH * bumpHeightAt(f, tt + cfg.lag, audioLevel);
+    line1Top.push([x, cy - h1]); line2Top.push([x, cy - h2]); line1Bot.push([x, cy + h1]); line2Bot.push([x, cy + h2]);
+  }
+  strokeSmoothCurve(line1Top, state.wf.curveTopColor, lineWidth, glowBoost); strokeSmoothCurve(line2Top, state.wf.curveBottomColor, lineWidth, glowBoost);
+  strokeSmoothCurve(line1Bot, state.wf.curveTopColor, lineWidth, glowBoost); strokeSmoothCurve(line2Bot, state.wf.curveBottomColor, lineWidth, glowBoost);
+}
+function drawParticles(bars,n,cx,cy,ampMul){
+  const totalW = wfTotalWidth(), step = totalW/n, startX = cx - totalW/2, maxRise = (CH*0.32) * ampMul, style = getWfColorStyle(cx, cy, totalW/2);
+  ctx.save(); ctx.shadowColor = glowColorFor();
+  for(let i=0;i<n;i++){
+    const x = startX + i*step + step/2, rise = bars[i]*maxRise, y = cy - rise, r = 2.5 + bars[i]*6;
+    ctx.shadowBlur = (6 + bars[i]*14) * state.wf.glowIntensity; ctx.beginPath(); ctx.fillStyle = style; ctx.globalAlpha = 0.55 + bars[i]*0.45; ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0; ctx.globalAlpha = 0.15; ctx.beginPath(); ctx.moveTo(x, cy); ctx.lineTo(x, y); ctx.strokeStyle = style; ctx.lineWidth = Math.max(1, r*0.5); ctx.stroke();
+  }
+  ctx.globalAlpha = 1; ctx.restore();
+}
+function roundRect(x,y,w,h,r){
+  ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+
+// Vì sao video nền cứ CHẬM DẦN so với thực tế (không phải thi thoảng khựng
+// mà là lệch tăng dần liên tục): bộ giải mã video phải cạnh tranh tài
+// nguyên CPU/GPU với việc vẽ hiệu ứng (đặc biệt ctx.filter blur() — rất
+// nặng) VÀ việc MediaRecorder mã hoá video xuất ra, cùng lúc, trong suốt
+// quá trình ghi. Nếu giải mã không theo kịp tốc độ thật liên tục (chứ
+// không phải chỉ khựng nhất thời), thì chờ >1 giây mới chỉnh 1 lần (bản
+// trước) khiến độ lệch cứ dồn lại giữa hai lần chỉnh → video trôi chậm dần
+// đều rồi mới bị "nhảy" về đúng.
+// Cách sửa: thay vì seek (ép nhảy vị trí — luôn giật), dùng playbackRate —
+// tăng nhẹ tốc độ phát khi video đang chậm hơn thực tế để nó tự đuổi kịp
+// một cách êm, giảm nhẹ tốc độ khi đang nhanh hơn. Chỉ dùng tới seek (biện
+// pháp cuối, vẫn giật) khi lệch quá nặng (>1.5s) — tức video đã khựng hẳn,
+// không có cách nào "đuổi kịp" bằng tốc độ được nữa.
+let _lastBgSyncCorrection = 0;
+function syncBgVideoToTime(t){
+  if(state.bg.type!=='video' || !state.bg.el || !state.bg.naturalDur) return;
+  const el = state.bg.el;
+  const target = t % state.bg.naturalDur;
+  const drift = el.currentTime - target; // dương = video nhanh hơn, âm = video chậm hơn thực tế
+
+  if(!state.exporting){
+    if(Math.abs(drift) > 0.15){ el.currentTime = target; el.playbackRate = 1; }
+    return;
+  }
+
+  if(el.seeking) return; // đang seek dở — đừng can thiệp gì thêm lúc này
+
+  if(Math.abs(drift) > 1.5){
+    // Lệch quá nặng — giải mã đã khựng hẳn, tăng tốc độ không cứu được nữa,
+    // đành seek lại (chấp nhận 1 lần giật, còn hơn để lệch mãi tới cuối clip).
+    const now = performance.now();
+    if(now - _lastBgSyncCorrection > 1000){
+      el.currentTime = target;
+      el.playbackRate = 1;
+      _lastBgSyncCorrection = now;
+    }
+    return;
+  }
+
+  // Lệch vừa phải — đuổi kịp êm bằng cách nhích nhẹ tốc độ phát, không seek.
+  if(drift < -0.08) el.playbackRate = 1.15;      // đang chậm hơn thực tế -> phát nhanh hơn 1 chút để đuổi kịp
+  else if(drift > 0.08) el.playbackRate = 0.9;    // đang nhanh hơn thực tế -> phát chậm lại 1 chút
+  else if(el.playbackRate !== 1) el.playbackRate = 1; // đã khớp -> về lại tốc độ bình thường
+}
+
+function loop(){
+  if(!state.playing) return;
+  const t = state.audio.el ? state.audio.el.currentTime : 0;
+  syncBgVideoToTime(t);
+  if(state.overlay.el && state.overlay.el.paused) state.overlay.el.play().catch(()=>{});
+  renderFrame(); updateTimecode();
+  // Nếu đang ghi xuất video (captureStream chế độ thủ công), yêu cầu chụp
+  // NGAY khung hình vừa vẽ xong — xem giải thích ở runScreenRecordingExport().
+  if(state._captureTrack){ try{ state._captureTrack.requestFrame(); }catch(e){} }
+  if(state.audio.el && state.audio.el.ended) stopPlayback();
+  state.rafId = requestAnimationFrame(loop);
+}
+function updateTimecode(){
+  const cur = state.audio.el ? state.audio.el.currentTime : 0, dur = state.audio.duration || 0;
+  $('timecode').textContent = `${fmtTime(cur)} / ${fmtTime(dur)}`;
+  if(dur>0 && !state.scrubbing) $('scrub').value = Math.floor(cur*1000);
+}
+async function startPlayback(){
+  if(!state.audio.el){ alert('Hãy upload audio trước.'); return; }
+  if(state.audio.ctx.state !== 'running'){ try{ await state.audio.ctx.resume(); }catch(e){} }
+  await state.audio.el.play();
+  if(state.bg.type==='video') state.bg.el.play().catch(()=>{});
+  if(state.overlay.el) state.overlay.el.play().catch(()=>{});
+  state.playing = true; $('playBtn').textContent = '⏸ Tạm dừng'; loop();
+}
+function stopPlayback(){
+  state.playing = false;
+  if(state.audio.el) state.audio.el.pause();
+  if(state.bg.type==='video') state.bg.el.pause();
+  if(state.overlay.el) state.overlay.el.pause();
+  $('playBtn').textContent = '▶ Phát';
+  if(state.rafId) cancelAnimationFrame(state.rafId);
+}
+$('playBtn').addEventListener('click', ()=>{ if(state.playing) stopPlayback(); else startPlayback(); });
+
+const canvasWrapEl = $('canvasWrap'), fullscreenBtnEl = $('fullscreenBtn');
+fullscreenBtnEl.addEventListener('click', ()=>{
+  if(!document.fullscreenElement) (canvasWrapEl.requestFullscreen || canvasWrapEl.webkitRequestFullscreen || canvasWrapEl.msRequestFullscreen).call(canvasWrapEl);
+  else (document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen).call(document);
+});
+document.addEventListener('fullscreenchange', ()=> fullscreenBtnEl.title = document.fullscreenElement ? 'Thoát toàn màn hình' : 'Xem toàn màn hình' );
+
+$('scrub').addEventListener('mousedown', ()=> state.scrubbing=true);
+$('scrub').addEventListener('change', e=>{
+  state.scrubbing=false;
+  if(state.audio.el){
+    state.audio.el.currentTime = e.target.value/1000;
+    syncBgVideoToTime(state.audio.el.currentTime); renderFrame(); updateTimecode();
+  }
+});
+
+setInterval(()=>{ if(!state.playing) renderFrame(); }, 50);
+renderFrame();
+
+// ============================================================
+// EXPORT & FFT Logic
+// ============================================================
+function setProgress(pct, label){
+  $('progresswrap').style.display='block'; $('progressfill').style.width = Math.min(100,pct)+'%'; $('progresslabel').textContent = label;
+}
+function hideProgress(){ $('progresswrap').style.display='none'; }
+
+async function exportVideo(mode = 'normal'){
+  if(state.exporting) return;
+  if(!state.audio.el || !state.audio.file){ alert('Hãy upload audio nền trước khi xuất video.'); return; }
+
+  if(typeof SharedArrayBuffer === 'undefined'){
+    alert('⚠️ Cần chạy node server.js để có SharedArrayBuffer cho bản đa luồng.'); return;
+  }
+
+  state.exporting = true;
+  $('exportBtn').disabled = true;
+  $('exportBtnFast').disabled = true;
+  $('exportRecordBtn').disabled = true;
+  $('exportWebCodecsBtn').disabled = true;
+  document.querySelectorAll('.aspect-ratio').forEach(b=>b.disabled = true);
+  stopPlayback();
+
+  try{
+    if (mode === 'fast') {
+      await runExportPipelineFast();
+    } else {
+      await runExportPipeline();
+    }
+  } catch(err){
+    console.error('Export error:', err);
+    setProgress(100, 'Lỗi khi xuất video: ' + (err && err.message ? err.message : String(err)));
+    $('statusRight').innerHTML = '<span class="err">Xuất video thất bại — xem Console (F12).</span>';
+  } finally {
+    state.exporting = false;
+    $('exportBtn').disabled = false;
+    $('exportBtnFast').disabled = false;
+    $('exportRecordBtn').disabled = false;
+    $('exportWebCodecsBtn').disabled = false;
+    document.querySelectorAll('.aspect-ratio').forEach(b=>b.disabled = false);
+    { const base = basePreviewSize(state.aspect); canvas.width = base.w; canvas.height = base.h; CW = base.w; CH = base.h; }
+  }
+}
+
+function fftInPlace(re, im){
+  const n = re.length;
+  for(let i=1,j=0;i<n;i++){
+    let bit = n>>1;
+    for(; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if(i<j){
+      let tr=re[i]; re[i]=re[j]; re[j]=tr;
+      let ti=im[i]; im[i]=im[j]; im[j]=ti;
+    }
+  }
+  for(let len=2; len<=n; len<<=1){
+    const ang = -2*Math.PI/len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for(let i=0;i<n;i+=len){
+      let curWr=1, curWi=0;
+      for(let j=0;j<len/2;j++){
+        const ur=re[i+j], ui=im[i+j], vr = re[i+j+len/2]*curWr - im[i+j+len/2]*curWi, vi = re[i+j+len/2]*curWi + im[i+j+len/2]*curWr;
+        re[i+j] = ur+vr; im[i+j] = ui+vi; re[i+j+len/2] = ur-vr; im[i+j+len/2] = ui-vi;
+        const nwr = curWr*wr - curWi*wi, nwi = curWr*wi + curWi*wr;
+        curWr = nwr; curWi = nwi;
+      }
+    }
+  }
+}
+
+const FFT_SIZE = 2048;
+let hannWindow = null;
+function getHannWindow(){
+  if(hannWindow) return hannWindow;
+  hannWindow = new Float32Array(FFT_SIZE);
+  for(let i=0;i<FFT_SIZE;i++) hannWindow[i] = 0.5*(1-Math.cos(2*Math.PI*i/(FFT_SIZE-1)));
+  return hannWindow;
+}
+
+async function decodeOfflinePCM(file){
+  const buf = await file.arrayBuffer(), audioBuffer = await state.audio.ctx.decodeAudioData(buf.slice(0));
+  const nCh = audioBuffer.numberOfChannels, len = audioBuffer.length, mono = new Float32Array(len);
+  for(let c=0;c<nCh;c++){
+    const ch = audioBuffer.getChannelData(c);
+    for(let i=0;i<len;i++) mono[i] += ch[i]/nCh;
+  }
+  return { samples: mono, sampleRate: audioBuffer.sampleRate, duration: audioBuffer.duration };
+}
+
+const _fftRe = new Float32Array(FFT_SIZE), _fftIm = new Float32Array(FFT_SIZE);
+let _lastOfflineFreq = null;
+
+function computeFreqAtTime(pcm, t){
+  const win = getHannWindow(), center = Math.round(t*pcm.sampleRate), half = FFT_SIZE/2;
+  _fftIm.fill(0);
+  for(let i=0;i<FFT_SIZE;i++){
+    const idx = center - half + i;
+    _fftRe[i] = (idx>=0 && idx<pcm.samples.length) ? pcm.samples[idx]*win[i] : 0;
+  }
+  fftInPlace(_fftRe, _fftIm);
+  
+  const n = FFT_SIZE/2, out = new Uint8Array(n), GAIN = 6, MIN_DB = -100, MAX_DB = -30;
+  if (!_lastOfflineFreq || _lastOfflineFreq.length !== n) _lastOfflineFreq = new Float32Array(n);
+  const smoothing = 0.82; 
+
+  for(let k=0;k<n;k++){
+    const mag = Math.sqrt(_fftRe[k]*_fftRe[k] + _fftIm[k]*_fftIm[k]) / (FFT_SIZE/2);
+    const db = 20*Math.log10(mag*GAIN + 1e-8);
+    let v = Math.max(0, Math.min(1, (db - MIN_DB) / (MAX_DB - MIN_DB)));
+    let smoothedVal = _lastOfflineFreq[k] * smoothing + (v * 255) * (1 - smoothing);
+    _lastOfflineFreq[k] = smoothedVal;
+    out[k] = Math.round(smoothedVal);
+  }
+  return out;
+}
+
+function seekVideoTo(videoEl, t){
+  if(!videoEl) return Promise.resolve();
+  if(Math.abs(videoEl.currentTime - t) < 0.008) return Promise.resolve();
+  return new Promise(resolve=>{
+    let done=false;
+    const finish = ()=>{ if(done) return; done=true; videoEl.removeEventListener('seeked', finish); resolve(); };
+    videoEl.addEventListener('seeked', finish); videoEl.currentTime = t; setTimeout(finish, 250);
+  });
+}
+
+let _ffmpegInstance = null;
+async function getFFmpegInstance(){
+  if(_ffmpegInstance) return _ffmpegInstance;
+  const { FFmpeg } = window.FFmpegWASM, { toBlobURL } = window.FFmpegUtil;
+  const ff = new FFmpeg();
+  ff.on('progress', ({ progress }) => {
+    if(progress >= 0 && progress <= 1) setProgress(62 + progress * 34, `FFmpeg đang mã hoá… ${(progress * 100).toFixed(0)}%`);
+  });
+  const BASE = 'vendor/core-mt';
+  await ff.load({
+    coreURL: await toBlobURL(`${BASE}/ffmpeg-core.js`, 'text/javascript'),
+    wasmURL: await toBlobURL(`${BASE}/ffmpeg-core.wasm`, 'application/wasm'),
+    workerURL: await toBlobURL(`${BASE}/ffmpeg-core.worker.js`, 'text/javascript'),
+  });
+  _ffmpegInstance = ff; return ff;
+}
+// "core-mt" = bản FFmpeg ĐA LUỒNG: khi load() xong, nó tự mở sẵn 1 nhóm
+// pthread worker (theo navigator.hardwareConcurrency) và giữ chạy nền chờ
+// lệnh — kể cả lúc không exec() gì cả, các worker này vẫn chiếm lõi CPU.
+// Nếu để vậy rồi mới ghi màn hình thời gian thực, chúng sẽ tranh CPU với
+// việc giải mã video nền + mã hoá MediaRecorder -> gây lệch/đứng hình.
+// Gọi hàm này để giải phóng hẳn các worker đó trước khi ghi thời gian thực.
+async function terminateFFmpegInstance(){
+  if(!_ffmpegInstance) return;
+  try{ _ffmpegInstance.terminate(); }catch(e){}
+  _ffmpegInstance = null;
+}
+
+// ============================================================
+// 1. QUY TRÌNH XUẤT THƯỜNG (Có áp dụng Late Muxing & Chống nghẽn RAM)
+// ============================================================
+async function runExportPipeline(){
+  _lastOfflineFreq = null;
+  const [resW, resH] = $('exportRes').value.split('x').map(Number), fps = +$('exportFps').value;
+  setProgress(1, 'Đang phân tích âm thanh (FFT offline)…');
+  await state.audio.ctx.resume().catch(()=>{});
+  const pcm = await decodeOfflinePCM(state.audio.file), duration = pcm.duration;
+  const totalFrames = Math.max(1, Math.ceil(duration * fps)), ff = await getFFmpegInstance();
+
+  canvas.width = resW; canvas.height = resH; CW = resW; CH = resH;
+  const overlayHasOwnDur = state.overlay.el && isFinite(state.overlay.el.duration) && state.overlay.el.duration > 0;
+  
+  const FRAMES_PER_CHUNK = 300, totalChunks = Math.ceil(totalFrames / FRAMES_PER_CHUNK);
+  const cpuThreads = Math.min(8, navigator.hardwareConcurrency || 4);
+
+  setProgress(3, 'Đang nạp âm thanh gốc vào FFmpeg…');
+  const audioBytes = new Uint8Array(await state.audio.file.arrayBuffer());
+  const audioExt = (state.audio.file.name.split('.').pop() || 'mp3').toLowerCase(), audioName = `audio.${audioExt}`;
+  await ff.writeFile(audioName, audioBytes);
+
+  const chunkFiles = [];
+  const RENDER_PROGRESS_TOTAL = 90, chunkSpan = RENDER_PROGRESS_TOTAL / totalChunks, renderSpan = chunkSpan * 0.7;
+
+  for(let c = 0; c < totalChunks; c++){
+    const startFrame = c * FRAMES_PER_CHUNK, endFrame = Math.min(totalFrames, startFrame + FRAMES_PER_CHUNK);
+    const framesInChunk = endFrame - startFrame, chunkBaseProgress = 5 + c * chunkSpan;
+
+    for(let i = startFrame; i < endFrame; i++){
+      const t = Math.min(duration - 0.001, i / fps);
+      if(state.bg.type === 'video' && state.bg.naturalDur > 0) await seekVideoTo(state.bg.el, t % state.bg.naturalDur);
+      if(state.overlay.el && overlayHasOwnDur) await seekVideoTo(state.overlay.el, t % state.overlay.el.duration);
+
+      renderFrame(computeFreqAtTime(pcm, t), t);
+      
+      const jpegBytes = await new Promise(res => {
+        canvas.toBlob(blob => blob.arrayBuffer().then(b => res(new Uint8Array(b))), 'image/jpeg', 0.95);
+      });
+      const localIdx = i - startFrame;
+      // Dùng chung tên file để chống tràn bộ nhớ ảo
+      await ff.writeFile(`f${String(localIdx).padStart(6,'0')}.jpg`, jpegBytes);
+
+      // Xả hơi Garbage Collection
+      if(i % 5 === 0 || i === endFrame - 1){
+        setProgress(chunkBaseProgress + ((localIdx+1) / framesInChunk) * renderSpan, `Render khung hình (Thường)… ${i+1}/${totalFrames}`);
+        await new Promise(r => setTimeout(r, 2));
+      }
+    }
+
+    const chunkOut = `chunk${c}.mp4`;
+    await ff.exec(['-framerate', String(fps), '-i', 'f%06d.jpg', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18', '-threads', String(cpuThreads), '-pix_fmt', 'yuv420p', chunkOut]);
+    chunkFiles.push(chunkOut);
+
+    for(let i = startFrame; i < endFrame; i++){
+      try{ await ff.deleteFile(`f${String(i - startFrame).padStart(6,'0')}.jpg`); }catch(e){}
+    }
+  }
+
+  // Late Muxing
+  setProgress(96, 'Đang ghép các đoạn lại thành file liền mạch…');
+  const concatListText = chunkFiles.map(f => `file '${f}'`).join('\n');
+  await ff.writeFile('concat_list.txt', new TextEncoder().encode(concatListText));
+  await ff.exec(['-f', 'concat', '-safe', '0', '-i', 'concat_list.txt', '-c', 'copy', 'silent_out.mp4']);
+
+  setProgress(97, 'Đang lồng âm thanh vào video…');
+  await ff.exec(['-i', 'silent_out.mp4', '-i', audioName, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '320k', '-shortest', '-movflags', '+faststart', 'out.mp4']);
+
+  finalizeExport(ff, chunkFiles, audioName);
+}
+
+
+// ============================================================
+// 2. QUY TRÌNH XUẤT SIÊU TỐC (Kiến trúc Ring Buffer Pipelining)
+// ============================================================
+async function runExportPipelineFast(){
+  _lastOfflineFreq = null;
+  const [resW, resH] = $('exportRes').value.split('x').map(Number), fps = +$('exportFps').value;
+  setProgress(1, 'Đang phân tích âm thanh (FFT offline)…');
+  await state.audio.ctx.resume().catch(()=>{});
+  const pcm = await decodeOfflinePCM(state.audio.file), duration = pcm.duration;
+  const totalFrames = Math.max(1, Math.ceil(duration * fps)), ff = await getFFmpegInstance();
+
+  canvas.width = resW; canvas.height = resH; CW = resW; CH = resH;
+  const overlayHasOwnDur = state.overlay.el && isFinite(state.overlay.el.duration) && state.overlay.el.duration > 0;
+  
+  const FRAMES_PER_CHUNK = 900, totalChunks = Math.ceil(totalFrames / FRAMES_PER_CHUNK);
+  const cpuThreads = Math.min(8, navigator.hardwareConcurrency || 4);
+
+  setProgress(3, 'Đang nạp âm thanh gốc vào FFmpeg…');
+  const audioBytes = new Uint8Array(await state.audio.file.arrayBuffer());
+  const audioExt = (state.audio.file.name.split('.').pop() || 'mp3').toLowerCase(), audioName = `audio.${audioExt}`;
+  await ff.writeFile(audioName, audioBytes);
+
+  const chunkFiles = [];
+  const RENDER_PROGRESS_TOTAL = 90, chunkSpan = RENDER_PROGRESS_TOTAL / totalChunks, renderSpan = chunkSpan * 0.7;
+
+  // Khởi tạo Băng chuyền Canvas ẩn (Ring Buffer)
+  const CONCURRENCY = 6; 
+  const blobPool = [];
+  for(let i=0; i<CONCURRENCY; i++) {
+    let c = document.createElement('canvas');
+    c.width = resW; c.height = resH;
+    blobPool.push({ canvas: c, ctx: c.getContext('2d', { alpha: false, willReadFrequently: true }) });
+  }
+
+  for(let c = 0; c < totalChunks; c++){
+    const startFrame = c * FRAMES_PER_CHUNK, endFrame = Math.min(totalFrames, startFrame + FRAMES_PER_CHUNK);
+    const framesInChunk = endFrame - startFrame, chunkBaseProgress = 5 + c * chunkSpan;
+    
+    let activePromises = [];
+    let poolIdx = 0;
+
+    for(let i = startFrame; i < endFrame; i++){
+      const t = Math.min(duration - 0.001, i / fps);
+      if(state.bg.type === 'video' && state.bg.naturalDur > 0) await seekVideoTo(state.bg.el, t % state.bg.naturalDur);
+      if(state.overlay.el && overlayHasOwnDur) await seekVideoTo(state.overlay.el, t % state.overlay.el.duration);
+
+      renderFrame(computeFreqAtTime(pcm, t), t);
+      
+      const localIdx = i - startFrame;
+      const poolObj = blobPool[poolIdx % CONCURRENCY];
+      poolIdx++;
+
+      // Copy hình ảnh cực nhanh sang Canvas ẩn
+      poolObj.ctx.drawImage(canvas, 0, 0);
+
+      // Kích hoạt tiến trình nén ảnh ngầm (Không dùng await để chặn vòng lặp)
+      const p = new Promise(resolve => {
+        poolObj.canvas.toBlob(blob => {
+          blob.arrayBuffer().then(b => {
+            const fileName = `f${String(localIdx).padStart(6,'0')}.jpg`;
+            ff.writeFile(fileName, new Uint8Array(b)).then(resolve);
+          });
+        }, 'image/jpeg', 0.95);
+      });
+
+      activePromises.push(p);
+
+      // Nếu băng chuyền đã đầy, chờ ảnh cũ nhất hoàn thành rồi mới chạy tiếp
+      if(activePromises.length >= CONCURRENCY){
+        await activePromises.shift(); 
+      }
+
+      if(i % 5 === 0 || i === endFrame - 1){
+        setProgress(chunkBaseProgress + ((localIdx+1) / framesInChunk) * renderSpan, `Render khung hình (Siêu tốc)… ${i+1}/${totalFrames}`);
+        await new Promise(r => setTimeout(r, 2));
+      }
+    }
+
+    // Chờ các ảnh cuối cùng của chunk nén xong
+    if(activePromises.length > 0){
+      await Promise.all(activePromises);
+    }
+
+    const chunkOut = `chunk${c}.mp4`;
+    await ff.exec(['-framerate', String(fps), '-i', 'f%06d.jpg', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18', '-threads', String(cpuThreads), '-pix_fmt', 'yuv420p', chunkOut]);
+    chunkFiles.push(chunkOut);
+
+    for(let i = startFrame; i < endFrame; i++){
+      try{ await ff.deleteFile(`f${String(i - startFrame).padStart(6,'0')}.jpg`); }catch(e){}
+    }
+  }
+
+  setProgress(96, 'Đang ghép các đoạn lại thành file liền mạch…');
+  const concatListText = chunkFiles.map(f => `file '${f}'`).join('\n');
+  await ff.writeFile('concat_list.txt', new TextEncoder().encode(concatListText));
+  await ff.exec(['-f', 'concat', '-safe', '0', '-i', 'concat_list.txt', '-c', 'copy', 'silent_out.mp4']);
+
+  setProgress(97, 'Đang lồng âm thanh vào video…');
+  await ff.exec(['-i', 'silent_out.mp4', '-i', audioName, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '320k', '-shortest', '-movflags', '+faststart', 'out.mp4']);
+
+  finalizeExport(ff, chunkFiles, audioName);
+}
+
+async function finalizeExport(ff, chunkFiles, audioName) {
+  setProgress(98, 'Đang xuất file MP4…');
+  const data = await ff.readFile('out.mp4');
+  const blob = new Blob([data.buffer], { type: 'video/mp4' });
+  const url  = URL.createObjectURL(blob);
+  const dl   = $('dl');
+  dl.href = url; dl.download = 'wavecast.mp4'; dl.style.display = 'inline-block';
+  dl.click();
+
+  const mb = (data.buffer.byteLength / 1024 / 1024).toFixed(1);
+  setProgress(100, `Hoàn tất! File MP4 đã tải xuống (${mb} MB).`);
+  $('statusRight').innerHTML = '<span class="ok">Xuất video thành công.</span>';
+  setTimeout(hideProgress, 6000);
+
+  try{ await ff.deleteFile(audioName); }catch(e){}
+  try{ await ff.deleteFile('concat_list.txt'); }catch(e){}
+  try{ await ff.deleteFile('silent_out.mp4'); }catch(e){} 
+  try{ await ff.deleteFile('out.mp4'); }catch(e){}
+  for(const f of chunkFiles){ try{ await ff.deleteFile(f); }catch(e){} }
+}
+
+$('exportBtn').addEventListener('click', () => exportVideo('normal'));
+$('exportBtnFast').addEventListener('click', () => exportVideo('fast'));
+
+// ============================================================
+// EXPORT (PHƯƠNG PHÁP 3) — GHI MÀN HÌNH TRỰC TIẾP (real-time)
+// ----------------------------------------------------------
+// Khác với 2 phương pháp render-từng-khung-hình ở trên (không phụ thuộc
+// thời gian thực, có thể nhanh/chậm hơn thời lượng bài nhạc tuỳ tốc độ
+// máy), cách này GHI LẠI ĐÚNG NHỮNG GÌ ĐANG HIỂN THỊ trong lúc phát thật —
+// bằng canvas.captureStream() + MediaRecorder. Xuất THẲNG, KHÔNG qua FFmpeg.
+// Luôn xuất ở 1920×1080 @ 60fps bất kể lựa chọn ở mục 08.
+//
+// VÌ SAO TRƯỚC ĐÂY BỊ GIẬT LẮC:
+// canvas.captureStream(60) ở "chế độ tự động" chạy một bộ đếm giờ RIÊNG,
+// độc lập với thời điểm loop() thực sự vẽ xong khung hình. Bộ đếm giờ đó
+// và vòng lặp requestAnimationFrame() không đồng bộ 100% với nhau, nên
+// nhiều khung được chụp lặp lại (khung cũ) hoặc lệch nhịp so với lúc vẽ
+// thật — kết quả là video có timestamp khung hình không đều (variable
+// frame pacing), nhìn giật dù tổng số khung/giây vẫn đúng 60.
+//
+// CÁCH SỬA (không cần FFmpeg):
+// Dùng canvas.captureStream(0) — "chế độ thủ công": track KHÔNG tự chụp
+// gì cả, chỉ chụp khi mình gọi track.requestFrame(). Trong loop() (xem ở
+// trên), ngay sau khi renderFrame() vẽ xong, ta gọi requestFrame() ngay
+// lập tức. Nhờ vậy mỗi khung được ghi = đúng 1 khung vừa vẽ thật, tại đúng
+// thời điểm nó được vẽ — không còn khung "chụp khống" từ 1 đồng hồ khác.
+// Đây chính là cách trình duyệt khuyến nghị để ghi canvas mượt mà.
+// ============================================================
+async function exportViaScreenRecording(){
+  if(state.exporting) return;
+  if(!state.audio.el || !state.audio.file){ alert('Hãy upload audio nền trước khi xuất video.'); return; }
+  if(typeof MediaRecorder === 'undefined'){
+    alert('Trình duyệt này không hỗ trợ MediaRecorder API — vui lòng dùng Chrome hoặc Edge bản mới.');
+    return;
+  }
+
+  // QUAN TRỌNG: nếu trước đó bạn từng bấm nút "Xuất MP4 (Thường)" hoặc "Xuất
+  // Siêu Tốc", FFmpeg đa luồng đã được nạp và getFFmpegInstance() CACHE lại
+  // instance đó — các worker thread của nó vẫn chạy nền, chiếm lõi CPU, dù
+  // phương pháp ghi màn hình này không còn dùng tới FFmpeg nữa. Số lõi CPU
+  // bị FFmpeg giữ sẽ tranh giành tài nguyên với việc giải mã video nền +
+  // mã hoá MediaRecorder trong lúc ghi thời gian thực -> gây lệch/đứng
+  // hình. Vì vậy, TẮT HẲN FFmpeg (nếu đang có) trước khi bắt đầu ghi, để
+  // toàn bộ CPU dành cho việc ghi thời gian thực.
+  await terminateFFmpegInstance();
+
+  state.exporting = true;
+  $('exportBtn').disabled = true;
+  $('exportBtnFast').disabled = true;
+  $('exportRecordBtn').disabled = true;
+  $('exportWebCodecsBtn').disabled = true;
+  document.querySelectorAll('.aspect-ratio').forEach(b=>b.disabled = true);
+  stopPlayback();
+
+  const savedW = canvas.width, savedH = canvas.height;
+  const savedCW = CW, savedCH = CH;
+
+  try{
+    await runScreenRecordingExport();
+  } catch(err){
+    console.error('Screen-record export error:', err);
+    setProgress(100, 'Lỗi khi xuất bằng ghi màn hình: ' + (err && err.message ? err.message : String(err)));
+    $('statusRight').innerHTML = '<span class="err">Xuất thất bại — xem Console (F12) để biết chi tiết.</span>';
+  } finally {
+    // Khôi phục lại độ phân giải canvas ban đầu để preview không bị đổi kích thước
+    canvas.width = savedW; canvas.height = savedH;
+    CW = savedCW; CH = savedCH;
+    state._captureTrack = null; // đề phòng lỗi xảy ra giữa chừng, không để sót track
+    if(state.bg.type==='video' && state.bg.el) state.bg.el.playbackRate = 1; // trả lại tốc độ bình thường cho preview
+    state.exporting = false;
+    $('exportBtn').disabled = false;
+    $('exportBtnFast').disabled = false;
+    $('exportRecordBtn').disabled = false;
+    $('exportWebCodecsBtn').disabled = false;
+    document.querySelectorAll('.aspect-ratio').forEach(b=>b.disabled = false);
+  }
+}
+
+async function runScreenRecordingExport(){
+  const isPortrait = state.aspect === '9:16';
+  const RES_W = isPortrait ? 1080 : 1920;
+  const RES_H = isPortrait ? 1920 : 1080;
+  const FPS = 60;
+
+  canvas.width = RES_W; canvas.height = RES_H;
+  CW = RES_W; CH = RES_H;
+
+  setProgress(1, 'Đang chuẩn bị ghi màn hình…');
+
+  // Quay lại đầu bài nhạc + đồng bộ nền/overlay
+  state.audio.el.pause();
+  state.audio.el.currentTime = 0;
+  if(state.bg.type==='video'){ state.bg.el.currentTime = 0; }
+  if(state.overlay.el){ state.overlay.el.currentTime = 0; }
+  _lastBgSyncCorrection = 0;
+  await state.audio.ctx.resume().catch(()=>{});
+
+  // ---- Ghép luồng video (từ canvas) + luồng audio (từ Web Audio graph) ----
+  // captureStream(0) = chế độ THỦ CÔNG: không tự chụp khung theo hẹn giờ
+  // riêng — mình sẽ chủ động gọi requestFrame() trong loop() ngay sau mỗi
+  // lần renderFrame() vẽ xong (xem ghi chú ở đầu file này).
+  const videoStream = canvas.captureStream(0);
+  const videoTrack = videoStream.getVideoTracks()[0];
+  if(!videoTrack || typeof videoTrack.requestFrame !== 'function'){
+    throw new Error('Trình duyệt không hỗ trợ captureStream() chế độ thủ công (track.requestFrame) — vui lòng dùng Chrome/Edge bản mới.');
+  }
+  const audioDest = state.audio.ctx.createMediaStreamDestination();
+  // Nối thêm 1 nhánh từ analyser hiện có sang audioDest để ghi âm — không
+  // ảnh hưởng tới nhánh đang phát ra loa (1 node có thể nối tới nhiều đích).
+  state.audio.analyser.connect(audioDest);
+  const combined = new MediaStream([
+    ...videoStream.getVideoTracks(),
+    ...audioDest.stream.getAudioTracks()
+  ]);
+
+  // Ưu tiên ghi thẳng ra MP4 (H.264/AAC) nếu trình duyệt hỗ trợ — sẽ không
+  // cần bước chuyển đổi nào thêm. Nếu không, ghi WebM (VP9/Opus) rồi mới
+  // chuyển sang MP4 bằng FFmpeg ở bước cuối.
+  const candidates = [
+    'video/mp4;codecs=avc1.640028,mp4a.40.2',
+    'video/mp4',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm'
+  ];
+  const mimeType = candidates.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  const isMp4Native = mimeType.startsWith('video/mp4');
+
+  const recorder = new MediaRecorder(combined, {
+    mimeType: mimeType || undefined,
+    videoBitsPerSecond: 24_000_000,
+    audioBitsPerSecond: 320_000
+  });
+  const chunks = [];
+  recorder.ondataavailable = e => { if(e.data && e.data.size > 0) chunks.push(e.data); };
+  const recordDone = new Promise(resolve => { recorder.onstop = resolve; });
+
+  recorder.start(1000); // gom dữ liệu mỗi 1 giây, tránh dồn hết vào 1 blob khổng lồ cuối cùng
+
+  // Bật chế độ chụp thủ công: từ đây gọi videoTrack.requestFrame() ngay sau
+  // mỗi khung vẽ thật (xem sửa đổi trong hàm loop() ở trên).
+  state._captureTrack = videoTrack;
+
+  // ---- "Hâm nóng" trên khung hình ĐỨNG YÊN trước khi phát thật ----
+  // Giây đầu tiên hay bị khựng vì nhiều việc khởi tạo nặng dồn cùng lúc nếu
+  // để chúng xảy ra ngay lúc bắt đầu ghi: (1) trình duyệt phải BIÊN DỊCH
+  // SHADER GPU cho hiệu ứng blur (ctx.filter) ở lần dùng đầu tiên — luôn
+  // khựng đáng kể nhưng chỉ 1 lần duy nhất; (2) bộ mã hoá của MediaRecorder
+  // cần một khoảng ngắn để "vào guồng"; (3) JS engine cần chạy renderFrame()
+  // vài lần mới tối ưu hoá (JIT) được. Ở đây audio/video nền vẫn đang tạm
+  // dừng tại t=0 — nên chủ động vẽ + chụp lặp lại khung ĐỨNG YÊN đó vài
+  // trăm ms để mọi khởi tạo nặng nói trên diễn ra trong lúc không có gì
+  // chuyển động (không ai nhận ra khựng), rồi mới bắt đầu playback thật.
+  // Phần đệm đứng yên ~0.3s này được ghi vào đầu clip luôn — vô hại, gần
+  // như không nhận ra khi xem.
+  setProgress(1.5, 'Đang hâm nóng trước khi ghi…');
+  renderFrame();
+  const WARMUP_FRAMES = 18; // ~0.3s ở 60fps, đủ để qua hết các lần khởi tạo nặng
+  for(let i=0;i<WARMUP_FRAMES;i++){
+    await new Promise(r=>requestAnimationFrame(r));
+    renderFrame();
+    try{ videoTrack.requestFrame(); }catch(e){}
+  }
+
+  // Bắt đầu phát thật — vòng lặp loop() (đã có sẵn) sẽ tự render mỗi nhịp
+  // rAF, đúng như khi xem preview bình thường.
+  await state.audio.el.play();
+  if(state.bg.type==='video') state.bg.el.play().catch(()=>{});
+  if(state.overlay.el) state.overlay.el.play().catch(()=>{});
+  state.playing = true;
+  $('playBtn').textContent = '⏸ Tạm dừng';
+  loop();
+
+  const duration = state.audio.duration || state.audio.el.duration || 0;
+
+  // Theo dõi tiến độ theo thời gian thực, tự dừng khi bài nhạc kết thúc
+  await new Promise(resolve=>{
+    const check = ()=>{
+      const cur = state.audio.el.currentTime;
+      const pct = duration > 0 ? Math.min(99, (cur/duration)*97) : 0;
+      setProgress(2 + pct, `Đang ghi trực tiếp (1080p60)… ${fmtTime(cur)} / ${fmtTime(duration)}`);
+      if(!state.playing || state.audio.el.ended || (duration>0 && cur >= duration - 0.05)){
+        resolve();
+      } else {
+        requestAnimationFrame(check);
+      }
+    };
+    check();
+  });
+
+  stopPlayback();
+  state._captureTrack = null; // tắt chế độ chụp thủ công
+  try{ state.audio.analyser.disconnect(audioDest); }catch(e){}
+  recorder.stop();
+  await recordDone;
+
+  // Dùng thẳng file MediaRecorder ghi được — KHÔNG qua FFmpeg dưới bất kỳ
+  // hình thức nào (remux, mã hoá lại...). Từng thử chuẩn hoá để file có thể
+  // tua được trên Windows Media Player, nhưng với khung dọc (9:16) việc mã
+  // hoá lại theo từng đoạn (bắt buộc, vì giải mã đa luồng bị deadlock) gây
+  // ra 2 đánh đổi không đáng: thời gian xử lý lâu hơn đáng kể, và tiếng bị
+  // ngắt quãng nhẹ tại ranh giới mỗi đoạn 15 giây khi ghép lại. Theo yêu cầu
+  // người dùng: ưu tiên đơn giản + mượt, chấp nhận file có thể không tua
+  // được trên Windows Media Player (các phần mềm phát khác vẫn tua bình
+  // thường, ví dụ VLC).
+  const finalBlob = new Blob(chunks, { type: mimeType || 'video/webm' });
+  const outExt = isMp4Native ? 'mp4' : 'webm';
+
+  const url = URL.createObjectURL(finalBlob);
+  const dl = $('dl');
+  dl.href = url; dl.download = `wavecast-record.${outExt}`; dl.style.display = 'inline-block';
+  dl.click();
+
+  const mb = (finalBlob.size / 1024 / 1024).toFixed(1);
+  const fmtLabel = outExt === 'mp4' ? 'MP4' : 'WebM';
+  const resLabel = isPortrait ? '1080×1920' : '1920×1080';
+  setProgress(100, `Hoàn tất! File ${fmtLabel} (ghi màn hình, ${resLabel} 60fps) đã tải xuống (${mb} MB).`);
+  if(outExt === 'webm'){
+    $('statusRight').innerHTML = '<span class="ok">Xuất thành công (định dạng WebM — trình duyệt này chưa hỗ trợ ghi MP4 trực tiếp).</span>';
+  } else {
+    $('statusRight').innerHTML = '<span class="ok">Xuất bằng ghi màn hình thành công.</span>';
+  }
+  setTimeout(hideProgress, 6000);
+}
+
+// ============================================================
+// EXPORT (PHƯƠNG PHÁP 4) — WEBCODECS (thử nghiệm)
+// Render offline từng khung (giống 2 phương án đầu) nhưng mã hoá thẳng bằng
+// VideoEncoder (H.264, ưu tiên phần cứng GPU) + AudioEncoder (AAC, nếu
+// không có thì Opus) rồi ghép thành file MP4 chuẩn (moov nằm ở đầu file,
+// không phân mảnh) bằng bộ ghép MP4 nhỏ viết sẵn bên dưới. Không dùng
+// FFmpeg, không qua ảnh JPEG trung gian.
+// ============================================================
+function createMp4Muxer({ width, height }){
+  const ascii = s => Uint8Array.from(s, c => c.charCodeAt(0));
+  const u16 = n => [(n >> 8) & 255, n & 255];
+  const u32 = n => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+  const concat = arrs => {
+    let n = 0; for(const a of arrs) n += a.length;
+    const o = new Uint8Array(n); let p = 0;
+    for(const a of arrs){ o.set(a, p); p += a.length; }
+    return o;
+  };
+  const box = (type, ...parts) => {
+    const body = concat(parts.map(p => p instanceof Uint8Array ? p : Uint8Array.from(p)));
+    const o = new Uint8Array(8 + body.length);
+    new DataView(o.buffer).setUint32(0, o.length);
+    o.set(ascii(type), 4); o.set(body, 8);
+    return o;
+  };
+  const fbox = (type, ver, flags, ...parts) => box(type, [ver, (flags >> 16) & 255, (flags >> 8) & 255, flags & 255], ...parts);
+  const u32arr = vals => {
+    const o = new Uint8Array(vals.length * 4), dv = new DataView(o.buffer);
+    for(let i = 0; i < vals.length; i++) dv.setUint32(i * 4, vals[i]);
+    return o;
+  };
+  const u64arr = vals => {
+    const o = new Uint8Array(vals.length * 8), dv = new DataView(o.buffer);
+    for(let i = 0; i < vals.length; i++){ dv.setUint32(i * 8, Math.floor(vals[i] / 4294967296)); dv.setUint32(i * 8 + 4, vals[i] >>> 0); }
+    return o;
+  };
+  const MATRIX = [...u32(0x00010000), ...u32(0), ...u32(0), ...u32(0), ...u32(0x00010000), ...u32(0), ...u32(0), ...u32(0), ...u32(0x40000000)];
+  const mpegLen = n => [((n >> 21) & 127) | 128, ((n >> 14) & 127) | 128, ((n >> 7) & 127) | 128, n & 127];
+  const mpegDesc = (tag, body) => concat([Uint8Array.of(tag), Uint8Array.from(mpegLen(body.length)), body]);
+
+  const v = { samples: [], desc: null };
+  const a = { samples: [], desc: null, kind: null, sr: 48000, ch: 2, preskip: 312 };
+
+  function copyChunk(chunk){ const d = new Uint8Array(chunk.byteLength); chunk.copyTo(d); return d; }
+
+  function sampleTable(deltas, sizes, chunks, keyIdx, base, co64){
+    const stts = []; // run-length
+    for(let i = 0; i < deltas.length;){
+      let j = i; while(j < deltas.length && deltas[j] === deltas[i]) j++;
+      stts.push(j - i, deltas[i]); i = j;
+    }
+    const stsc = []; let prev = -1;
+    chunks.forEach((c, i) => { if(c.count !== prev){ stsc.push(i + 1, c.count, 1); prev = c.count; } });
+    const offs = chunks.map(c => base + c.off);
+    return [
+      fbox('stts', 0, 0, u32(stts.length / 2), u32arr(stts)),
+      keyIdx ? fbox('stss', 0, 0, u32(keyIdx.length), u32arr(keyIdx)) : new Uint8Array(0),
+      fbox('stsc', 0, 0, u32(stsc.length / 3), u32arr(stsc)),
+      fbox('stsz', 0, 0, u32(0), u32(sizes.length), u32arr(sizes)),
+      co64 ? fbox('co64', 0, 0, u32(offs.length), u64arr(offs)) : fbox('stco', 0, 0, u32(offs.length), u32arr(offs)),
+    ];
+  }
+
+  function trak(id, isVideo, timescale, durTrack, durMovie, stsdEntry, tblParts){
+    const tkhd = fbox('tkhd', 0, 3, u32(0), u32(0), u32(id), u32(0), u32(durMovie), u32(0), u32(0), u16(0), u16(0), u16(isVideo ? 0 : 0x0100), u16(0), MATRIX, u32(isVideo ? width * 65536 : 0), u32(isVideo ? height * 65536 : 0));
+    const mdhd = fbox('mdhd', 0, 0, u32(0), u32(0), u32(timescale), u32(durTrack), u16(0x55c4), u16(0));
+    const hdlr = fbox('hdlr', 0, 0, u32(0), ascii(isVideo ? 'vide' : 'soun'), new Uint8Array(12), ascii((isVideo ? 'VideoHandler' : 'SoundHandler') + '\0'));
+    const xmhd = isVideo ? fbox('vmhd', 0, 1, u16(0), u16(0), u16(0), u16(0)) : fbox('smhd', 0, 0, u16(0), u16(0));
+    const dinf = box('dinf', fbox('dref', 0, 0, u32(1), fbox('url ', 0, 1)));
+    const stbl = box('stbl', fbox('stsd', 0, 0, u32(1), stsdEntry), ...tblParts);
+    return box('trak', tkhd, box('mdia', mdhd, hdlr, box('minf', xmhd, dinf, stbl)));
+  }
+
+  function videoEntry(){
+    return box('avc1', new Uint8Array(6), u16(1), new Uint8Array(16), u16(width), u16(height), u32(0x00480000), u32(0x00480000), u32(0), u16(1), new Uint8Array(32), u16(0x18), u16(0xffff), box('avcC', v.desc));
+  }
+  function audioEntry(){
+    const head = [new Uint8Array(6), u16(1), new Uint8Array(8), u16(a.ch), u16(16), u16(0), u16(0)];
+    if(a.kind === 'opus'){
+      return box('Opus', ...head, u32(48000 * 65536), box('dOps', [0, a.ch], u16(a.preskip), u32(a.sr), u16(0), [0]));
+    }
+    const dsi = mpegDesc(5, a.desc);
+    const dcd = mpegDesc(4, concat([Uint8Array.of(0x40, 0x15, 0, 0, 0), Uint8Array.from(u32(0)), Uint8Array.from(u32(0)), dsi]));
+    const es = mpegDesc(3, concat([Uint8Array.of(0, 1, 0), dcd, mpegDesc(6, Uint8Array.of(2))]));
+    return box('mp4a', ...head, u32(a.sr * 65536), fbox('esds', 0, 0, es));
+  }
+
+  return {
+    addVideo(chunk, meta){
+      if(!v.desc && meta && meta.decoderConfig && meta.decoderConfig.description){
+        const d = meta.decoderConfig.description; v.desc = new Uint8Array(d instanceof ArrayBuffer ? d : d.buffer ? d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength) : d);
+      }
+      v.samples.push({ d: copyChunk(chunk), ts: chunk.timestamp, dur: chunk.duration || 0, key: chunk.type === 'key' });
+    },
+    setAudio(kind, sampleRate, channels){ a.kind = kind; a.sr = sampleRate; a.ch = channels; },
+    addAudio(chunk, meta){
+      if(!a.desc && meta && meta.decoderConfig && meta.decoderConfig.description){
+        const d = meta.decoderConfig.description; a.desc = new Uint8Array(d instanceof ArrayBuffer ? d : d.buffer ? d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength) : d);
+        if(a.kind === 'opus' && a.desc.length >= 12 && String.fromCharCode(...a.desc.slice(0, 8)) === 'OpusHead'){
+          a.preskip = a.desc[10] | (a.desc[11] << 8);
+        }
+      }
+      a.samples.push({ d: copyChunk(chunk), dur: chunk.duration || 0 });
+    },
+    finalize(){
+      if(!v.samples.length) throw new Error('Không có khung hình nào được mã hoá.');
+      if(!v.desc) throw new Error('Bộ mã hoá H.264 không trả về cấu hình avcC.');
+      const hasAudio = a.samples.length > 0;
+      if(hasAudio && a.kind === 'aac' && !a.desc) throw new Error('Bộ mã hoá AAC không trả về cấu hình âm thanh.');
+
+      // --- thời gian video (timescale 90000) ---
+      const VT = 90000;
+      const vdts = v.samples.map(s => Math.round(s.ts * VT / 1e6));
+      const vdelta = vdts.map((x, i) => i < vdts.length - 1 ? vdts[i + 1] - x : (i > 0 ? vdts[i] - vdts[i - 1] : Math.round(VT / 30)));
+      if(vdelta.some(d => d <= 0)) throw new Error('Bộ mã hoá trả khung hình sai thứ tự thời gian (B-frame) — không được hỗ trợ.');
+      const vdur = vdts[vdts.length - 1] + vdelta[vdelta.length - 1];
+
+      // --- thời gian audio ---
+      const AT = a.kind === 'opus' ? 48000 : a.sr;
+      const defAud = a.kind === 'opus' ? 960 : 1024;
+      const adelta = a.samples.map(s => s.dur ? Math.max(1, Math.round(s.dur * AT / 1e6)) : defAud);
+      const adts = []; let acc = 0; for(const d of adelta){ adts.push(acc); acc += d; }
+      const adur = acc;
+
+      // --- gom chunk theo từng giây để xen kẽ video/audio ---
+      const group = (samples, secOf) => {
+        const chunks = []; let cur = null;
+        for(let i = 0; i < samples.length; i++){
+          const k = Math.floor(secOf(i));
+          if(!cur || cur.k !== k){ cur = { k, first: i, count: 0, off: 0 }; chunks.push(cur); }
+          cur.count++;
+        }
+        return chunks;
+      };
+      const vch = group(v.samples, i => vdts[i] / VT);
+      const ach = hasAudio ? group(a.samples, i => adts[i] / AT) : [];
+      const parts = []; let off = 0, vi = 0, ai = 0;
+      const emit = (c, samples) => {
+        c.off = off;
+        for(let i = c.first; i < c.first + c.count; i++){ parts.push(samples[i].d); off += samples[i].d.length; }
+      };
+      while(vi < vch.length || ai < ach.length){
+        if(ai >= ach.length || (vi < vch.length && vch[vi].k <= ach[ai].k)) emit(vch[vi++], v.samples);
+        else emit(ach[ai++], a.samples);
+      }
+      const mdatBytes = off;
+      const bigMdat = mdatBytes + 8 > 0xFFFFFFFF;
+      const mdatHead = bigMdat ? concat([Uint8Array.from(u32(1)), ascii('mdat'), u64arr([mdatBytes + 16])]) : concat([Uint8Array.from(u32(mdatBytes + 8)), ascii('mdat')]);
+
+      const ftyp = box('ftyp', ascii('isom'), u32(512), ascii('isom'), ascii('iso2'), ascii('avc1'), ascii('mp41'));
+      const movieDur = Math.round(Math.max(vdur / VT, hasAudio ? adur / AT : 0) * 1000);
+      const vKeys = v.samples.every(s => s.key) ? null : v.samples.map((s, i) => s.key ? i + 1 : 0).filter(Boolean);
+      const vSizes = v.samples.map(s => s.d.length), aSizes = a.samples.map(s => s.d.length);
+
+      const buildMoov = (base, co64) => {
+        const traks = [trak(1, true, VT, vdur, Math.round(vdur / VT * 1000), videoEntry(), sampleTable(vdelta, vSizes, vch, vKeys, base, co64))];
+        if(hasAudio) traks.push(trak(2, false, AT, adur, Math.round(adur / AT * 1000), audioEntry(), sampleTable(adelta, aSizes, ach, null, base, co64)));
+        const mvhd = fbox('mvhd', 0, 0, u32(0), u32(0), u32(1000), u32(movieDur), u32(0x00010000), u16(0x0100), u16(0), new Uint8Array(8), MATRIX, new Uint8Array(24), u32(hasAudio ? 3 : 2));
+        return box('moov', mvhd, ...traks);
+      };
+      let co64 = bigMdat;
+      let moov = buildMoov(0, co64);
+      if(!co64 && ftyp.length + moov.length + mdatHead.length + mdatBytes > 0xFFFFFFFF){ co64 = true; moov = buildMoov(0, true); }
+      moov = buildMoov(ftyp.length + moov.length + mdatHead.length, co64);
+      return new Blob([ftyp, moov, mdatHead, ...parts], { type: 'video/mp4' });
+    }
+  };
+}
+
+function h264LevelFor(w, h, fps){
+  const mbs = Math.ceil(w / 16) * Math.ceil(h / 16), rate = mbs * fps;
+  const L = [[0x1f, 3600, 108000], [0x28, 8192, 245760], [0x2a, 8704, 522240], [0x32, 22080, 589824], [0x33, 36864, 983040], [0x34, 36864, 2073600]];
+  for(const [code, fs, mbps] of L) if(mbs <= fs && rate <= mbps) return code;
+  return 0x34;
+}
+
+async function pickVideoEncoderConfig(w, h, fps){
+  const level = h264LevelFor(w, h, fps).toString(16).padStart(2, '0');
+  const bitrate = Math.round(Math.min(40e6, Math.max(4e6, w * h * fps * 0.18)));
+  for(const hw of ['prefer-hardware', 'no-preference']){
+    for(const profile of ['64', '4d', '42']){
+      const cfg = { codec: `avc1.${profile}00${level}`, width: w, height: h, bitrate, framerate: fps, hardwareAcceleration: hw, avc: { format: 'avc' }, latencyMode: 'quality' };
+      try{
+        const r = await VideoEncoder.isConfigSupported(cfg);
+        if(r && r.supported) return { cfg, hw };
+      }catch(e){}
+    }
+  }
+  return null;
+}
+
+async function resampleAudioBuffer(buf, sr){
+  const oc = new OfflineAudioContext(buf.numberOfChannels, Math.ceil(buf.duration * sr), sr);
+  const s = oc.createBufferSource(); s.buffer = buf; s.connect(oc.destination); s.start();
+  return oc.startRendering();
+}
+
+// Tua video tới đúng thời điểm t và CHỜ sự kiện 'seeked' (khung mới đã sẵn sàng)
+// rồi mới trả về. Khác seekVideoTo() ở
+// chỗ không bỏ cuộc sau 250ms (nguyên nhân khung bị lặp lại hình cũ => đứng hình).
+function seekVideoExact(el, t){
+  if(!el) return Promise.resolve();
+  if(Math.abs(el.currentTime - t) < 0.004) return Promise.resolve();
+  return new Promise(resolve => {
+    let done = false, safety = null;
+    const fin = () => { if(done) return; done = true; clearTimeout(safety); el.removeEventListener('seeked', onSeeked); resolve(); };
+    const onSeeked = () => fin(); // 'seeked' = khung mới đã sẵn sàng để vẽ
+    el.addEventListener('seeked', onSeeked);
+    safety = setTimeout(fin, 3000);
+    el.currentTime = t;
+  });
+}
+
+async function exportViaWebCodecs(){
+  if(state.exporting) return;
+  if(!state.audio.el || !state.audio.file){ alert('Hãy upload audio nền trước khi xuất video.'); return; }
+  if(typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined' || typeof AudioEncoder === 'undefined'){
+    alert('Trình duyệt này không hỗ trợ WebCodecs (hoặc trang không chạy qua http://localhost). Hãy dùng Chrome/Edge bản mới và mở qua node server.js.');
+    return;
+  }
+  await terminateFFmpegInstance(); // trả lại CPU, phương án này không dùng FFmpeg
+
+  state.exporting = true;
+  $('exportBtn').disabled = true;
+  $('exportBtnFast').disabled = true;
+  $('exportRecordBtn').disabled = true;
+  $('exportWebCodecsBtn').disabled = true;
+  document.querySelectorAll('.aspect-ratio').forEach(b => b.disabled = true);
+  stopPlayback();
+
+  try{
+    await runWebCodecsExport();
+  } catch(err){
+    console.error('WebCodecs export error:', err);
+    setProgress(100, 'Lỗi khi xuất bằng WebCodecs: ' + (err && err.message ? err.message : String(err)));
+    $('statusRight').innerHTML = '<span class="err">Xuất video thất bại — xem Console (F12).</span>';
+  } finally {
+    state.exporting = false;
+    $('exportBtn').disabled = false;
+    $('exportBtnFast').disabled = false;
+    $('exportRecordBtn').disabled = false;
+    $('exportWebCodecsBtn').disabled = false;
+    document.querySelectorAll('.aspect-ratio').forEach(b => b.disabled = false);
+    { const base = basePreviewSize(state.aspect); canvas.width = base.w; canvas.height = base.h; CW = base.w; CH = base.h; }
+  }
+}
+
+async function runWebCodecsExport(){
+  _lastOfflineFreq = null;
+  const [resW, resH] = $('exportRes').value.split('x').map(Number), fps = +$('exportFps').value;
+  const t0 = performance.now();
+  setProgress(1, 'Đang giải mã & phân tích âm thanh…');
+  await state.audio.ctx.resume().catch(() => {});
+  let audioBuf = await state.audio.ctx.decodeAudioData((await state.audio.file.arrayBuffer()).slice(0));
+  const mono = new Float32Array(audioBuf.length), nCh = audioBuf.numberOfChannels;
+  for(let c = 0; c < nCh; c++){ const ch = audioBuf.getChannelData(c); for(let i = 0; i < mono.length; i++) mono[i] += ch[i] / nCh; }
+  const pcm = { samples: mono, sampleRate: audioBuf.sampleRate, duration: audioBuf.duration };
+  const duration = pcm.duration, totalFrames = Math.max(1, Math.ceil(duration * fps));
+
+  // --- chọn bộ mã hoá ---
+  const vpick = await pickVideoEncoderConfig(resW, resH, fps);
+  if(!vpick) throw new Error(`Trình duyệt không mã hoá được H.264 ở ${resW}x${resH} ${fps}fps.`);
+  const outCh = Math.min(2, audioBuf.numberOfChannels);
+  let akind = null, acfg = null;
+  try{
+    const c = { codec: 'mp4a.40.2', sampleRate: audioBuf.sampleRate, numberOfChannels: outCh, bitrate: 192000, aac: { format: 'aac' } };
+    if((await AudioEncoder.isConfigSupported(c)).supported){ akind = 'aac'; acfg = c; }
+  }catch(e){}
+  if(!akind){
+    try{
+      const c = { codec: 'opus', sampleRate: 48000, numberOfChannels: outCh, bitrate: 160000 };
+      if((await AudioEncoder.isConfigSupported(c)).supported){ akind = 'opus'; acfg = c; }
+    }catch(e){}
+    if(akind === 'opus' && audioBuf.sampleRate !== 48000){
+      setProgress(2, 'Đang đổi tần số lấy mẫu âm thanh sang 48kHz…');
+      audioBuf = await resampleAudioBuffer(audioBuf, 48000);
+    }
+  }
+  if(!akind) throw new Error('Trình duyệt không có bộ mã hoá âm thanh AAC hoặc Opus.');
+
+  const mux = createMp4Muxer({ width: resW, height: resH });
+  mux.setAudio(akind, acfg.sampleRate, outCh);
+  let encErr = null;
+
+  // --- mã hoá âm thanh trước (rất nhanh) ---
+  setProgress(3, `Đang mã hoá âm thanh (${akind === 'aac' ? 'AAC' : 'Opus'})…`);
+  const aenc = new AudioEncoder({ output: (c, m) => mux.addAudio(c, m), error: e => { encErr = e; } });
+  aenc.configure(acfg);
+  {
+    const sr = audioBuf.sampleRate, total = audioBuf.length, STEP = sr; // 1 giây / lần
+    const chans = []; for(let c = 0; c < outCh; c++) chans.push(audioBuf.getChannelData(c));
+    for(let pos = 0; pos < total; pos += STEP){
+      if(encErr) throw encErr;
+      const n = Math.min(STEP, total - pos), planar = new Float32Array(n * outCh);
+      for(let c = 0; c < outCh; c++) planar.set(chans[c].subarray(pos, pos + n), c * n);
+      const ad = new AudioData({ format: 'f32-planar', sampleRate: sr, numberOfFrames: n, numberOfChannels: outCh, timestamp: Math.round(pos / sr * 1e6), data: planar });
+      aenc.encode(ad); ad.close();
+      while(aenc.encodeQueueSize > 8) await new Promise(r => setTimeout(r, 2));
+    }
+    await aenc.flush(); aenc.close();
+    if(encErr) throw encErr;
+  }
+
+  // --- render + mã hoá video ---
+  canvas.width = resW; canvas.height = resH; CW = resW; CH = resH;
+  const overlayHasOwnDur = state.overlay.el && isFinite(state.overlay.el.duration) && state.overlay.el.duration > 0;
+  const venc = new VideoEncoder({ output: (c, m) => mux.addVideo(c, m), error: e => { encErr = e; } });
+  venc.configure(vpick.cfg);
+  const frameDur = Math.round(1e6 / fps), gop = Math.max(1, Math.round(fps * 2));
+
+  const T = { fft: 0, seek: 0, draw: 0, enc: 0, wait: 0 };
+  let tk = performance.now();
+  const lap = k => { const n = performance.now(); T[k] += n - tk; tk = n; };
+  for(let i = 0; i < totalFrames; i++){
+    if(encErr) throw encErr;
+    const t = Math.min(duration - 0.001, i / fps);
+    tk = performance.now();
+    const freq = computeFreqAtTime(pcm, t); lap('fft');
+    if(state.bg.type === 'video' && state.bg.naturalDur > 0) await seekVideoExact(state.bg.el, t % state.bg.naturalDur);
+    if(state.overlay.el && overlayHasOwnDur) await seekVideoExact(state.overlay.el, t % state.overlay.el.duration);
+    lap('seek');
+    renderFrame(freq, t); lap('draw');
+
+    const frame = new VideoFrame(canvas, { timestamp: Math.round(i * 1e6 / fps), duration: frameDur });
+    venc.encode(frame, { keyFrame: i % gop === 0 });
+    frame.close(); lap('enc');
+
+    while(venc.encodeQueueSize > 6){
+      if(encErr) throw encErr;
+      await new Promise(r => setTimeout(r, 2));
+    }
+    lap('wait');
+    if(i % 6 === 0 || i === totalFrames - 1){
+      setProgress(5 + (i + 1) / totalFrames * 90, `Render + mã hoá WebCodecs (${vpick.hw === 'prefer-hardware' ? 'GPU' : 'CPU'})… ${i + 1}/${totalFrames}`);
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+  setProgress(96, 'Đang hoàn tất mã hoá…');
+  await venc.flush(); venc.close();
+  if(encErr) throw encErr;
+
+  setProgress(98, 'Đang ghép file MP4…');
+  const blob = mux.finalize();
+  const url = URL.createObjectURL(blob), dl = $('dl');
+  dl.href = url; dl.download = 'wavecast.mp4'; dl.style.display = 'inline-block';
+  dl.click();
+
+  const mb = (blob.size / 1024 / 1024).toFixed(1), secs = ((performance.now() - t0) / 1000).toFixed(1);
+  const Ttot = T.fft + T.seek + T.draw + T.enc + T.wait || 1, pc = k => Math.round(T[k] / Ttot * 100) + '%';
+  const prof = `FFT ${pc('fft')} · tua video ${pc('seek')} · vẽ ${pc('draw')} · đưa vào encoder ${pc('enc')} · chờ encoder ${pc('wait')}`;
+  console.log('[WebCodecs] thời gian từng khâu (ms):', T, '| tổng', secs + 's', '|', (totalFrames / ((performance.now() - t0) / 1000)).toFixed(1), 'khung/giây');
+  setProgress(100, `Hoàn tất (WebCodecs)! ${mb} MB trong ${secs}s — video H.264 ${vpick.hw === 'prefer-hardware' ? '(GPU nếu có)' : '(CPU)'}, âm thanh ${akind === 'aac' ? 'AAC' : 'Opus'}. Thời gian: ${prof}.`);
+  $('statusRight').innerHTML = '<span class="ok">Xuất video thành công.</span>';
+  setTimeout(hideProgress, 20000);
+}
+
+$('exportWebCodecsBtn').addEventListener('click', exportViaWebCodecs);
+
+$('exportRecordBtn').addEventListener('click', exportViaScreenRecording);
+</script>
+</body>
+</html>
