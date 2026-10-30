@@ -238,8 +238,8 @@ public:
             const qreal cell = maxW / count;
             const qreal stemWidth = qMax<qreal>(0.75,
                 qMin<qreal>(3.0, stage.width() * 0.0011 * s.thickness / 75.0));
-            // Minimum particle diameter is twice the previous default.
-            // The cap grows continuously with its own FFT band energy.
+            // Keep the existing particle size and energy scaling; only the
+            // drawing style is adapted to the HTML reference.
             const qreal minDotRadius = qMax<qreal>(1.8,
                 qMin<qreal>(5.0, stemWidth * 1.55));
             const qreal strength = s.glow / 100.0 * s.glowIntensity / 100.0;
