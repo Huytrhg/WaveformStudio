@@ -242,6 +242,14 @@ public:
                 update();
             }
         });
+        // Independent animation clock: Bokeh keeps moving when FFT data is absent.
+        bokehTimer = new QTimer(this);
+        bokehTimer->setInterval(33); // ~30 fps, separate from spectrum smoothing.
+        connect(bokehTimer, &QTimer::timeout, this, [this]() {
+            if (!bokehEnabled || bokehSpeed == 0) return;
+            gpuBackgroundDirty = true;
+            update();
+        });
         gradientStops = {
             {0.0, QColor("#00D5FF")},
             {0.5, QColor("#376BFF")},
@@ -375,14 +383,30 @@ public:
     void setExposureSensitivity(int value) { pulseSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setExposureSmoothing(int value) { pulseSmoothing = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
 
-    void setBokehEnabled(bool enabled) { bokehEnabled = enabled; gpuBackgroundDirty = true; update(); }
+    void setBokehEnabled(bool enabled) {
+        bokehEnabled = enabled;
+        if (bokehTimer) {
+            if (enabled && bokehSpeed > 0) bokehTimer->start();
+            else bokehTimer->stop();
+        }
+        gpuBackgroundDirty = true; update();
+    }
     void setBokehCount(int value) { bokehCount = qBound(4, value, 100); gpuBackgroundDirty = true; update(); }
     void setBokehSize(int value) { bokehSize = qBound(1, value, 100); gpuBackgroundDirty = true; update(); }
-    void setBokehSpeed(int value) { bokehSpeed = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setBokehSpeed(int value) {
+        bokehSpeed = qBound(0, value, 100);
+        if (bokehTimer) {
+            if (bokehEnabled && bokehSpeed > 0) bokehTimer->start();
+            else bokehTimer->stop();
+        }
+        gpuBackgroundDirty = true; update();
+    }
     void setBokehOpacity(int value) { bokehOpacity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setBokehAudioReactive(bool enabled) { bokehAudioReactive = enabled; gpuBackgroundDirty = true; update(); }
     void setBokehSensitivity(int value) { bokehSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
-    void setBokehColor(const QColor &color) { if (color.isValid()) { bokehColor = color; gpuBackgroundDirty = true; update(); } }
+    void setBokehColor(const QColor &color) {
+        if (color.isValid()) { bokehColor = color; bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
+    }
     void setEdgeGlowEnabled(bool enabled) { edgeGlowEnabled = enabled; gpuBackgroundDirty = true; update(); }
     void setEdgeGlowOpacity(int value) { edgeOpacity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setEdgeGlowSpread(int value) { edgeSpread = qBound(1, value, 50); gpuBackgroundDirty = true; update(); }
@@ -445,16 +469,45 @@ private:
         return x - qFloor(x);
     }
 
+    void rebuildBokehSprite()
+    {
+        // Cache one soft glow sprite instead of constructing a radial gradient
+        // for every particle on every frame.
+        constexpr int diameter = 128;
+        bokehSprite = QImage(diameter, diameter, QImage::Format_ARGB32_Premultiplied);
+        bokehSprite.fill(Qt::transparent);
+        QPainter p(&bokehSprite);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const QPointF center(diameter / 2.0, diameter / 2.0);
+        QRadialGradient glow(center, diameter / 2.0);
+        QColor core = bokehColor;
+        core.setAlpha(220);
+        QColor mid = bokehColor;
+        mid.setAlpha(90);
+        QColor rim = bokehColor;
+        rim.setAlpha(15);
+        QColor clear = bokehColor;
+        clear.setAlpha(0);
+        glow.setColorAt(0.0, core);
+        glow.setColorAt(0.18, mid);
+        glow.setColorAt(0.52, rim);
+        glow.setColorAt(1.0, clear);
+        p.setPen(Qt::NoPen);
+        p.setBrush(glow);
+        p.drawEllipse(QRectF(0, 0, diameter, diameter));
+    }
+
     void paintBokeh(QPainter &painter, const QRectF &area)
     {
-        if (!bokehEnabled || area.isEmpty()) return;
+        if (!bokehEnabled || area.isEmpty() || bokehOpacity == 0) return;
+        if (bokehSprite.isNull()) rebuildBokehSprite();
         const qreal t = effectClock.isValid() ? effectClock.elapsed() / 1000.0 : 0.0;
         const qreal minSide = qMin(area.width(), area.height());
         const qreal energy = bokehAudioReactive
             ? effectLevel(framePulseEnergy, bokehSensitivity) : 0.0;
         painter.save();
         painter.setClipRect(area);
-        painter.setPen(Qt::NoPen);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
         for (int i = 0; i < bokehCount; ++i) {
             const qreal seedX = bokehHash(i * 7 + 1);
             const qreal seedY = bokehHash(i * 7 + 2);
@@ -467,19 +520,12 @@ private:
                                  * sizeVariance * (1.0 + energy * 0.28);
             const QPointF center(area.left() + x * area.width(),
                                  area.top() + y * area.height());
-            QColor core = bokehColor;
-            core.setAlphaF(qBound(0.0, (bokehOpacity / 100.0)
-                * (0.22 + energy * 0.28) * (0.55 + bokehHash(i * 7 + 5) * 0.45), 0.85));
-            QColor middle = core;
-            middle.setAlphaF(core.alphaF() * 0.40);
-            QColor clear = core;
-            clear.setAlpha(0);
-            QRadialGradient gradient(center, radius);
-            gradient.setColorAt(0.0, core);
-            gradient.setColorAt(0.38, middle);
-            gradient.setColorAt(1.0, clear);
-            painter.setBrush(gradient);
-            painter.drawEllipse(center, radius, radius);
+            const qreal alpha = qBound(0.0, (bokehOpacity / 100.0)
+                * (0.55 + energy * 0.45)
+                * (0.55 + bokehHash(i * 7 + 5) * 0.45), 0.85);
+            painter.setOpacity(alpha);
+            painter.drawImage(QRectF(center.x() - radius, center.y() - radius,
+                                     radius * 2.0, radius * 2.0), bokehSprite);
         }
         painter.restore();
     }
@@ -967,6 +1013,8 @@ private:
     qreal curvePhase;
     QVector<QPair<qreal, QColor>> gradientStops;
 
+    QTimer *bokehTimer = nullptr;
+    QImage bokehSprite;
     bool bokehEnabled = false;
     bool bokehAudioReactive = false;
     int bokehCount = 28, bokehSize = 35, bokehSpeed = 35;
