@@ -171,7 +171,7 @@ public:
           positionX(50), positionY(78), opacityPercent(92), scalePercent(72),
           solidColor(QColor("#35B8FF")), useGradient(true),
           columnCount(64), heightPercent(100), thicknessPercent(75), glowPercent(0),
-          glowRadius(50), glowIntensity(100), gradientSpeed(0), gradientPhase(0.0), peakHoldEnabled(false)
+          glowRadius(50), glowIntensity(100), gradientSpeed(0), gradientPhase(0.0), curveTravelSpeed(35), curvePhase(0.0), peakHoldEnabled(false)
     {
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 #ifdef Q_OS_WIN
@@ -288,10 +288,18 @@ public:
     void setGradientSpeed(int value) { gradientSpeed = qBound(0, value, 100); update(); }
     void advanceGradient(qreal seconds)
     {
-        if (!useGradient || gradientSpeed == 0) return;
-        gradientPhase = std::fmod(gradientPhase + seconds * gradientSpeed / 100.0 * 0.45, 2.0);
-        update();
+        bool changed = false;
+        if (useGradient && gradientSpeed > 0) {
+            gradientPhase = std::fmod(gradientPhase + seconds * gradientSpeed / 100.0 * 0.45, 2.0);
+            changed = true;
+        }
+        if (curveTravelSpeed > 0) {
+            curvePhase = std::fmod(curvePhase + seconds * curveTravelSpeed / 100.0 * 0.42, 2.0);
+            changed = true;
+        }
+        if (changed) update();
     }
+    void setCurveTravelSpeed(int value) { curveTravelSpeed = qBound(0, value, 100); update(); }
     void setSolidColor(const QColor &color) { if (color.isValid()) solidColor = color; update(); }
     void setUseGradient(bool enabled) { useGradient = enabled; update(); }
     bool isGradientEnabled() const { return useGradient; }
@@ -539,6 +547,8 @@ private:
         s.gradient = useGradient;
         s.interpolation = interpolation;
         s.gradientPhase = gradientPhase;
+        s.curveTravelSpeed = curveTravelSpeed;
+        s.curvePhase = curvePhase;
         s.solidColor = solidColor;
         s.stops = gradientStops;
         return s;
@@ -645,6 +655,8 @@ private:
     int columnCount, heightPercent, thicknessPercent, glowPercent, glowRadius, glowIntensity, gradientSpeed;
     int interpolation = 1;
     qreal gradientPhase;
+    int curveTravelSpeed;
+    qreal curvePhase;
     QVector<QPair<qreal, QColor>> gradientStops;
 
     QColor colorAt(qreal t) const
@@ -1355,6 +1367,10 @@ MainWindow::MainWindow(QWidget *parent)
     addWaveSlider("Gradient Speed", 0, 100, 0, "%", [this](int v) {
         spectrumOverlay->setGradientSpeed(v);
         spectrumDisplay->setGradientSpeed(v);
+    });
+    addWaveSlider("Waveform Curve Travel Speed", 0, 100, 35, "%", [this](int v) {
+        spectrumOverlay->setCurveTravelSpeed(v);
+        spectrumDisplay->setCurveTravelSpeed(v);
     });
 
     // Local alias: class members cannot be captured directly by lambdas.
