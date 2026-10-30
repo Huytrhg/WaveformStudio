@@ -438,7 +438,7 @@ QVector<float> SpectrumAnalyzer::computeSpectrum(
         for (float v : original) maximum = qMax(maximum, v);
         if (maximum > 0.045f) {
             const int sectors = qBound(3, bandCount / 12, 8);
-            const int tick = qMax(0, positionMs) / 180;
+            const qint64 tick = (startSample * 1000 / audioSampleRate) / 180;
             for (int sector = 0; sector < sectors; ++sector) {
                 const int begin = sector * bandCount / sectors;
                 const int end = (sector + 1) * bandCount / sectors;
