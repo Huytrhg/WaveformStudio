@@ -453,7 +453,8 @@ protected:
                     gpuRects.push_back(bar.adjusted(-spread, 0, spread, 0));
                     gpuColors.push_back(halo);
                     gpuTopColors.push_back(halo);
-                    const qreal dotR = qMax<qreal>(1.8, qMin<qreal>(5.0, barW * 1.55));
+                    const qreal minDotR = qMax<qreal>(3.6, qMin<qreal>(10.0, barW * 3.10));
+                    const qreal dotR = minDotR * (1.0 + 0.85 * v);
                     gpuRects.push_back(QRectF(bar.center().x() - dotR - spread,
                         bar.top() - dotR - spread, 2 * (dotR + spread), 2 * (dotR + spread)));
                     gpuColors.push_back(halo);
@@ -465,7 +466,8 @@ protected:
                 if (visualMode == 4) {
                     // GPU-friendly circle silhouette: three stacked rectangles.
                     // Four primitives per particle (stem + 3 cap strips).
-                    const qreal dotR = qMax<qreal>(1.8, qMin<qreal>(5.0, barW * 1.55));
+                    const qreal minDotR = qMax<qreal>(3.6, qMin<qreal>(10.0, barW * 3.10));
+                    const qreal dotR = minDotR * (1.0 + 0.85 * v);
                     const qreal dotX = bar.center().x();
                     const qreal dotY = bar.top();
                     const qreal widths[] = {1.45, 2.0, 1.45};
