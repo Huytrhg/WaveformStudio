@@ -29,6 +29,9 @@ struct SpectrumRenderSettings {
     bool gradient = true;
     int interpolation = 1;
     qreal gradientPhase = 0;
+    // B4.3.4: independent horizontal travel phase for the four-line waveform.
+    int curveTravelSpeed = 35;
+    qreal curvePhase = 0;
     QColor solidColor = QColor(0x35B8FF);
     QVector<QPair<qreal, QColor>> stops = {
         {0.0, QColor(0x00D5FF)},
@@ -132,6 +135,12 @@ public:
             SpectrumRenderSettings glowSettings = s;
             glowSettings.glow = 0;
             glowSettings.opacity = 100;
+            if (s.mode == 1) {
+                qreal audioPeak = 0.0;
+                for (float band : bands) audioPeak = qMax(audioPeak, qBound(0.0, qreal(band), 1.0));
+                // Let the line halo breathe with the music, while retaining a small idle glow.
+                glowSettings.glowIntensity = qRound(s.glowIntensity * (0.12 + 0.88 * audioPeak));
+            }
             QPainter gp(&glowLayer);
             gp.setRenderHint(QPainter::Antialiasing);
             gp.setOpacity(qBound(0, s.opacity, 100) / 100.0 *
@@ -221,6 +230,50 @@ public:
                         barW, 1.6));
                 }
             }
+        } else if (s.mode == 1) {
+            // B4.3.4: four continuous end-to-end paths, with mirrored upper/lower bends.
+            qreal audioPeak = 0.0;
+            for (float band : bands)
+                audioPeak = qMax(audioPeak, qBound(0.0, qreal(band), 1.0));
+
+            const qreal travel = reflected(s.curvePhase);
+            const qreal centerA = 0.12 + 0.76 * travel;
+            const qreal centerB = 0.88 - 0.76 * travel;
+            const qreal amplitudeHigh = maxH * 0.46 * audioPeak;
+            const qreal amplitudeLow = amplitudeHigh / 3.0;
+            const qreal lineWidth = qMax<qreal>(1.25,
+                stage.width() * 0.0018 * s.thickness / 75.0);
+            const QLinearGradient gradient = horizontalGradient();
+
+            auto makeTravelingCurve = [&](qreal center, qreal amplitude, qreal side) {
+                QPainterPath path;
+                constexpr int segments = 180;
+                const qreal halfWidth = 0.19;
+                for (int i = 0; i <= segments; ++i) {
+                    const qreal t = qreal(i) / segments;
+                    const qreal x = startX + maxW * t;
+                    const qreal u = (t - center) / halfWidth;
+                    const qreal shape = qAbs(u) < 1.0
+                        ? qPow(1.0 - u * u, 2.0) : 0.0;
+                    const qreal y = cy + side * amplitude * shape;
+                    if (i == 0) path.moveTo(x, y);
+                    else path.lineTo(x, y);
+                }
+                return path;
+            };
+
+            // Opposing horizontal phases make the two same-side bends pass/cross.
+            // The lower pair is an exact vertical mirror of the upper pair.
+            const QPainterPath highUp = makeTravelingCurve(centerA, amplitudeHigh, -1.0);
+            const QPainterPath lowUp = makeTravelingCurve(centerB, amplitudeLow, -1.0);
+            const QPainterPath highDown = makeTravelingCurve(centerA, amplitudeHigh, 1.0);
+            const QPainterPath lowDown = makeTravelingCurve(centerB, amplitudeLow, 1.0);
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(gradient, lineWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            p.drawPath(highUp);
+            p.drawPath(lowUp);
+            p.drawPath(highDown);
+            p.drawPath(lowDown);
         } else if (s.mode == 2) {
             const qreal radius = qMin(stage.width(), stage.height()) * 0.17 * s.scale / 72.0;
             const qreal barMax = qMin(stage.width(), stage.height()) * 0.12 *
