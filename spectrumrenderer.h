@@ -244,8 +244,9 @@ public:
                 qMin<qreal>(5.0, stemWidth * 1.55));
             const qreal strength = s.glow / 100.0 * s.glowIntensity / 100.0;
             const qreal spread = 1.0 + 8.0 * s.glowRadius / 100.0;
-            // Alternate the strongest and weakest sampled energy values. This
-            // redistributes their positions without compressing the energy range.
+            // Random-looking but deterministic spatial distribution: keep the sampled
+            // energy values unchanged, then place them using a stable pseudo-random order.
+            // The order stays fixed between frames, avoiding particle flicker.
             QVector<qreal> sortedLevels;
             sortedLevels.reserve(count);
             for (int i = 0; i < count; ++i) {
@@ -253,10 +254,25 @@ public:
                 sortedLevels.push_back(qBound(0.0, sample(bands, index), 1.0));
             }
             std::sort(sortedLevels.begin(), sortedLevels.end(), std::greater<qreal>());
-            QVector<qreal> particleLevels(count);
-            int low = count - 1, high = 0;
+            QVector<int> order;
+            order.reserve(count);
             for (int i = 0; i < count; ++i)
-                particleLevels[i] = (i % 2 == 0) ? sortedLevels[high++] : sortedLevels[low--];
+                order.push_back(i);
+            const auto particleHash = [](quint32 x) {
+                x ^= x >> 16;
+                x *= 0x7feb352dU;
+                x ^= x >> 15;
+                x *= 0x846ca68bU;
+                x ^= x >> 16;
+                return x;
+            };
+            std::sort(order.begin(), order.end(), [&](int lhs, int rhs) {
+                return particleHash(quint32(lhs) + 0x9e3779b9U)
+                     < particleHash(quint32(rhs) + 0x9e3779b9U);
+            });
+            QVector<qreal> particleLevels(count);
+            for (int i = 0; i < count; ++i)
+                particleLevels[order[i]] = sortedLevels[i];
             for (int i = 0; i < count; ++i) {
                 const qreal level = particleLevels[i];
                 const qreal dotRadius = minDotRadius * 1.2 * (1.0 + 0.85 * level);
