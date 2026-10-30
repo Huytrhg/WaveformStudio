@@ -266,7 +266,7 @@ public:
         if (!motionTimer->isActive()) motionTimer->start();
     }
     void setMessage(const QString &text) { message = text; update(); }
-    void setVisualMode(int mode) { visualMode = qBound(0, mode, 3); update(); }
+    void setVisualMode(int mode) { visualMode = qBound(0, mode, 4); update(); }
     void setPosition(int x, int y) { positionX = qBound(0, x, 100); positionY = qBound(0, y, 100); update(); }
     void setOpacityPercent(int value) { opacityPercent = qBound(0, value, 100); update(); }
     void setForceCpuFallback(bool enabled) { forceCpuFallback = enabled; update(); }
@@ -392,16 +392,20 @@ protected:
         const qreal maxW = width() * (scalePercent / 100.0);
         const qreal maxH = height() * 0.42 * (scalePercent / 72.0) * (heightPercent / 100.0);
 
-        if (visualMode == 0) { // A: vertical bars; attempt D3D11 shader rendering first.
+        if (visualMode == 0 || visualMode == 4) { // Bars / Dancing Particles: shared D3D11 GPU path.
             const int count = columnCount;
             const qreal cellW = maxW / count;
-            const qreal barW = qMax(0.6, cellW * thicknessPercent / 100.0);
+            const qreal barW = visualMode == 4
+                ? qMax<qreal>(0.75, qMin<qreal>(3.0, width() * 0.0011 * thicknessPercent / 75.0))
+                : qMax(0.6, cellW * thicknessPercent / 100.0);
             const qreal startX = cx - maxW / 2.0;
             const qreal baseline = cy;
             QVector<QRectF> gpuRects;
             QVector<QColor> gpuColors;
             QVector<QColor> gpuTopColors;
-            gpuRects.reserve(count * ((glowPercent > 0 ? 5 : 1) + (peakHoldEnabled ? 1 : 0)));
+            gpuRects.reserve(count * (visualMode == 4
+                ? (glowPercent > 0 ? 8 : 4)
+                : ((glowPercent > 0 ? 5 : 1) + (peakHoldEnabled ? 1 : 0))));
             gpuColors.reserve(gpuRects.capacity());
             gpuTopColors.reserve(gpuRects.capacity());
             for (int i = 0; i < count; ++i) {
@@ -419,7 +423,7 @@ protected:
                 const qreal bandT = count <= 1 ? 0.0 : qreal(i) / (count - 1);
                 const QColor topColor = useGradient
                     ? colorAt(gradientCoordinate(bandT + gradientPhase + 0.18)) : color;
-                if (glowPercent > 0) {
+                if (glowPercent > 0 && visualMode == 0) {
                     // Phase 4C.4: radius and intensity are independent controls.
                     // Four lightweight layers approximate falloff; this is not a Gaussian blur.
                     const qreal strength = (glowPercent / 100.0) * (glowIntensity / 100.0);
@@ -439,10 +443,42 @@ protected:
                         gpuTopColors.push_back(topHalo);
                     }
                 }
+                if (visualMode == 4 && glowPercent > 0) {
+                    // Two restrained translucent rectangles keep the fine stems
+                    // visible without the broad bar-style halo.
+                    QColor halo = color;
+                    halo.setAlphaF(qBound(0.0,
+                        glowPercent / 100.0 * glowIntensity / 100.0 * 0.14, 1.0));
+                    const qreal spread = 1.0 + 5.0 * glowRadius / 100.0;
+                    gpuRects.push_back(bar.adjusted(-spread, 0, spread, 0));
+                    gpuColors.push_back(halo);
+                    gpuTopColors.push_back(halo);
+                    const qreal dotR = qMax<qreal>(1.8, qMin<qreal>(5.0, barW * 1.55));
+                    gpuRects.push_back(QRectF(bar.center().x() - dotR - spread,
+                        bar.top() - dotR - spread, 2 * (dotR + spread), 2 * (dotR + spread)));
+                    gpuColors.push_back(halo);
+                    gpuTopColors.push_back(halo);
+                }
                 gpuRects.push_back(bar);
                 gpuColors.push_back(color);
-                gpuTopColors.push_back(topColor);
-                if (peakHoldEnabled && !peakLevels.isEmpty()) {
+                gpuTopColors.push_back(visualMode == 4 ? color : topColor);
+                if (visualMode == 4) {
+                    // GPU-friendly circle silhouette: three stacked rectangles.
+                    // Four primitives per particle (stem + 3 cap strips).
+                    const qreal dotR = qMax<qreal>(1.8, qMin<qreal>(5.0, barW * 1.55));
+                    const qreal dotX = bar.center().x();
+                    const qreal dotY = bar.top();
+                    const qreal widths[] = {1.45, 2.0, 1.45};
+                    for (int row = 0; row < 3; ++row) {
+                        const qreal stripH = 2.0 * dotR / 3.0;
+                        const qreal stripW = dotR * widths[row];
+                        gpuRects.push_back(QRectF(dotX - stripW / 2.0,
+                            dotY - dotR + row * stripH, stripW, stripH));
+                        gpuColors.push_back(color);
+                        gpuTopColors.push_back(color);
+                    }
+                }
+                if (visualMode == 0 && peakHoldEnabled && !peakLevels.isEmpty()) {
                     const qreal idx = qreal(i) * (peakLevels.size() - 1) / qMax(1, count - 1);
                     const int loPeak = qBound(0, int(idx), peakLevels.size() - 1);
                     const int hiPeak = qMin(loPeak + 1, peakLevels.size() - 1);
@@ -512,7 +548,7 @@ protected:
             SpectrumRenderer::paint(p, QRectF(rect()), bands,
                                     currentRenderSettings(), peakLevels);
         }
-        if (visualMode == 0) {
+        if (visualMode == 0 || visualMode == 4) {
             const QString gpuFrameLine = GpuRenderer::instance().runtimeStats().section('\n', 0, 0);
             const QString fpsLine = QStringLiteral("Preview FPS: %1")
                 .arg(measuredFps, 0, 'f', 1);
@@ -1226,7 +1262,7 @@ MainWindow::MainWindow(QWidget *parent)
     QLabel *styleLabel = new QLabel("Visualization Style");
     propertiesLayout->addWidget(styleLabel);
     QComboBox *visualModeCombo = new QComboBox;
-    visualModeCombo->addItems({"A · Vertical Bars", "B · Waveform Lines", "C · Circular", "D · Filled Waveform"});
+    visualModeCombo->addItems({"A · Vertical Bars", "B · Waveform Lines", "C · Circular", "D · Filled Waveform", "E · Dancing Particles (Hạt nhảy)"});
     visualModeCombo->setCurrentIndex(0);
     propertiesLayout->addWidget(visualModeCombo);
 
