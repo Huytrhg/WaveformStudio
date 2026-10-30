@@ -20,7 +20,7 @@
 #include <cstring>
 
 struct SpectrumRenderSettings {
-    int mode = 0; // 0 Bars, 1 Lines, 2 Circular, 3 Filled
+    int mode = 0; // 0 Bars, 1 Lines, 2 Circular, 3 Filled, 4 Dancing Particles
     int positionX = 50, positionY = 78;
     int opacity = 92, scale = 72, columns = 64;
     int height = 100, thickness = 75;
@@ -230,6 +230,41 @@ public:
                         qreal(i) * (peaks.size() - 1) / qMax(1, count - 1)) * maxH) - 3,
                         barW, 1.6));
                 }
+            }
+        } else if (s.mode == 4) {
+            // Dancing Particles: Spectrum FFT sampling and shared frame/export
+            // renderer. Each band is a hairline stem capped by a round dot.
+            const int count = qBound(8, s.columns, 128);
+            const qreal cell = maxW / count;
+            const qreal stemWidth = qMax<qreal>(0.75,
+                qMin<qreal>(3.0, stage.width() * 0.0011 * s.thickness / 75.0));
+            const qreal dotRadius = qMax<qreal>(1.8,
+                qMin<qreal>(5.0, stemWidth * 1.55));
+            const qreal strength = s.glow / 100.0 * s.glowIntensity / 100.0;
+            const qreal spread = 1.0 + 8.0 * s.glowRadius / 100.0;
+            for (int i = 0; i < count; ++i) {
+                const qreal index = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
+                const qreal level = sample(bands, index);
+                const qreal height = qMax<qreal>(1.0, level * maxH);
+                const qreal x = startX + (i + 0.5) * cell;
+                const qreal y = cy - height;
+                const QColor color = bandColor(i, count, s);
+                if (strength > 0) {
+                    QColor halo = color;
+                    halo.setAlphaF(qBound(0.0, strength * 0.16, 1.0));
+                    p.setPen(QPen(halo, stemWidth + spread * 0.65,
+                                  Qt::SolidLine, Qt::RoundCap));
+                    p.drawLine(QPointF(x, cy), QPointF(x, y));
+                    p.setPen(Qt::NoPen);
+                    p.setBrush(halo);
+                    p.drawEllipse(QPointF(x, y), dotRadius + spread * 0.65,
+                                  dotRadius + spread * 0.65);
+                }
+                p.setPen(QPen(color, stemWidth, Qt::SolidLine, Qt::RoundCap));
+                p.drawLine(QPointF(x, cy), QPointF(x, y));
+                p.setPen(Qt::NoPen);
+                p.setBrush(color);
+                p.drawEllipse(QPointF(x, y), dotRadius, dotRadius);
             }
         } else if (s.mode == 1) {
             // Four coincident straight lines at silence. During music, every
