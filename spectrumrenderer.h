@@ -135,12 +135,19 @@ public:
                                  cy - h, barW, h);
                 const QColor c = bandColor(i, count, s);
                 if (s.glow > 0 && s.glowIntensity > 0) {
-                    QColor halo = c;
-                    halo.setAlpha(qBound(0, qRound(55.0 * s.glow / 100.0 *
-                        s.glowIntensity / 100.0), 55));
-                    p.setBrush(halo);
-                    const qreal r = 0.5 + 4.0 * s.glowRadius / 100.0;
-                    p.drawRoundedRect(bar.adjusted(-r, -r, r, r), 3, 3);
+                    // B4.3.2: broad-to-tight translucent layers form a
+                    // soft outward falloff while leaving the core crisp.
+                    const qreal strength = s.glow / 100.0 * s.glowIntensity / 100.0;
+                    const qreal spread = 1.0 + 12.0 * s.glowRadius / 100.0;
+                    const qreal radii[] = {1.0, 0.72, 0.46, 0.22};
+                    const qreal alphas[] = {0.045, 0.085, 0.16, 0.30};
+                    for (int layer = 0; layer < 4; ++layer) {
+                        QColor halo = c;
+                        halo.setAlpha(qBound(0, qRound(255.0 * strength * alphas[layer]), 90));
+                        p.setBrush(halo);
+                        const qreal r = spread * radii[layer];
+                        p.drawRoundedRect(bar.adjusted(-r, -r, r, r), 3, 3);
+                    }
                 }
                 p.setBrush(c);
                 p.drawRoundedRect(bar, qMin(2.5, barW / 2.0), qMin(2.5, barW / 2.0));
@@ -161,11 +168,25 @@ public:
             for (int i = 0; i < bands.size(); ++i) {
                 const qreal a = qDegreesToRadians(360.0 * i / bands.size() - 90.0);
                 const qreal outer = radius + qMax(1.0, sample(bands, i) * barMax);
-                p.setPen(QPen(bandColor(i, bands.size(), s),
-                    qMax(1.0, stage.width() * 0.004 * s.thickness / 100.0),
-                    Qt::SolidLine, Qt::RoundCap));
-                p.drawLine(QPointF(cx + qCos(a) * radius, cy + qSin(a) * radius),
-                           QPointF(cx + qCos(a) * outer, cy + qSin(a) * outer));
+                const QPointF innerPoint(cx + qCos(a) * radius, cy + qSin(a) * radius);
+                const QPointF outerPoint(cx + qCos(a) * outer, cy + qSin(a) * outer);
+                const QColor coreColor = bandColor(i, bands.size(), s);
+                const qreal coreWidth = qMax(1.0, stage.width() * 0.004 * s.thickness / 100.0);
+                if (s.glow > 0 && s.glowIntensity > 0) {
+                    const qreal strength = s.glow / 100.0 * s.glowIntensity / 100.0;
+                    const qreal spread = 2.0 + 16.0 * s.glowRadius / 100.0;
+                    const qreal widths[] = {1.0, 0.65, 0.32};
+                    const qreal alphas[] = {0.045, 0.11, 0.25};
+                    for (int layer = 0; layer < 3; ++layer) {
+                        QColor halo = coreColor;
+                        halo.setAlpha(qBound(0, qRound(255.0 * strength * alphas[layer]), 90));
+                        p.setPen(QPen(halo, coreWidth + spread * widths[layer],
+                                      Qt::SolidLine, Qt::RoundCap));
+                        p.drawLine(innerPoint, outerPoint);
+                    }
+                }
+                p.setPen(QPen(coreColor, coreWidth, Qt::SolidLine, Qt::RoundCap));
+                p.drawLine(innerPoint, outerPoint);
             }
         } else {
             const int n = qMax(2, int(bands.size()));
