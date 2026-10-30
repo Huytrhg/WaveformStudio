@@ -80,6 +80,39 @@ public:
         return colorAt(reflected(t + s.gradientPhase), s);
     }
 
+    // B4.3.3: separable box-blur approximation to a Gaussian. Run on a
+    // reduced-resolution layer for a soft halo at a reasonable export cost.
+    static QImage blurGlowLayer(const QImage &source, int radius) {
+        if (source.isNull() || radius <= 0) return source;
+        QImage image = source.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        const int w = image.width(), h = image.height();
+        QImage temp(image.size(), QImage::Format_ARGB32_Premultiplied);
+        radius = qBound(1, radius, 32);
+        for (int y = 0; y < h; ++y) {
+            const QRgb *src = reinterpret_cast<const QRgb *>(image.constScanLine(y));
+            QRgb *dst = reinterpret_cast<QRgb *>(temp.scanLine(y));
+            for (int x = 0; x < w; ++x) {
+                int a=0,r=0,g=0,b=0,n=0;
+                for (int k=qMax(0,x-radius); k<=qMin(w-1,x+radius); ++k) {
+                    const QRgb px=src[k]; a+=qAlpha(px); r+=qRed(px); g+=qGreen(px); b+=qBlue(px); ++n;
+                }
+                dst[x]=qRgba(r/n,g/n,b/n,a/n);
+            }
+        }
+        for (int y = 0; y < h; ++y) {
+            QRgb *dst = reinterpret_cast<QRgb *>(image.scanLine(y));
+            for (int x = 0; x < w; ++x) {
+                int a=0,r=0,g=0,b=0,n=0;
+                for (int k=qMax(0,y-radius); k<=qMin(h-1,y+radius); ++k) {
+                    const QRgb px=reinterpret_cast<const QRgb *>(temp.constScanLine(k))[x];
+                    a+=qAlpha(px); r+=qRed(px); g+=qGreen(px); b+=qBlue(px); ++n;
+                }
+                dst[x]=qRgba(r/n,g/n,b/n,a/n);
+            }
+        }
+        return image;
+    }
+
     static void paint(QPainter &p, const QRectF &stage,
                       const QVector<float> &bands, const SpectrumRenderSettings &s,
                       const QVector<float> &peaks = {},
@@ -89,6 +122,36 @@ public:
         p.setRenderHint(QPainter::Antialiasing);
         p.setClipRect(stage);
         p.setOpacity(qBound(0, s.opacity, 100) / 100.0);
+        // Draw a true soft glow layer first, then draw crisp foreground shapes
+        // below with glow disabled to avoid the old hard-edged halo.
+        if (s.glow > 0 && s.glowIntensity > 0 &&
+            (s.mode == 1 || s.mode == 3)) {
+            const QSize layerSize(qMax(1, int(stage.width())), qMax(1, int(stage.height())));
+            QImage glowLayer(layerSize, QImage::Format_ARGB32_Premultiplied);
+            glowLayer.fill(Qt::transparent);
+            SpectrumRenderSettings glowSettings = s;
+            glowSettings.glow = 0;
+            glowSettings.opacity = 100;
+            QPainter gp(&glowLayer);
+            gp.setRenderHint(QPainter::Antialiasing);
+            gp.setOpacity(qBound(0, s.opacity, 100) / 100.0 *
+                          qBound(0, s.glow, 100) / 100.0 *
+                          qBound(0, s.glowIntensity, 100) / 100.0);
+            paint(gp, QRectF(QPointF(0, 0), QSizeF(layerSize)), bands, glowSettings, peaks);
+            gp.end();
+            const int blurRadius = qBound(2, qRound((2.0 + 18.0 * s.glowRadius / 100.0) *
+                qMin(1.0, stage.width() / 900.0)), 24);
+            const QImage blurred = blurGlowLayer(glowLayer, blurRadius);
+            p.save();
+            p.setOpacity(1.0);
+            p.drawImage(stage.topLeft(), blurred);
+            p.restore();
+            SpectrumRenderSettings coreSettings = s;
+            coreSettings.glow = 0;
+            paint(p, stage, bands, coreSettings, peaks);
+            p.restore();
+            return;
+        }
         const qreal cx = stage.left() + stage.width() * s.positionX / 100.0;
         const qreal cy = stage.top() + stage.height() * s.positionY / 100.0;
         const qreal maxW = stage.width() * s.scale / 100.0;
