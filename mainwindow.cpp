@@ -39,6 +39,7 @@
 #include <QGridLayout>
 #include <QSplitter>
 #include <QListWidget>
+#include <QTabWidget>
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
@@ -1088,30 +1089,52 @@ MainWindow::MainWindow(QWidget *parent)
     workspaceSplitter->setChildrenCollapsible(false);
 
     // ---------------------------------------------------------
-    // LEFT: EFFECT LIBRARY
+    // LEFT: PROJECT / EFFECTS LIBRARY
     // ---------------------------------------------------------
 
     QFrame *effectsPanel = new QFrame;
     effectsPanel->setObjectName("panel");
-    effectsPanel->setMinimumWidth(175);
-    effectsPanel->setMaximumWidth(260);
+    effectsPanel->setMinimumWidth(190);
+    effectsPanel->setMaximumWidth(290);
 
-    QVBoxLayout *effectsLayout =
-        new QVBoxLayout(effectsPanel);
+    QVBoxLayout *effectsLayout = new QVBoxLayout(effectsPanel);
+    effectsLayout->setContentsMargins(8, 8, 8, 8);
+    effectsLayout->setSpacing(6);
 
-    effectsLayout->setContentsMargins(10, 12, 10, 12);
-    effectsLayout->setSpacing(8);
+    QTabWidget *libraryTabs = new QTabWidget(effectsPanel);
+    libraryTabs->setDocumentMode(true);
+    libraryTabs->setTabPosition(QTabWidget::North);
 
-    QLabel *effectsTitle =
-        new QLabel("EFFECT LIBRARY");
+    QWidget *projectPage = new QWidget(libraryTabs);
+    QVBoxLayout *projectLayout = new QVBoxLayout(projectPage);
+    projectLayout->setContentsMargins(4, 8, 4, 4);
+    projectLayout->setSpacing(8);
 
+    QLabel *projectTitle = new QLabel("PROJECT MEDIA");
+    projectTitle->setObjectName("sectionTitle");
+    projectLayout->addWidget(projectTitle);
+
+    QListWidget *projectMediaList = new QListWidget(projectPage);
+    projectMediaList->setObjectName("projectMediaList");
+    projectMediaList->setSelectionMode(QAbstractItemView::SingleSelection);
+    projectMediaList->addItem("No media imported yet");
+    projectMediaList->item(0)->setFlags(Qt::NoItemFlags);
+    projectMediaList->setToolTip("Imported video and audio assets appear here.");
+    projectLayout->addWidget(projectMediaList, 1);
+
+    QPushButton *projectImportVideoButton = new QPushButton("+ Import Video", projectPage);
+    projectLayout->addWidget(projectImportVideoButton);
+
+    QWidget *effectsPage = new QWidget(libraryTabs);
+    QVBoxLayout *effectsPageLayout = new QVBoxLayout(effectsPage);
+    effectsPageLayout->setContentsMargins(4, 8, 4, 4);
+    effectsPageLayout->setSpacing(8);
+
+    QLabel *effectsTitle = new QLabel("EFFECT LIBRARY");
     effectsTitle->setObjectName("sectionTitle");
+    effectsPageLayout->addWidget(effectsTitle);
 
-    effectsLayout->addWidget(effectsTitle);
-
-    QListWidget *effectsList =
-        new QListWidget;
-
+    QListWidget *effectsList = new QListWidget(effectsPage);
     effectsList->addItem("Audio Waveform");
     effectsList->addItem("Spectrum Analyzer");
     effectsList->addItem("Circular Waveform");
@@ -1120,17 +1143,19 @@ MainWindow::MainWindow(QWidget *parent)
     effectsList->addItem("Rain Glass");
     effectsList->addItem("Glow");
     effectsList->addItem("Particles");
-
     effectsList->setCurrentRow(0);
+    effectsPageLayout->addWidget(effectsList, 1);
 
-    effectsLayout->addWidget(effectsList, 1);
+    QPushButton *addEffectButton = new QPushButton("+ Add Effect Layer", effectsPage);
+    effectsPageLayout->addWidget(addEffectButton);
 
-    QPushButton *addEffectButton =
-        new QPushButton("+ Add Effect Layer");
-
-    effectsLayout->addWidget(addEffectButton);
-
+    libraryTabs->addTab(projectPage, "Media");
+    libraryTabs->addTab(effectsPage, "Effects");
+    effectsLayout->addWidget(libraryTabs, 1);
     workspaceSplitter->addWidget(effectsPanel);
+
+    connect(projectImportVideoButton, &QPushButton::clicked,
+            this, &MainWindow::openVideo);
 
     // ---------------------------------------------------------
     // CENTER: VIDEO PREVIEW
@@ -1653,7 +1678,7 @@ MainWindow::MainWindow(QWidget *parent)
         {210, 800, 240}
         );
 
-    rootLayout->addWidget(workspaceSplitter, 1);
+    // The main workspace is inserted into the vertical splitter below.
 
     // =========================================================
     // TIMELINE
@@ -1661,8 +1686,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     QFrame *timelinePanel = new QFrame;
     timelinePanel->setObjectName("panel");
-    timelinePanel->setMinimumHeight(190);
-    timelinePanel->setMaximumHeight(260);
+    timelinePanel->setMinimumHeight(210);
+    timelinePanel->setMaximumHeight(420);
 
     QVBoxLayout *timelineLayout =
         new QVBoxLayout(timelinePanel);
@@ -1743,77 +1768,67 @@ MainWindow::MainWindow(QWidget *parent)
     timelineLayout->addLayout(rulerLayout);
 
     auto createTrack =
-        [](const QString &name, const QString &color) {
+        [](const QString &name, const QString &color,
+           int startWeight, int clipWeight, const QString &clipText) {
             QWidget *track = new QWidget;
+            track->setMinimumHeight(31);
 
-            QHBoxLayout *layout =
-                new QHBoxLayout(track);
-
+            QHBoxLayout *layout = new QHBoxLayout(track);
             layout->setContentsMargins(0, 0, 0, 0);
             layout->setSpacing(5);
 
-            QLabel *trackName =
-                new QLabel(name);
-
+            QLabel *trackName = new QLabel(name);
             trackName->setFixedWidth(105);
-
-            trackName->setStyleSheet(
-                "color:#E8EAED;font-size:9pt;"
-                );
-
+            trackName->setStyleSheet("color:#E8EAED;font-size:9pt;");
             layout->addWidget(trackName);
 
+            layout->addStretch(qMax(0, startWeight));
+
             QFrame *clip = new QFrame;
-            clip->setMinimumHeight(27);
+            clip->setMinimumHeight(25);
+            clip->setStyleSheet(QString(
+                "background-color:%1;"
+                "border:1px solid #55585E;"
+                "border-radius:3px;").arg(color));
 
-            clip->setStyleSheet(
-                QString(
-                    "background-color:%1;"
-                    "border:1px solid #55585E;"
-                    "border-radius:3px;"
-                    ).arg(color)
-                );
-
-            QLabel *clipLabel =
-                new QLabel(name);
-
-            clipLabel->setAlignment(Qt::AlignCenter);
-
+            QLabel *clipLabel = new QLabel(clipText);
+            clipLabel->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
             clipLabel->setStyleSheet(
-                "color:white;"
-                "background:transparent;"
-                "border:none;"
-                "font-size:8pt;"
-                );
+                "color:white;background:transparent;border:none;"
+                "font-size:8pt;padding-left:7px;");
 
-            QHBoxLayout *clipLayout =
-                new QHBoxLayout(clip);
-
-            clipLayout->setContentsMargins(4, 0, 4, 0);
+            QHBoxLayout *clipLayout = new QHBoxLayout(clip);
+            clipLayout->setContentsMargins(3, 0, 3, 0);
             clipLayout->addWidget(clipLabel);
 
-            layout->addWidget(clip, 1);
-
+            layout->addWidget(clip, qMax(1, clipWeight));
+            layout->addStretch(qMax(0, 10 - startWeight - clipWeight));
             return track;
         };
 
     timelineLayout->addWidget(
-        createTrack("Video 1", "#345B78")
+        createTrack("Video", "#345B78", 0, 10, "Video clip · loaded media")
         );
-
     timelineLayout->addWidget(
-        createTrack("Audio 1", "#386B55")
+        createTrack("Spectrum", "#59478A", 0, 10, "Spectrum Analyzer")
         );
-
     timelineLayout->addWidget(
-        createTrack("Waveform 1", "#59478A")
+        createTrack("Frame Effects", "#805A35", 1, 6, "Effect layers")
         );
-
     timelineLayout->addWidget(
-        createTrack("Overlay 1", "#805A35")
+        createTrack("Audio", "#167E78", 0, 10, "Audio waveform · pending import")
         );
 
-    rootLayout->addWidget(timelinePanel);
+    // Put the workspace and timeline in a vertical splitter so the user can
+    // resize the Timeline like a video-editing application.
+    QSplitter *verticalWorkspaceSplitter = new QSplitter(Qt::Vertical);
+    verticalWorkspaceSplitter->setChildrenCollapsible(false);
+    verticalWorkspaceSplitter->addWidget(workspaceSplitter);
+    verticalWorkspaceSplitter->addWidget(timelinePanel);
+    verticalWorkspaceSplitter->setStretchFactor(0, 3);
+    verticalWorkspaceSplitter->setStretchFactor(1, 1);
+    verticalWorkspaceSplitter->setSizes({560, 250});
+    rootLayout->addWidget(verticalWorkspaceSplitter, 1);
 
     statusBar()->showMessage(
         "Ready | WaveformStudio | Import a video to begin"
@@ -2966,6 +2981,26 @@ void MainWindow::openVideo()
     videoInfoLabel->setText(
         QFileInfo(fileName).fileName()
         );
+
+    if (QListWidget *mediaList = findChild<QListWidget *>("projectMediaList")) {
+        if (mediaList->count() == 1 &&
+            mediaList->item(0)->flags() == Qt::NoItemFlags) {
+            mediaList->clear();
+        }
+        const QString mediaName = QFileInfo(fileName).fileName();
+        bool alreadyListed = false;
+        for (int i = 0; i < mediaList->count(); ++i) {
+            if (mediaList->item(i)->text() == mediaName) {
+                mediaList->setCurrentRow(i);
+                alreadyListed = true;
+                break;
+            }
+        }
+        if (!alreadyListed) {
+            mediaList->addItem(mediaName);
+            mediaList->setCurrentRow(mediaList->count() - 1);
+        }
+    }
 
     player->setSource(QUrl::fromLocalFile(fileName));
 
