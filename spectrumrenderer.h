@@ -244,10 +244,22 @@ public:
                 qMin<qreal>(5.0, stemWidth * 1.55));
             const qreal strength = s.glow / 100.0 * s.glowIntensity / 100.0;
             const qreal spread = 1.0 + 8.0 * s.glowRadius / 100.0;
+            // Alternate the strongest and weakest sampled energy values. This
+            // redistributes their positions without compressing the energy range.
+            QVector<qreal> sortedLevels;
+            sortedLevels.reserve(count);
             for (int i = 0; i < count; ++i) {
                 const qreal index = qreal(i) * (bands.size() - 1) / qMax(1, count - 1);
-                const qreal level = qBound(0.0, sample(bands, index), 1.0);
-                const qreal dotRadius = minDotRadius * (1.0 + 0.85 * level);
+                sortedLevels.push_back(qBound(0.0, sample(bands, index), 1.0));
+            }
+            std::sort(sortedLevels.begin(), sortedLevels.end(), std::greater<qreal>());
+            QVector<qreal> particleLevels(count);
+            int low = count - 1, high = 0;
+            for (int i = 0; i < count; ++i)
+                particleLevels[i] = (i % 2 == 0) ? sortedLevels[high++] : sortedLevels[low--];
+            for (int i = 0; i < count; ++i) {
+                const qreal level = particleLevels[i];
+                const qreal dotRadius = minDotRadius * 1.2 * (1.0 + 0.85 * level);
                 const qreal height = qMax<qreal>(1.0, level * maxH);
                 const qreal x = startX + (i + 0.5) * cell;
                 const qreal y = cy - height;
