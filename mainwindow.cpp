@@ -264,6 +264,33 @@ public:
         }
         targetBands = values;
         if (targetBands.size() > 64) targetBands.resize(64);
+        // Drive frame motion from low-frequency drum energy instead of the full spectrum.
+        // The lower ~22% of ordered bands emphasize kick, toms and lower snare content.
+        qreal bassEnergySum = 0.0;
+        const int bassBandCount = targetBands.isEmpty()
+            ? 0 : qBound(1, int(qCeil(targetBands.size() * 0.22)), targetBands.size());
+        for (int i = 0; i < bassBandCount; ++i) {
+            const qreal v = qBound(0.0, qreal(targetBands[i]), 1.0);
+            const qreal weight = 1.0 - (qreal(i) / qMax(1, bassBandCount)) * 0.35;
+            bassEnergySum += v * v * weight;
+        }
+        const qreal bassRms = bassBandCount > 0
+            ? qBound(0.0, qSqrt(bassEnergySum / bassBandCount) * 2.8, 1.0) : 0.0;
+        // Detect a drum hit as a quick rise, then ease the movement back smoothly.
+        const qreal bassOnset = qBound(0.0, bassRms - previousBassEnergy, 1.0);
+        previousBassEnergy = bassRms;
+        const qreal drumTarget = qBound(0.0, bassRms * 0.78 + bassOnset * 0.65, 1.0);
+        const auto drumEnvelope = [drumTarget](qreal previous, int smoothing) {
+            const qreal smooth = qBound(0, smoothing, 100) / 100.0;
+            const qreal attack = 0.72 - smooth * 0.38;
+            const qreal release = 0.34 - smooth * 0.27;
+            const qreal response = drumTarget > previous ? attack : release;
+            return previous + (drumTarget - previous) * response;
+        };
+        frameZoomEnergy = drumEnvelope(frameZoomEnergy, zoomSmoothing);
+        frameShakeEnergy = drumEnvelope(frameShakeEnergy, shakeSmoothing);
+
+        // Exposure pulse and edge glow continue to use broad musical energy.
         qreal energySum = 0.0;
         for (float sample : targetBands) {
             const qreal v = qBound(0.0, qreal(sample), 1.0);
@@ -275,8 +302,6 @@ public:
             const qreal response = 1.0 - (qBound(0, smoothing, 100) / 100.0) * 0.90;
             return previous + (rawEnergy - previous) * response;
         };
-        frameZoomEnergy = smoothEnergy(frameZoomEnergy, zoomSmoothing);
-        frameShakeEnergy = smoothEnergy(frameShakeEnergy, shakeSmoothing);
         framePulseEnergy = smoothEnergy(framePulseEnergy, pulseSmoothing);
         frameGradientEnergy = smoothEnergy(frameGradientEnergy, edgeSmoothing);
         gpuBackgroundDirty = true;
@@ -895,6 +920,7 @@ private:
     bool audioZoomEnabled = false;
     int zoomAmount = 30, zoomSensitivity = 60, zoomSmoothing = 65;
     qreal frameZoomEnergy = 0.0;
+    qreal previousBassEnergy = 0.0;
     bool audioShakeEnabled = false;
     int shakeAmount = 20, shakeSpeed = 50, shakeHorizontal = 50, shakeVertical = 50;
     int shakeSensitivity = 60, shakeSmoothing = 70;
