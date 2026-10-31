@@ -82,6 +82,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11PixelShader> bokehPixelShader;
     Microsoft::WRL::ComPtr<ID3D11InputLayout> bokehInputLayout;
     Microsoft::WRL::ComPtr<ID3D11Buffer> bokehVertexBuffer;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> bokehConstantBuffer;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> bokehTexture;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> bokehRtv;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> bokehStaging;
