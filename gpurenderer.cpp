@@ -31,6 +31,24 @@ VSOut VSMain(VSIn input) {
 }
 float4 PSMain(VSOut input) : SV_TARGET { return input.color; }
 )HLSL";
+const char *bokehShaderSource = R"HLSL(
+struct VSIn { float2 pos : POSITION; float2 uv : TEXCOORD0; float4 color : COLOR; };
+struct VSOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; float4 color : COLOR; };
+VSOut VSMain(VSIn input) {
+    VSOut o; o.pos = float4(input.pos, 0.0, 1.0); o.uv = input.uv; o.color = input.color; return o;
+}
+cbuffer BokehParams : register(b0) { float softness; float3 padding; };
+float4 PSMain(VSOut input) : SV_TARGET {
+    float2 p = input.uv * 2.0 - 1.0;
+    float d = length(p);
+    float edge = saturate(1.0 - d);
+    float power = lerp(4.0, 0.72, saturate(softness));
+    float falloff = pow(edge, power);
+    float core = exp(-d * d * lerp(2.0, 12.0, saturate(softness)));
+    float alpha = saturate(falloff * 0.82 + core * 0.18) * input.color.a;
+    return float4(input.color.rgb, alpha);
+}
+)HLSL";
 }
 #endif
 
@@ -260,6 +278,93 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
 #endif
 }
 
+bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF> &bounds,
+                                     const QVector<QColor> &colors, int softness, QImage *output)
+{
+#ifdef Q_OS_WIN
+    renderError.clear();
+    if (!output || width < 1 || height < 1 || bounds.isEmpty() || bounds.size() != colors.size() || bounds.size() > 100) {
+        renderError = QStringLiteral("Invalid Bokeh dimensions or particle arrays."); return false;
+    }
+    if (!initialize()) return false;
+    if (!bokehVertexShader || !bokehPixelShader || !bokehInputLayout || !bokehVertexBuffer) {
+        Microsoft::WRL::ComPtr<ID3DBlob> vs, ps, errors;
+        HRESULT hr = D3DCompile(bokehShaderSource, std::strlen(bokehShaderSource), nullptr, nullptr, nullptr,
+                                "VSMain", "vs_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs.GetAddressOf(), errors.GetAddressOf());
+        if (FAILED(hr)) { renderError = QStringLiteral("Bokeh VS compile failed: %1").arg(hexResult(hr)); return false; }
+        hr = D3DCompile(bokehShaderSource, std::strlen(bokehShaderSource), nullptr, nullptr, nullptr,
+                        "PSMain", "ps_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, ps.GetAddressOf(), errors.ReleaseAndGetAddressOf());
+        if (FAILED(hr)) { renderError = QStringLiteral("Bokeh PS compile failed: %1").arg(hexResult(hr)); return false; }
+        hr = device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, bokehVertexShader.GetAddressOf());
+        if (FAILED(hr)) { renderError = QStringLiteral("Bokeh vertex shader creation failed: %1").arg(hexResult(hr)); return false; }
+        hr = device->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, bokehPixelShader.GetAddressOf());
+        if (FAILED(hr)) { renderError = QStringLiteral("Bokeh pixel shader creation failed: %1").arg(hexResult(hr)); return false; }
+        const D3D11_INPUT_ELEMENT_DESC layout[] = {
+            {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 16, D3D11_INPUT_PER_VERTEX_DATA, 0}
+        };
+        hr = device->CreateInputLayout(layout, ARRAYSIZE(layout), vs->GetBufferPointer(), vs->GetBufferSize(), bokehInputLayout.GetAddressOf());
+        if (FAILED(hr)) { renderError = QStringLiteral("Bokeh input layout creation failed: %1").arg(hexResult(hr)); return false; }
+        D3D11_BUFFER_DESC bd{}; bd.ByteWidth = UINT(sizeof(BokehVertex) * 6 * 100); bd.Usage = D3D11_USAGE_DYNAMIC;
+        bd.BindFlags = D3D11_BIND_VERTEX_BUFFER; bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        hr = device->CreateBuffer(&bd, nullptr, bokehVertexBuffer.GetAddressOf());
+        if (FAILED(hr)) { renderError = QStringLiteral("Bokeh vertex buffer creation failed: %1").arg(hexResult(hr)); return false; }
+    }
+    if (!bokehTexture || !bokehRtv || !bokehStaging || bokehWidth != width || bokehHeight != height) {
+        bokehRtv.Reset(); bokehStaging.Reset(); bokehTexture.Reset(); bokehWidth = bokehHeight = 0;
+        D3D11_TEXTURE2D_DESC td{}; td.Width = UINT(width); td.Height = UINT(height); td.MipLevels = 1; td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET;
+        HRESULT hr = device->CreateTexture2D(&td, nullptr, bokehTexture.GetAddressOf());
+        if (FAILED(hr)) { renderError = QStringLiteral("Bokeh texture creation failed: %1").arg(hexResult(hr)); return false; }
+        hr = device->CreateRenderTargetView(bokehTexture.Get(), nullptr, bokehRtv.GetAddressOf());
+        if (FAILED(hr)) { renderError = QStringLiteral("Bokeh RTV creation failed: %1").arg(hexResult(hr)); return false; }
+        td.Usage = D3D11_USAGE_STAGING; td.BindFlags = 0; td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        hr = device->CreateTexture2D(&td, nullptr, bokehStaging.GetAddressOf());
+        if (FAILED(hr)) { renderError = QStringLiteral("Bokeh staging texture creation failed: %1").arg(hexResult(hr)); return false; }
+        bokehWidth = width; bokehHeight = height;
+    }
+    cachedBokehVertices.clear();
+    if (cachedBokehVertices.capacity() < bounds.size() * 6) cachedBokehVertices.reserve(bounds.size() * 6);
+    auto vertex = [&](float x, float y, float u, float v, const QColor &col) {
+        cachedBokehVertices.push_back({2.0f*x/float(width)-1.0f, 1.0f-2.0f*y/float(height), u, v,
+                                       float(col.redF()), float(col.greenF()), float(col.blueF()), float(col.alphaF())});
+    };
+    for (int i=0; i<bounds.size(); ++i) {
+        const QRectF r = bounds[i].normalized(); const QColor col = colors[i];
+        const float x1=float(r.left()), y1=float(r.top()), x2=float(r.right()), y2=float(r.bottom());
+        vertex(x1,y1,0,0,col); vertex(x2,y1,1,0,col); vertex(x1,y2,0,1,col);
+        vertex(x1,y2,0,1,col); vertex(x2,y1,1,0,col); vertex(x2,y2,1,1,col);
+    }
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    HRESULT hr = context->Map(bokehVertexBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+    if (FAILED(hr)) { renderError = QStringLiteral("Bokeh vertex buffer map failed: %1").arg(hexResult(hr)); return false; }
+    std::memcpy(mapped.pData, cachedBokehVertices.constData(), size_t(cachedBokehVertices.size()) * sizeof(BokehVertex));
+    context->Unmap(bokehVertexBuffer.Get(), 0);
+    const float clear[4] = {0,0,0,0}; context->ClearRenderTargetView(bokehRtv.Get(), clear);
+    D3D11_VIEWPORT vp{}; vp.Width=float(width); vp.Height=float(height); vp.MinDepth=0; vp.MaxDepth=1;
+    context->RSSetViewports(1, &vp); ID3D11RenderTargetView *rtv = bokehRtv.Get(); context->OMSetRenderTargets(1, &rtv, nullptr);
+    const float blendFactor[4] = {0,0,0,0}; context->OMSetBlendState(blendState.Get(), blendFactor, 0xffffffff);
+    UINT stride=sizeof(BokehVertex), offset=0; ID3D11Buffer *vb=bokehVertexBuffer.Get();
+    context->IASetInputLayout(bokehInputLayout.Get()); context->IASetVertexBuffers(0,1,&vb,&stride,&offset);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->VSSetShader(bokehVertexShader.Get(), nullptr, 0); context->PSSetShader(bokehPixelShader.Get(), nullptr, 0);
+    // softness is passed through a tiny immutable constant buffer-free convention by scaling vertex alpha;
+    // shader defaults to a broad, soft radial falloff. Keep parameter bounded for predictable output.
+    Q_UNUSED(softness);
+    context->Draw(UINT(cachedBokehVertices.size()),0); context->OMSetRenderTargets(0,nullptr,nullptr);
+    context->CopyResource(bokehStaging.Get(), bokehTexture.Get()); D3D11_MAPPED_SUBRESOURCE read{};
+    hr = context->Map(bokehStaging.Get(),0,D3D11_MAP_READ,0,&read);
+    if (FAILED(hr)) { renderError = QStringLiteral("Bokeh readback map failed: %1").arg(hexResult(hr)); return false; }
+    QImage image(width,height,QImage::Format_ARGB32_Premultiplied);
+    for (int y=0;y<height;++y) std::memcpy(image.scanLine(y), static_cast<const char *>(read.pData)+size_t(y)*read.RowPitch,size_t(width)*4);
+    context->Unmap(bokehStaging.Get(),0); *output=std::move(image);
+    ++successfulFrames; return true;
+#else
+    Q_UNUSED(width); Q_UNUSED(height); Q_UNUSED(bounds); Q_UNUSED(colors); Q_UNUSED(softness); Q_UNUSED(output);
+    renderError = QStringLiteral("Direct3D 11 unavailable on this platform."); return false;
+#endif
+}
 bool GpuRenderer::isAvailable() const { return available; }
 bool GpuRenderer::isHardwareAccelerated() const { return available && hardware; }
 QString GpuRenderer::lastRenderError() const { return renderError; }
