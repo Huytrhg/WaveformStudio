@@ -246,7 +246,15 @@ public:
         bokehTimer = new QTimer(this);
         bokehTimer->setInterval(33); // ~30 fps, separate from spectrum smoothing.
         connect(bokehTimer, &QTimer::timeout, this, [this]() {
-            if (!bokehEnabled || bokehSpeed == 0) return;
+            if (!bokehEnabled) return;
+            const qreal target = bokehAudioReactive
+                ? effectLevel(framePulseEnergy, bokehSensitivity) : 0.0;
+            const qreal smoothing = bokehAudioSmoothing / 100.0;
+            const qreal attack = 0.42 - smoothing * 0.32;
+            const qreal release = 0.18 - smoothing * 0.14;
+            const qreal response = target > bokehSmoothedEnergy ? attack : release;
+            bokehSmoothedEnergy += (target - bokehSmoothedEnergy) * response;
+            if (bokehSpeed == 0 && bokehTwinkle == 0 && !bokehAudioReactive) return;
             gpuBackgroundDirty = true;
             update();
         });
@@ -408,6 +416,8 @@ public:
     void setBokehBlur(int value) { bokehBlur = qBound(0, value, 100); bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
     void setBokehGlow(int value) { bokehGlow = qBound(0, value, 100); bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
     void setBokehDepth(int value) { bokehDepth = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setBokehTwinkle(int value) { bokehTwinkle = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setBokehAudioSmoothing(int value) { bokehAudioSmoothing = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setBokehDirection(int value) { bokehDirection = qBound(0, value, 3); gpuBackgroundDirty = true; update(); }
     void setBokehGradientEnabled(bool enabled) { bokehGradientEnabled = enabled; bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
     void setBokehSecondaryColor(const QColor &color) {
@@ -534,8 +544,8 @@ private:
         if (bokehSprite.isNull()) rebuildBokehSprite();
         const qreal t = effectClock.isValid() ? effectClock.elapsed() / 1000.0 : 0.0;
         const qreal minSide = qMin(area.width(), area.height());
-        const qreal energy = bokehAudioReactive
-            ? effectLevel(framePulseEnergy, bokehSensitivity) : 0.0;
+        const qreal energy = bokehAudioReactive ? bokehSmoothedEnergy : 0.0;
+        const qreal speed = bokehSpeed / 50.0;
         painter.save();
         painter.setClipRect(area);
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -545,25 +555,29 @@ private:
             const qreal depth = bokehHash(i * 7 + 6);
             const qreal depthFactor = 1.0 + (depth - 0.5) * (bokehDepth / 100.0) * 1.7;
             const qreal sizeVariance = (0.45 + bokehHash(i * 7 + 3) * 1.1) * depthFactor;
-            const qreal velocity = (0.012 + bokehHash(i * 7 + 4) * 0.025)
-                                   * (bokehSpeed / 50.0) * depthFactor;
-            const qreal travel = std::fmod(seedY + t * velocity, 1.35);
+            const qreal velocity = (0.012 + bokehHash(i * 7 + 4) * 0.025) * speed * depthFactor;
+            const qreal cycle = std::fmod(seedY + t * velocity, 1.35);
+            const qreal sway = qSin(t * (0.22 + depth * 0.12) + i * 2.3);
             qreal x = seedX, y = seedY;
-            if (bokehDirection == 0) y = 1.15 - travel;       // Up
-            else if (bokehDirection == 1) y = travel - 0.15;  // Down
-            else if (bokehDirection == 2) x = travel - 0.15;  // Right
-            else x = 1.15 - travel;                            // Left
-            if (bokehDirection < 2)
-                x += qSin(t * 0.35 + i * 2.3) * 0.022;
-            else
-                y += qSin(t * 0.35 + i * 2.3) * 0.022;
+            if (bokehDirection == 0) y = 1.15 - cycle;
+            else if (bokehDirection == 1) y = cycle - 0.15;
+            else if (bokehDirection == 2) x = cycle - 0.15;
+            else x = 1.15 - cycle;
+            if (bokehDirection < 2) x += sway * 0.022 * depthFactor;
+            else y += sway * 0.022 * depthFactor;
+            const qreal phase = t * (1.3 + bokehHash(i * 7 + 8) * 2.8)
+                               + bokehHash(i * 7 + 9) * 6.28318530718;
+            const qreal wave = 0.5 + 0.5 * qSin(phase);
+            const qreal twinkle = 1.0 - (bokehTwinkle / 100.0) * 0.58
+                                  + (bokehTwinkle / 100.0) * 0.58 * wave;
             const qreal radius = minSide * (0.008 + bokehSize * 0.00035)
                                  * sizeVariance * (1.0 + energy * 0.28);
             const QPointF center(area.left() + x * area.width(),
                                  area.top() + y * area.height());
+            const qreal layerFade = 0.62 + depth * 0.38;
             const qreal alpha = qBound(0.0, (bokehOpacity / 100.0)
-                * (0.55 + energy * 0.45)
-                * (0.55 + bokehHash(i * 7 + 5) * 0.45), 0.85);
+                * (0.55 + energy * 0.45) * layerFade * twinkle
+                * (0.55 + bokehHash(i * 7 + 5) * 0.45), 0.90);
             painter.setOpacity(alpha);
             painter.drawImage(QRectF(center.x() - radius, center.y() - radius,
                                      radius * 2.0, radius * 2.0), bokehSprite);
@@ -1065,6 +1079,8 @@ private:
     bool bokehGradientEnabled = false;
     int bokehShape = 0, bokehBlur = 70, bokehGlow = 60;
     int bokehDepth = 45, bokehDirection = 0;
+    int bokehTwinkle = 22, bokehAudioSmoothing = 65;
+    qreal bokehSmoothedEnergy = 0.0;
 
     bool audioZoomEnabled = false;
     int zoomAmount = 30, zoomSensitivity = 60, zoomSmoothing = 65;
@@ -2045,6 +2061,12 @@ MainWindow::MainWindow(QWidget *parent)
     });
     addWaveSlider("Bokeh Depth", 0, 100, 45, "%", [this](int v) {
         spectrumOverlay->setBokehDepth(v); spectrumDisplay->setBokehDepth(v);
+    });
+    addWaveSlider("Bokeh Twinkle", 0, 100, 22, "%", [this](int v) {
+        spectrumOverlay->setBokehTwinkle(v); spectrumDisplay->setBokehTwinkle(v);
+    });
+    addWaveSlider("Bokeh Audio Smoothing", 0, 100, 65, "%", [this](int v) {
+        spectrumOverlay->setBokehAudioSmoothing(v); spectrumDisplay->setBokehAudioSmoothing(v);
     });
     QComboBox *bokehDirectionBox = new QComboBox;
     bokehDirectionBox->addItems({"Up", "Down", "Right", "Left"});
