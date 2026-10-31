@@ -286,7 +286,7 @@ bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF
     if (!output || width < 1 || height < 1 || bounds.isEmpty() || bounds.size() != colors.size() || bounds.size() > 100) {
         renderError = QStringLiteral("Invalid Bokeh dimensions or particle arrays."); return false;
     }
-    if (!initialize()) return false;
+    if (!initialize() || !createPipeline()) return false;
     if (!bokehVertexShader || !bokehPixelShader || !bokehInputLayout || !bokehVertexBuffer) {
         Microsoft::WRL::ComPtr<ID3DBlob> vs, ps, errors;
         HRESULT hr = D3DCompile(bokehShaderSource, std::strlen(bokehShaderSource), nullptr, nullptr, nullptr,
@@ -310,6 +310,10 @@ bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF
         bd.BindFlags = D3D11_BIND_VERTEX_BUFFER; bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
         hr = device->CreateBuffer(&bd, nullptr, bokehVertexBuffer.GetAddressOf());
         if (FAILED(hr)) { renderError = QStringLiteral("Bokeh vertex buffer creation failed: %1").arg(hexResult(hr)); return false; }
+        D3D11_BUFFER_DESC cbd{}; cbd.ByteWidth = 16; cbd.Usage = D3D11_USAGE_DYNAMIC;
+        cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER; cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        hr = device->CreateBuffer(&cbd, nullptr, bokehConstantBuffer.GetAddressOf());
+        if (FAILED(hr)) { renderError = QStringLiteral("Bokeh constant buffer creation failed: %1").arg(hexResult(hr)); return false; }
     }
     if (!bokehTexture || !bokehRtv || !bokehStaging || bokehWidth != width || bokehHeight != height) {
         bokehRtv.Reset(); bokehStaging.Reset(); bokehTexture.Reset(); bokehWidth = bokehHeight = 0;
@@ -349,9 +353,14 @@ bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF
     context->IASetInputLayout(bokehInputLayout.Get()); context->IASetVertexBuffers(0,1,&vb,&stride,&offset);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context->VSSetShader(bokehVertexShader.Get(), nullptr, 0); context->PSSetShader(bokehPixelShader.Get(), nullptr, 0);
-    // softness is passed through a tiny immutable constant buffer-free convention by scaling vertex alpha;
-    // shader defaults to a broad, soft radial falloff. Keep parameter bounded for predictable output.
-    Q_UNUSED(softness);
+    D3D11_MAPPED_SUBRESOURCE params{};
+    HRESULT paramHr = context->Map(bokehConstantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &params);
+    if (FAILED(paramHr)) { renderError = QStringLiteral("Bokeh parameter map failed: %1").arg(hexResult(paramHr)); return false; }
+    struct BokehParams { float softness; float padding[3]; } paramsData{};
+    paramsData.softness = qBound(0, softness, 100) / 100.0f;
+    std::memcpy(params.pData, &paramsData, sizeof(paramsData));
+    context->Unmap(bokehConstantBuffer.Get(), 0);
+    ID3D11Buffer *cb = bokehConstantBuffer.Get(); context->PSSetConstantBuffers(0, 1, &cb);
     context->Draw(UINT(cachedBokehVertices.size()),0); context->OMSetRenderTargets(0,nullptr,nullptr);
     context->CopyResource(bokehStaging.Get(), bokehTexture.Get()); D3D11_MAPPED_SUBRESOURCE read{};
     hr = context->Map(bokehStaging.Get(),0,D3D11_MAP_READ,0,&read);
