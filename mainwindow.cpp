@@ -404,6 +404,15 @@ public:
     void setBokehOpacity(int value) { bokehOpacity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setBokehAudioReactive(bool enabled) { bokehAudioReactive = enabled; gpuBackgroundDirty = true; update(); }
     void setBokehSensitivity(int value) { bokehSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setBokehShape(int value) { bokehShape = qBound(0, value, 2); bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
+    void setBokehBlur(int value) { bokehBlur = qBound(0, value, 100); bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
+    void setBokehGlow(int value) { bokehGlow = qBound(0, value, 100); bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
+    void setBokehDepth(int value) { bokehDepth = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setBokehDirection(int value) { bokehDirection = qBound(0, value, 3); gpuBackgroundDirty = true; update(); }
+    void setBokehGradientEnabled(bool enabled) { bokehGradientEnabled = enabled; bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
+    void setBokehSecondaryColor(const QColor &color) {
+        if (color.isValid()) { bokehSecondaryColor = color; bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
+    }
     void setBokehColor(const QColor &color) {
         if (color.isValid()) { bokehColor = color; bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
     }
@@ -471,30 +480,52 @@ private:
 
     void rebuildBokehSprite()
     {
-        // Cache one soft glow sprite instead of constructing a radial gradient
-        // for every particle on every frame.
+        // Cache a high-quality premultiplied sprite; recreate only on parameter changes.
         constexpr int diameter = 128;
         bokehSprite = QImage(diameter, diameter, QImage::Format_ARGB32_Premultiplied);
         bokehSprite.fill(Qt::transparent);
         QPainter p(&bokehSprite);
         p.setRenderHint(QPainter::Antialiasing, true);
         const QPointF center(diameter / 2.0, diameter / 2.0);
-        QRadialGradient glow(center, diameter / 2.0);
-        QColor core = bokehColor;
-        core.setAlpha(220);
-        QColor mid = bokehColor;
-        mid.setAlpha(90);
-        QColor rim = bokehColor;
-        rim.setAlpha(15);
-        QColor clear = bokehColor;
+        const qreal radius = diameter / 2.0;
+        QPainterPath shape;
+        if (bokehShape == 1) {
+            QPolygonF polygon;
+            for (int i = 0; i < 6; ++i) {
+                const qreal angle = (i * 60.0 - 30.0) * M_PI / 180.0;
+                polygon << QPointF(center.x() + radius * 0.91 * qCos(angle),
+                                   center.y() + radius * 0.91 * qSin(angle));
+            }
+            shape.addPolygon(polygon);
+            shape.closeSubpath();
+        } else if (bokehShape == 2) {
+            shape.moveTo(center.x(), center.y() + radius * 0.72);
+            shape.cubicTo(center.x() - radius * 1.12, center.y() + radius * 0.05,
+                          center.x() - radius * 0.82, center.y() - radius * 0.88,
+                          center.x(), center.y() - radius * 0.38);
+            shape.cubicTo(center.x() + radius * 0.82, center.y() - radius * 0.88,
+                          center.x() + radius * 1.12, center.y() + radius * 0.05,
+                          center.x(), center.y() + radius * 0.72);
+        } else {
+            shape.addEllipse(QRectF(2, 2, diameter - 4, diameter - 4));
+        }
+        QRadialGradient glow(center, radius);
+        const qreal blur = bokehBlur / 100.0;
+        const qreal glowAmount = bokehGlow / 100.0;
+        QColor inner = bokehColor;
+        inner.setAlpha(qBound(0, qRound(225 * (0.65 + glowAmount * 0.35)), 255));
+        QColor outer = bokehGradientEnabled ? bokehSecondaryColor : bokehColor;
+        outer.setAlpha(qBound(0, qRound(150 * (0.4 + glowAmount * 0.6)), 255));
+        QColor edge = outer;
+        edge.setAlpha(qRound((1.0 - blur) * 65));
+        QColor clear = outer;
         clear.setAlpha(0);
-        glow.setColorAt(0.0, core);
-        glow.setColorAt(0.18, mid);
-        glow.setColorAt(0.52, rim);
+        glow.setColorAt(0.0, inner);
+        glow.setColorAt(0.18 + (1.0 - blur) * 0.30, outer);
+        glow.setColorAt(0.78 + (1.0 - blur) * 0.15, edge);
         glow.setColorAt(1.0, clear);
         p.setPen(Qt::NoPen);
-        p.setBrush(glow);
-        p.drawEllipse(QRectF(0, 0, diameter, diameter));
+        p.fillPath(shape, glow);
     }
 
     void paintBokeh(QPainter &painter, const QRectF &area)
@@ -511,11 +542,21 @@ private:
         for (int i = 0; i < bokehCount; ++i) {
             const qreal seedX = bokehHash(i * 7 + 1);
             const qreal seedY = bokehHash(i * 7 + 2);
-            const qreal sizeVariance = 0.45 + bokehHash(i * 7 + 3) * 1.1;
+            const qreal depth = bokehHash(i * 7 + 6);
+            const qreal depthFactor = 1.0 + (depth - 0.5) * (bokehDepth / 100.0) * 1.7;
+            const qreal sizeVariance = (0.45 + bokehHash(i * 7 + 3) * 1.1) * depthFactor;
             const qreal velocity = (0.012 + bokehHash(i * 7 + 4) * 0.025)
-                                   * (bokehSpeed / 50.0);
-            const qreal y = 1.15 - std::fmod(seedY + t * velocity, 1.35);
-            const qreal x = seedX + qSin(t * 0.35 + i * 2.3) * 0.022;
+                                   * (bokehSpeed / 50.0) * depthFactor;
+            const qreal travel = std::fmod(seedY + t * velocity, 1.35);
+            qreal x = seedX, y = seedY;
+            if (bokehDirection == 0) y = 1.15 - travel;       // Up
+            else if (bokehDirection == 1) y = travel - 0.15;  // Down
+            else if (bokehDirection == 2) x = travel - 0.15;  // Right
+            else x = 1.15 - travel;                            // Left
+            if (bokehDirection < 2)
+                x += qSin(t * 0.35 + i * 2.3) * 0.022;
+            else
+                y += qSin(t * 0.35 + i * 2.3) * 0.022;
             const qreal radius = minSide * (0.008 + bokehSize * 0.00035)
                                  * sizeVariance * (1.0 + energy * 0.28);
             const QPointF center(area.left() + x * area.width(),
@@ -1020,6 +1061,10 @@ private:
     int bokehCount = 28, bokehSize = 35, bokehSpeed = 35;
     int bokehOpacity = 55, bokehSensitivity = 60;
     QColor bokehColor = QColor("#A9D9FF");
+    QColor bokehSecondaryColor = QColor("#E8A5FF");
+    bool bokehGradientEnabled = false;
+    int bokehShape = 0, bokehBlur = 70, bokehGlow = 60;
+    int bokehDepth = 45, bokehDirection = 0;
 
     bool audioZoomEnabled = false;
     int zoomAmount = 30, zoomSensitivity = 60, zoomSmoothing = 65;
@@ -1983,6 +2028,45 @@ MainWindow::MainWindow(QWidget *parent)
     });
     addWaveSlider("Bokeh Opacity", 0, 100, 55, "%", [this](int v) {
         spectrumOverlay->setBokehOpacity(v); spectrumDisplay->setBokehOpacity(v);
+    });
+    QComboBox *bokehShapeBox = new QComboBox;
+    bokehShapeBox->addItems({"Circle", "Hexagon", "Heart"});
+    propertiesLayout->addWidget(new QLabel("Bokeh Shape"));
+    propertiesLayout->addWidget(bokehShapeBox);
+    connect(bokehShapeBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int v) {
+        spectrumOverlay->setBokehShape(v); spectrumDisplay->setBokehShape(v);
+    });
+    addWaveSlider("Bokeh Blur", 0, 100, 70, "%", [this](int v) {
+        spectrumOverlay->setBokehBlur(v); spectrumDisplay->setBokehBlur(v);
+    });
+    addWaveSlider("Bokeh Glow", 0, 100, 60, "%", [this](int v) {
+        spectrumOverlay->setBokehGlow(v); spectrumDisplay->setBokehGlow(v);
+    });
+    addWaveSlider("Bokeh Depth", 0, 100, 45, "%", [this](int v) {
+        spectrumOverlay->setBokehDepth(v); spectrumDisplay->setBokehDepth(v);
+    });
+    QComboBox *bokehDirectionBox = new QComboBox;
+    bokehDirectionBox->addItems({"Up", "Down", "Right", "Left"});
+    propertiesLayout->addWidget(new QLabel("Bokeh Direction"));
+    propertiesLayout->addWidget(bokehDirectionBox);
+    connect(bokehDirectionBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int v) {
+        spectrumOverlay->setBokehDirection(v); spectrumDisplay->setBokehDirection(v);
+    });
+    QCheckBox *bokehGradientToggle = new QCheckBox("Bokeh Two-Color Gradient");
+    propertiesLayout->addWidget(bokehGradientToggle);
+    connect(bokehGradientToggle, &QCheckBox::toggled, this, [this](bool v) {
+        spectrumOverlay->setBokehGradientEnabled(v);
+        spectrumDisplay->setBokehGradientEnabled(v);
+    });
+    QPushButton *bokehSecondColorButton = new QPushButton("Bokeh Outer Color");
+    propertiesLayout->addWidget(bokehSecondColorButton);
+    connect(bokehSecondColorButton, &QPushButton::clicked, this, [this]() {
+        const QColor chosen = QColorDialog::getColor(QColor("#E8A5FF"), this, "Bokeh Outer Color");
+        if (!chosen.isValid()) return;
+        spectrumOverlay->setBokehSecondaryColor(chosen);
+        spectrumDisplay->setBokehSecondaryColor(chosen);
     });
     QCheckBox *bokehReactive = new QCheckBox("Bokeh Audio Reactive");
     propertiesLayout->addWidget(bokehReactive);
