@@ -394,7 +394,7 @@ public:
     void setBokehEnabled(bool enabled) {
         bokehEnabled = enabled;
         if (bokehTimer) {
-            if (enabled && bokehSpeed > 0) bokehTimer->start();
+            if (enabled && (bokehSpeed > 0 || bokehTwinkle > 0 || bokehAudioReactive)) bokehTimer->start();
             else bokehTimer->stop();
         }
         gpuBackgroundDirty = true; update();
@@ -404,19 +404,33 @@ public:
     void setBokehSpeed(int value) {
         bokehSpeed = qBound(0, value, 100);
         if (bokehTimer) {
-            if (bokehEnabled && bokehSpeed > 0) bokehTimer->start();
+            if (bokehEnabled && (bokehSpeed > 0 || bokehTwinkle > 0 || bokehAudioReactive)) bokehTimer->start();
             else bokehTimer->stop();
         }
         gpuBackgroundDirty = true; update();
     }
     void setBokehOpacity(int value) { bokehOpacity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
-    void setBokehAudioReactive(bool enabled) { bokehAudioReactive = enabled; gpuBackgroundDirty = true; update(); }
+    void setBokehAudioReactive(bool enabled) {
+        bokehAudioReactive = enabled;
+        if (bokehTimer) {
+            if (bokehEnabled && (bokehSpeed > 0 || bokehTwinkle > 0 || bokehAudioReactive)) bokehTimer->start();
+            else if (bokehEnabled) bokehTimer->stop();
+        }
+        gpuBackgroundDirty = true; update();
+    }
     void setBokehSensitivity(int value) { bokehSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setBokehShape(int value) { bokehShape = qBound(0, value, 2); bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
     void setBokehBlur(int value) { bokehBlur = qBound(0, value, 100); bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
     void setBokehGlow(int value) { bokehGlow = qBound(0, value, 100); bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
     void setBokehDepth(int value) { bokehDepth = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
-    void setBokehTwinkle(int value) { bokehTwinkle = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setBokehTwinkle(int value) {
+        bokehTwinkle = qBound(0, value, 100);
+        if (bokehTimer) {
+            if (bokehEnabled && (bokehSpeed > 0 || bokehTwinkle > 0 || bokehAudioReactive)) bokehTimer->start();
+            else if (bokehEnabled) bokehTimer->stop();
+        }
+        gpuBackgroundDirty = true; update();
+    }
     void setBokehAudioSmoothing(int value) { bokehAudioSmoothing = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setBokehDirection(int value) { bokehDirection = qBound(0, value, 3); gpuBackgroundDirty = true; update(); }
     void setBokehGradientEnabled(bool enabled) { bokehGradientEnabled = enabled; bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
