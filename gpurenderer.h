@@ -49,6 +49,7 @@ private:
     QString featureLevelName;
     QString renderError;
     quint64 successfulFrames = 0;
+    quint64 bokehFrames = 0;
     quint64 failedFrames = 0;
     double lastRenderMs = 0.0;
     double lastReadbackMs = 0.0;
