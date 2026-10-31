@@ -287,7 +287,7 @@ bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF
         renderError = QStringLiteral("Invalid Bokeh dimensions or particle arrays."); return false;
     }
     if (!initialize() || !createPipeline()) return false;
-    if (!bokehVertexShader || !bokehPixelShader || !bokehInputLayout || !bokehVertexBuffer) {
+    if (!bokehVertexShader || !bokehPixelShader || !bokehInputLayout || !bokehVertexBuffer || !bokehConstantBuffer) {
         Microsoft::WRL::ComPtr<ID3DBlob> vs, ps, errors;
         HRESULT hr = D3DCompile(bokehShaderSource, std::strlen(bokehShaderSource), nullptr, nullptr, nullptr,
                                 "VSMain", "vs_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs.GetAddressOf(), errors.GetAddressOf());
