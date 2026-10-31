@@ -576,7 +576,7 @@ private:
             const qreal wave=0.5+0.5*qSin(phase);
             const qreal twinkle=1.0-(bokehTwinkle/100.0)*0.58+(bokehTwinkle/100.0)*0.58*wave;
             const qreal radius=minSide*(0.008+bokehSize*0.00035)*sizeVariance*(1.0+energy*0.28);
-            const QPointF center(area.left()+x*area.width(),area.top()+y*area.height());
+            const QPointF center(x*area.width(),y*area.height());
             const qreal layerFade=0.62+depth*0.38;
             const qreal alpha=qBound(0.0,(bokehOpacity/100.0)*(0.55+energy*0.45)*layerFade*twinkle
                                       *(0.55+bokehHash(i*7+5)*0.45),0.90);
@@ -597,7 +597,7 @@ private:
         painter.save(); painter.setClipRect(area); painter.setRenderHint(QPainter::SmoothPixmapTransform,true);
         for (int i=0;i<gpuBounds.size();++i) {
             painter.setOpacity(gpuColors[i].alphaF());
-            painter.drawImage(gpuBounds[i],bokehSprite);
+            painter.drawImage(gpuBounds[i].translated(area.topLeft()),bokehSprite);
         }
         painter.restore();
     }
