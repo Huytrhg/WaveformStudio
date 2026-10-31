@@ -555,46 +555,49 @@ private:
     void paintBokeh(QPainter &painter, const QRectF &area)
     {
         if (!bokehEnabled || area.isEmpty() || bokehOpacity == 0) return;
-        if (bokehSprite.isNull()) rebuildBokehSprite();
         const qreal t = effectClock.isValid() ? effectClock.elapsed() / 1000.0 : 0.0;
         const qreal minSide = qMin(area.width(), area.height());
         const qreal energy = bokehAudioReactive ? bokehSmoothedEnergy : 0.0;
         const qreal speed = bokehSpeed / 50.0;
-        painter.save();
-        painter.setClipRect(area);
-        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        for (int i = 0; i < bokehCount; ++i) {
-            const qreal seedX = bokehHash(i * 7 + 1);
-            const qreal seedY = bokehHash(i * 7 + 2);
-            const qreal depth = bokehHash(i * 7 + 6);
-            const qreal depthFactor = 1.0 + (depth - 0.5) * (bokehDepth / 100.0) * 1.7;
-            const qreal sizeVariance = (0.45 + bokehHash(i * 7 + 3) * 1.1) * depthFactor;
-            const qreal velocity = (0.012 + bokehHash(i * 7 + 4) * 0.025) * speed * depthFactor;
-            const qreal cycle = std::fmod(seedY + t * velocity, 1.35);
-            const qreal sway = qSin(t * (0.22 + depth * 0.12) + i * 2.3);
-            qreal x = seedX, y = seedY;
-            if (bokehDirection == 0) y = 1.15 - cycle;
-            else if (bokehDirection == 1) y = cycle - 0.15;
-            else if (bokehDirection == 2) x = cycle - 0.15;
-            else x = 1.15 - cycle;
-            if (bokehDirection < 2) x += sway * 0.022 * depthFactor;
-            else y += sway * 0.022 * depthFactor;
-            const qreal phase = t * (1.3 + bokehHash(i * 7 + 8) * 2.8)
-                               + bokehHash(i * 7 + 9) * 6.28318530718;
-            const qreal wave = 0.5 + 0.5 * qSin(phase);
-            const qreal twinkle = 1.0 - (bokehTwinkle / 100.0) * 0.58
-                                  + (bokehTwinkle / 100.0) * 0.58 * wave;
-            const qreal radius = minSide * (0.008 + bokehSize * 0.00035)
-                                 * sizeVariance * (1.0 + energy * 0.28);
-            const QPointF center(area.left() + x * area.width(),
-                                 area.top() + y * area.height());
-            const qreal layerFade = 0.62 + depth * 0.38;
-            const qreal alpha = qBound(0.0, (bokehOpacity / 100.0)
-                * (0.55 + energy * 0.45) * layerFade * twinkle
-                * (0.55 + bokehHash(i * 7 + 5) * 0.45), 0.90);
-            painter.setOpacity(alpha);
-            painter.drawImage(QRectF(center.x() - radius, center.y() - radius,
-                                     radius * 2.0, radius * 2.0), bokehSprite);
+        QVector<QRectF> gpuBounds; QVector<QColor> gpuColors;
+        gpuBounds.reserve(bokehCount); gpuColors.reserve(bokehCount);
+        for (int i=0; i<bokehCount; ++i) {
+            const qreal seedX=bokehHash(i*7+1), seedY=bokehHash(i*7+2), depth=bokehHash(i*7+6);
+            const qreal depthFactor=1.0+(depth-0.5)*(bokehDepth/100.0)*1.7;
+            const qreal sizeVariance=(0.45+bokehHash(i*7+3)*1.1)*depthFactor;
+            const qreal velocity=(0.012+bokehHash(i*7+4)*0.025)*speed*depthFactor;
+            const qreal cycle=std::fmod(seedY+t*velocity,1.35);
+            const qreal sway=qSin(t*(0.22+depth*0.12)+i*2.3);
+            qreal x=seedX,y=seedY;
+            if (bokehDirection==0) y=1.15-cycle; else if (bokehDirection==1) y=cycle-0.15;
+            else if (bokehDirection==2) x=cycle-0.15; else x=1.15-cycle;
+            if (bokehDirection<2) x+=sway*0.022*depthFactor; else y+=sway*0.022*depthFactor;
+            const qreal phase=t*(1.3+bokehHash(i*7+8)*2.8)+bokehHash(i*7+9)*6.28318530718;
+            const qreal wave=0.5+0.5*qSin(phase);
+            const qreal twinkle=1.0-(bokehTwinkle/100.0)*0.58+(bokehTwinkle/100.0)*0.58*wave;
+            const qreal radius=minSide*(0.008+bokehSize*0.00035)*sizeVariance*(1.0+energy*0.28);
+            const QPointF center(area.left()+x*area.width(),area.top()+y*area.height());
+            const qreal layerFade=0.62+depth*0.38;
+            const qreal alpha=qBound(0.0,(bokehOpacity/100.0)*(0.55+energy*0.45)*layerFade*twinkle
+                                      *(0.55+bokehHash(i*7+5)*0.45),0.90);
+            gpuBounds.push_back(QRectF(center.x()-radius,center.y()-radius,radius*2.0,radius*2.0));
+            QColor color=bokehColor; color.setAlphaF(alpha); gpuColors.push_back(color);
+        }
+        // GPU path currently handles circular radial sprites. Preserve the Qt fallback for
+        // hexagon/heart silhouettes and two-color gradients so those modes remain faithful.
+        if (bokehShape==0 && !bokehGradientEnabled) {
+            QImage overlay;
+            if (GpuRenderer::instance().renderBokehCircles(qMax(1,qRound(area.width())),
+                    qMax(1,qRound(area.height())),gpuBounds,gpuColors,bokehBlur,&overlay)) {
+                painter.save(); painter.setClipRect(area);
+                painter.drawImage(area.topLeft(), overlay); painter.restore(); return;
+            }
+        }
+        if (bokehSprite.isNull()) rebuildBokehSprite();
+        painter.save(); painter.setClipRect(area); painter.setRenderHint(QPainter::SmoothPixmapTransform,true);
+        for (int i=0;i<gpuBounds.size();++i) {
+            painter.setOpacity(gpuColors[i].alphaF());
+            painter.drawImage(gpuBounds[i],bokehSprite);
         }
         painter.restore();
     }
