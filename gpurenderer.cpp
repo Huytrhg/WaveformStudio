@@ -368,7 +368,7 @@ bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF
     QImage image(width,height,QImage::Format_ARGB32_Premultiplied);
     for (int y=0;y<height;++y) std::memcpy(image.scanLine(y), static_cast<const char *>(read.pData)+size_t(y)*read.RowPitch,size_t(width)*4);
     context->Unmap(bokehStaging.Get(),0); *output=std::move(image);
-    ++successfulFrames; return true;
+    ++successfulFrames; ++bokehFrames; return true;
 #else
     Q_UNUSED(width); Q_UNUSED(height); Q_UNUSED(bounds); Q_UNUSED(colors); Q_UNUSED(softness); Q_UNUSED(output);
     renderError = QStringLiteral("Direct3D 11 unavailable on this platform."); return false;
@@ -384,6 +384,7 @@ QString GpuRenderer::runtimeStats() const
                           "Phase 3 resources: rebuilt %7 | reused %8 | cache: %9 x %10\n"
                           "Last resource lookup/create: %11 ms | draw submission: %12 ms | copy+map wait: %13 ms\n"
                           "Phase 4A composite frames: %14 | last video upload: %15 ms\n"
+                          "Phase 5 D3D11 Bokeh radial-shader frames: %17\n"
                           "Timing note: draw submission is CPU-side; it is NOT GPU execution time.\n"
                           "Last error: %16")
         .arg(successfulFrames > 0 ? QStringLiteral("ACTIVE") : QStringLiteral("not yet successful"))
@@ -396,7 +397,8 @@ QString GpuRenderer::runtimeStats() const
         .arg(lastDrawSubmitMs, 0, 'f', 3)
         .arg(lastCopyMapMs, 0, 'f', 3)
         .arg(compositedFrames).arg(lastUploadMs, 0, 'f', 3)
-        .arg(renderError.isEmpty() ? QStringLiteral("none") : renderError);
+        .arg(renderError.isEmpty() ? QStringLiteral("none") : renderError)
+        .arg(bokehFrames);
 }
 
 QString GpuRenderer::diagnostics() const
@@ -404,7 +406,7 @@ QString GpuRenderer::diagnostics() const
     if (!attempted) return QStringLiteral("Direct3D 11 has not been initialized.");
     if (!available) return QStringLiteral("Direct3D 11 unavailable: %1\nCurrent CPU preview remains active.").arg(errorMessage);
     return QStringLiteral("Direct3D 11 device: READY\nAdapter: %1\nFeature level: %2\nDriver: %3\nGPU Spectrum bar renderer: %4\n\n"
-                          "Phase 4A hybrid: video is uploaded to a cached D3D11 render target and Spectrum is composited on GPU. Final readback to Qt still remains; this is NOT zero-copy presentation.")
+                          "Phase 4A hybrid: video is uploaded to a cached D3D11 render target and Spectrum is composited on GPU.\nPhase 5: circular Bokeh uses a D3D11 radial pixel shader when enabled; the overlay is read back to a QImage for Qt composition. Hexagon/Heart and two-color Gradient retain the Qt fallback. This is NOT zero-copy presentation.")
         .arg(adapterName, featureLevelName, hardware ? QStringLiteral("Hardware GPU") : QStringLiteral("WARP software fallback"),
              pipelineReady ? QStringLiteral("READY") : QStringLiteral("not ready: %1").arg(renderError))
         + QStringLiteral("\n\nRuntime rendering statistics:\n") + runtimeStats();
