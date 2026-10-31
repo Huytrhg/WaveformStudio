@@ -27,6 +27,10 @@ public:
                             const QVector<QColor> &colors,
                             QImage *output, const QImage *background = nullptr,
                             const QVector<QColor> *topColors = nullptr);
+    bool renderBokehCircles(int width, int height,
+                            const QVector<QRectF> &bounds,
+                            const QVector<QColor> &colors,
+                            int softness, QImage *output);
     QString lastRenderError() const;
     QString runtimeStats() const;
 
@@ -73,6 +77,16 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Texture2D> cachedTexture;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> cachedRtv;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> cachedStaging;
+    struct BokehVertex { float x, y, u, v, r, g, b, a; };
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> bokehVertexShader;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> bokehPixelShader;
+    Microsoft::WRL::ComPtr<ID3D11InputLayout> bokehInputLayout;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> bokehVertexBuffer;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> bokehTexture;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> bokehRtv;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> bokehStaging;
+    int bokehWidth = 0, bokehHeight = 0;
+    QVector<BokehVertex> cachedBokehVertices;
 #endif
 };
 
