@@ -61,6 +61,13 @@ private:
     quint64 resourceReuses = 0;
     quint64 compositedFrames = 0;
     double lastUploadMs = 0.0;
+    // Phase 6D: asynchronous Phase 3 preview readback diagnostics.
+    double phase3AsyncPollMs = 0.0;
+    double phase3CpuCopyMs = 0.0;
+    quint64 phase3AsyncQueued = 0;
+    quint64 phase3AsyncCompleted = 0;
+    quint64 phase3AsyncQueueFull = 0;
+    int phase3AsyncPending = 0;
     // Phase 6A: Bokeh CPU-side submission and synchronous readback diagnostics.
     double bokehLastPathMs = 0.0;
     double bokehAveragePathMs = 0.0;
@@ -93,7 +100,14 @@ private:
     Microsoft::WRL::ComPtr<ID3D11BlendState> blendState;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> cachedTexture;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> cachedRtv;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> cachedStaging;
+    struct Phase3ReadbackSlot {
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
+        Microsoft::WRL::ComPtr<ID3D11Query> completion;
+        bool pending = false;
+    };
+    Phase3ReadbackSlot phase3ReadbackSlots[3];
+    int nextPhase3ReadbackSlot = 0;
+    QImage cachedPhase3Image;
     struct BokehVertex { float x, y, u, v, r, g, b, a; };
     Microsoft::WRL::ComPtr<ID3D11VertexShader> bokehVertexShader;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> bokehPixelShader;
