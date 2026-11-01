@@ -3071,6 +3071,17 @@ MainWindow::MainWindow(QWidget *parent)
             frameGenerator->setGradientSpeed(spectrumOverlay->exportGradientSpeed());
             frameGenerator->setDirectRgba(directRgba);
 
+            // Phase 6D export observability: export intentionally remains on the
+            // deterministic sequential CPU SpectrumRenderer path. The D3D11
+            // asynchronous staging rings optimize live Preview only; they are
+            // not used to generate or reorder FFmpeg rawvideo frames.
+            qDebug().noquote() << "[Phase 6D EXPORT PATH]"
+                << "renderer=CPU SpectrumRenderer"
+                << "preview_d3d11_async_readback=not_used_by_export"
+                << "frame_size=" << overlaySize
+                << "fps=" << exportFps
+                << "frames=" << totalFrames;
+
             // The overlay is already rendered at source resolution; do not scale it.
             const QString filterGraph =
                 "[1:v]setpts=PTS-STARTPTS,format=yuv420p[base];"
@@ -3117,6 +3128,8 @@ MainWindow::MainWindow(QWidget *parent)
             struct ExportMetrics {
                 QElapsedTimer wall;
                 qint64 renderMs = 0;
+                qint64 renderNs = 0;
+                qint64 renderMaxNs = 0;
                 qint64 convertMs = 0;
                 qint64 frames = 0;
                 qint64 lastReportMs = 0;
@@ -3190,7 +3203,10 @@ MainWindow::MainWindow(QWidget *parent)
                     QElapsedTimer step;
                     step.start();
                     QImage overlay = frameGenerator->nextOverlay();
-                    const qint64 renderStepMs = step.elapsed();
+                    const qint64 renderStepNs = step.nsecsElapsed();
+                    const qint64 renderStepMs = renderStepNs / 1000000;
+                    metrics->renderNs += renderStepNs;
+                    metrics->renderMaxNs = qMax(metrics->renderMaxNs, renderStepNs);
                     metrics->renderMs += renderStepMs;
                     metrics->renderMaxMs = qMax(metrics->renderMaxMs, renderStepMs);
                     if (overlay.isNull()) {
@@ -3416,6 +3432,11 @@ MainWindow::MainWindow(QWidget *parent)
                             ? metrics->ffmpegFinishedMs - metrics->qtBufferDrainedMs : -1)
                     << "render_total_ms=" << metrics->renderMs
                     << "render_max_ms=" << metrics->renderMaxMs
+                    << "render_avg_ms_per_frame="
+                    << (metrics->frames > 0 ? (metrics->renderNs / 1000000.0) / metrics->frames : 0.0)
+                    << "render_fps="
+                    << (metrics->renderNs > 0 ? metrics->frames * 1000000000.0 / metrics->renderNs : 0.0)
+                    << "render_max_precise_ms=" << (metrics->renderMaxNs / 1000000.0)
                     << "convert_total_ms=" << metrics->convertMs
                     << "convert_max_ms=" << metrics->convertMaxMs
                     << "pipe_write_total_ms=" << metrics->pipeWriteMs
