@@ -163,11 +163,17 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     if (!initialize() || !createPipeline()) { ++failedFrames; return false; }
     if (topColors && topColors->size() != rects.size()) { ++failedFrames; renderError = QStringLiteral("Gradient color count mismatch."); return false; }
     if (rects.size() > 128 * 6) { ++failedFrames; renderError = QStringLiteral("Too many rectangles for current vertex buffer (maximum 6 per spectrum column)."); return false; }
-    // Phase 3: retain the render target, view and staging texture across frames.
-    // Rebuild only when the preview size changes. No cross-frame GPU readback is queued.
+    // Phase 6D: keep the render target and a three-slot staging ring.
+    // Completed frames are mapped only after their event query signals readiness.
     QElapsedTimer resourceTimer; resourceTimer.start();
-    if (!cachedTexture || !cachedRtv || !cachedStaging || cachedWidth != width || cachedHeight != height) {
-        cachedRtv.Reset(); cachedStaging.Reset(); cachedTexture.Reset();
+    if (!cachedTexture || !cachedRtv || cachedWidth != width || cachedHeight != height) {
+        cachedRtv.Reset(); cachedTexture.Reset();
+        for (auto &slot : phase3ReadbackSlots) {
+            slot.staging.Reset(); slot.completion.Reset(); slot.pending = false;
+        }
+        phase3AsyncPending = 0;
+        nextPhase3ReadbackSlot = 0;
+        cachedPhase3Image = QImage();
         cachedWidth = cachedHeight = 0;
         D3D11_TEXTURE2D_DESC td{};
         td.Width = UINT(width); td.Height = UINT(height); td.MipLevels = 1; td.ArraySize = 1;
@@ -188,11 +194,19 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
         D3D11_TEXTURE2D_DESC sd = td;
         sd.Usage = D3D11_USAGE_STAGING; sd.BindFlags = 0;
         sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        createHr = device->CreateTexture2D(&sd, nullptr, cachedStaging.GetAddressOf());
-        if (FAILED(createHr)) {
-            cachedRtv.Reset(); cachedTexture.Reset(); ++failedFrames;
-            renderError = QStringLiteral("Create staging texture failed: %1").arg(hexResult(createHr));
-            return false;
+        for (int i = 0; i < 3; ++i) {
+            auto &slot = phase3ReadbackSlots[i];
+            createHr = device->CreateTexture2D(&sd, nullptr, slot.staging.GetAddressOf());
+            if (FAILED(createHr)) {
+                renderError = QStringLiteral("Phase 3 staging texture %1 creation failed: %2").arg(i).arg(hexResult(createHr));
+                ++failedFrames; return false;
+            }
+            D3D11_QUERY_DESC qd{}; qd.Query = D3D11_QUERY_EVENT;
+            createHr = device->CreateQuery(&qd, slot.completion.GetAddressOf());
+            if (FAILED(createHr)) {
+                renderError = QStringLiteral("Phase 3 completion query %1 creation failed: %2").arg(i).arg(hexResult(createHr));
+                ++failedFrames; return false;
+            }
         }
         cachedWidth = width; cachedHeight = height;
         ++resourceRebuilds;
@@ -255,22 +269,71 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     context->Draw(UINT(cachedVertices.size()), 0);
     context->OMSetRenderTargets(0, nullptr, nullptr);
     lastDrawSubmitMs = drawTimer.nsecsElapsed() / 1000000.0;
-    QElapsedTimer readbackTimer; readbackTimer.start();
-    context->CopyResource(cachedStaging.Get(), cachedTexture.Get());
-    D3D11_MAPPED_SUBRESOURCE read{};
-    hr = context->Map(cachedStaging.Get(), 0, D3D11_MAP_READ, 0, &read);
-    if (FAILED(hr)) { ++failedFrames; renderError = QStringLiteral("Readback map failed: %1").arg(hexResult(hr)); return false; }
-    lastCopyMapMs = readbackTimer.nsecsElapsed() / 1000000.0;
-    QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
-    for (int y = 0; y < height; ++y)
-        std::memcpy(image.scanLine(y), static_cast<const char *>(read.pData) + size_t(y) * read.RowPitch, size_t(width) * 4);
-    context->Unmap(cachedStaging.Get(), 0);
-    lastReadbackMs = readbackTimer.nsecsElapsed() / 1000000.0;
+    // Poll completed Phase 3 readbacks without flushing or waiting for the GPU.
+    QElapsedTimer asyncPollTimer; asyncPollTimer.start();
+    phase3CpuCopyMs = 0.0;
+    for (auto &slot : phase3ReadbackSlots) {
+        if (!slot.pending) continue;
+        const HRESULT ready = context->GetData(slot.completion.Get(), nullptr, 0,
+                                               D3D11_ASYNC_GETDATA_DONOTFLUSH);
+        if (ready == S_FALSE) continue;
+        if (FAILED(ready)) {
+            slot.pending = false;
+            if (phase3AsyncPending > 0) --phase3AsyncPending;
+            renderError = QStringLiteral("Phase 3 async completion query failed: %1").arg(hexResult(ready));
+            continue;
+        }
+        D3D11_MAPPED_SUBRESOURCE read{};
+        const HRESULT mapHr = context->Map(slot.staging.Get(), 0, D3D11_MAP_READ,
+                                           D3D11_MAP_FLAG_DO_NOT_WAIT, &read);
+        if (mapHr == DXGI_ERROR_WAS_STILL_DRAWING) continue;
+        if (FAILED(mapHr)) {
+            slot.pending = false;
+            if (phase3AsyncPending > 0) --phase3AsyncPending;
+            renderError = QStringLiteral("Phase 3 async readback Map failed: %1").arg(hexResult(mapHr));
+            continue;
+        }
+        QElapsedTimer copyTimer; copyTimer.start();
+        QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
+        for (int y = 0; y < height; ++y)
+            std::memcpy(image.scanLine(y),
+                        static_cast<const char *>(read.pData) + size_t(y) * read.RowPitch,
+                        size_t(width) * 4);
+        context->Unmap(slot.staging.Get(), 0);
+        phase3CpuCopyMs = copyTimer.nsecsElapsed() / 1000000.0;
+        cachedPhase3Image = std::move(image);
+        slot.pending = false;
+        if (phase3AsyncPending > 0) --phase3AsyncPending;
+        ++phase3AsyncCompleted;
+    }
+    phase3AsyncPollMs = asyncPollTimer.nsecsElapsed() / 1000000.0;
+
+    Phase3ReadbackSlot *freeSlot = nullptr;
+    for (int offset = 0; offset < 3; ++offset) {
+        const int index = (nextPhase3ReadbackSlot + offset) % 3;
+        if (!phase3ReadbackSlots[index].pending) {
+            freeSlot = &phase3ReadbackSlots[index];
+            nextPhase3ReadbackSlot = (index + 1) % 3;
+            break;
+        }
+    }
+    if (freeSlot) {
+        context->CopyResource(freeSlot->staging.Get(), cachedTexture.Get());
+        context->End(freeSlot->completion.Get());
+        freeSlot->pending = true;
+        ++phase3AsyncPending;
+        ++phase3AsyncQueued;
+    } else {
+        ++phase3AsyncQueueFull;
+    }
+    lastCopyMapMs = 0.0; // Phase 6D never blocks on the staging texture.
+    lastReadbackMs = phase3AsyncPollMs + phase3CpuCopyMs;
     lastRenderMs = totalTimer.nsecsElapsed() / 1000000.0;
     ++successfulFrames;
     if (background && !background->isNull()) ++compositedFrames;
     averageRenderMs += (lastRenderMs - averageRenderMs) / double(successfulFrames);
-    *output = std::move(image);
+    if (cachedPhase3Image.isNull()) return false; // Qt fallback until first GPU frame completes.
+    *output = cachedPhase3Image;
     return true;
 #else
     Q_UNUSED(width); Q_UNUSED(height); Q_UNUSED(rects); Q_UNUSED(colors); Q_UNUSED(output); Q_UNUSED(background);
@@ -542,7 +605,8 @@ QString GpuRenderer::runtimeStats() const
                           "Phase 6B GPU draw: last %22 ms | average %23 ms | samples %24 | %25\n"
                           "Phase 6C readback: blocking wait %26 ms | CPU memcpy last %27 ms\n"
                           "Phase 6C async readback: queued %28 | completed %29 | pending %30 | queue-full %31 | poll %32 ms\n"
-                          "Timing note: Phase 6C uses a 3-slot staging ring and non-blocking event-query polling; displayed Bokeh may lag by a few frames.\n"
+                          "Phase 6D Spectrum async readback: queued %33 | completed %34 | pending %35 | queue-full %36 | poll %37 ms | CPU memcpy %38 ms\n"
+                          "Timing note: Phase 6C Bokeh and Phase 6D Spectrum use independent 3-slot staging rings; both may display a few frames behind.\n"
                           "Last error: %16")
         .arg(successfulFrames > 0 ? QStringLiteral("ACTIVE") : QStringLiteral("not yet successful"))
         .arg(successfulFrames).arg(failedFrames)
@@ -570,7 +634,13 @@ QString GpuRenderer::runtimeStats() const
         .arg(bokehAsyncCompleted)
         .arg(bokehAsyncPending)
         .arg(bokehAsyncQueueFull)
-        .arg(bokehAsyncPollMs, 0, 'f', 3);
+        .arg(bokehAsyncPollMs, 0, 'f', 3)
+        .arg(phase3AsyncQueued)
+        .arg(phase3AsyncCompleted)
+        .arg(phase3AsyncPending)
+        .arg(phase3AsyncQueueFull)
+        .arg(phase3AsyncPollMs, 0, 'f', 3)
+        .arg(phase3CpuCopyMs, 0, 'f', 3);
 }
 
 QString GpuRenderer::diagnostics() const
