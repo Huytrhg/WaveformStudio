@@ -68,6 +68,11 @@ private:
     double bokehLastReadbackMs = 0.0;
     double bokehLastCopyMapWaitMs = 0.0;
     double bokehLastCpuCopyMs = 0.0;
+    double bokehAsyncPollMs = 0.0;
+    quint64 bokehAsyncQueued = 0;
+    quint64 bokehAsyncCompleted = 0;
+    quint64 bokehAsyncQueueFull = 0;
+    int bokehAsyncPending = 0;
     double bokehLastGpuMs = 0.0;
     double bokehAverageGpuMs = 0.0;
     quint64 bokehGpuSamples = 0;
@@ -97,7 +102,14 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Buffer> bokehConstantBuffer;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> bokehTexture;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> bokehRtv;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> bokehStaging;
+    struct BokehReadbackSlot {
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
+        Microsoft::WRL::ComPtr<ID3D11Query> completion;
+        bool pending = false;
+    };
+    BokehReadbackSlot bokehReadbackSlots[3];
+    int nextBokehReadbackSlot = 0;
+    QImage cachedBokehImage;
     int bokehWidth = 0, bokehHeight = 0;
     QVector<BokehVertex> cachedBokehVertices;
     struct BokehGpuTimingSlot {
