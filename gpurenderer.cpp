@@ -371,8 +371,17 @@ bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF
         hr = device->CreateBuffer(&cbd, nullptr, bokehConstantBuffer.GetAddressOf());
         if (FAILED(hr)) { renderError = QStringLiteral("Bokeh constant buffer creation failed: %1").arg(hexResult(hr)); return false; }
     }
-    if (!bokehTexture || !bokehRtv || !bokehStaging || bokehWidth != width || bokehHeight != height) {
-        bokehRtv.Reset(); bokehStaging.Reset(); bokehTexture.Reset(); bokehWidth = bokehHeight = 0;
+    if (!bokehTexture || !bokehRtv || bokehWidth != width || bokehHeight != height) {
+        bokehRtv.Reset(); bokehTexture.Reset();
+        for (auto &slot : bokehReadbackSlots) {
+            slot.staging.Reset();
+            slot.completion.Reset();
+            slot.pending = false;
+        }
+        cachedBokehImage = QImage();
+        bokehAsyncPending = 0;
+        nextBokehReadbackSlot = 0;
+        bokehWidth = bokehHeight = 0;
         D3D11_TEXTURE2D_DESC td{}; td.Width = UINT(width); td.Height = UINT(height); td.MipLevels = 1; td.ArraySize = 1;
         td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET;
         HRESULT hr = device->CreateTexture2D(&td, nullptr, bokehTexture.GetAddressOf());
@@ -380,8 +389,13 @@ bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF
         hr = device->CreateRenderTargetView(bokehTexture.Get(), nullptr, bokehRtv.GetAddressOf());
         if (FAILED(hr)) { renderError = QStringLiteral("Bokeh RTV creation failed: %1").arg(hexResult(hr)); return false; }
         td.Usage = D3D11_USAGE_STAGING; td.BindFlags = 0; td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        hr = device->CreateTexture2D(&td, nullptr, bokehStaging.GetAddressOf());
-        if (FAILED(hr)) { renderError = QStringLiteral("Bokeh staging texture creation failed: %1").arg(hexResult(hr)); return false; }
+        for (int i = 0; i < 3; ++i) {
+            hr = device->CreateTexture2D(&td, nullptr, bokehReadbackSlots[i].staging.GetAddressOf());
+            if (FAILED(hr)) { renderError = QStringLiteral("Bokeh async staging texture %1 creation failed: %2").arg(i).arg(hexResult(hr)); return false; }
+            D3D11_QUERY_DESC qd{}; qd.Query = D3D11_QUERY_EVENT;
+            hr = device->CreateQuery(&qd, bokehReadbackSlots[i].completion.GetAddressOf());
+            if (FAILED(hr)) { renderError = QStringLiteral("Bokeh async event query %1 creation failed: %2").arg(i).arg(hexResult(hr)); return false; }
+        }
         bokehWidth = width; bokehHeight = height;
     }
     cachedBokehVertices.clear();
@@ -441,21 +455,72 @@ bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF
         timingSlot->pending = true;
     }
     bokehLastDrawSubmitMs = bokehDrawTimer.nsecsElapsed() / 1000000.0;
-    QElapsedTimer bokehReadbackTimer; bokehReadbackTimer.start();
-    context->CopyResource(bokehStaging.Get(), bokehTexture.Get()); D3D11_MAPPED_SUBRESOURCE read{};
-    hr = context->Map(bokehStaging.Get(),0,D3D11_MAP_READ,0,&read);
-    if (FAILED(hr)) { renderError = QStringLiteral("Bokeh readback map failed: %1").arg(hexResult(hr)); return false; }
-    bokehLastCopyMapWaitMs = bokehReadbackTimer.nsecsElapsed() / 1000000.0;
-    QElapsedTimer bokehCpuCopyTimer; bokehCpuCopyTimer.start();
-    QImage image(width,height,QImage::Format_ARGB32_Premultiplied);
-    for (int y=0;y<height;++y) std::memcpy(image.scanLine(y), static_cast<const char *>(read.pData)+size_t(y)*read.RowPitch,size_t(width)*4);
-    context->Unmap(bokehStaging.Get(),0);
-    bokehLastCpuCopyMs = bokehCpuCopyTimer.nsecsElapsed() / 1000000.0;
-    bokehLastReadbackMs = bokehReadbackTimer.nsecsElapsed() / 1000000.0;
-    *output=std::move(image);
+    // Phase 6C: poll completed staging copies without waiting, then enqueue
+    // this frame into a free slot. The previous completed image remains visible
+    // while newer GPU copies are still in flight.
+    QElapsedTimer asyncPollTimer; asyncPollTimer.start();
+    for (auto &slot : bokehReadbackSlots) {
+        if (!slot.pending) continue;
+        const HRESULT ready = context->GetData(slot.completion.Get(), nullptr, 0,
+                                               D3D11_ASYNC_GETDATA_DONOTFLUSH);
+        if (ready == S_FALSE) continue;
+        if (FAILED(ready)) {
+            slot.pending = false;
+            if (bokehAsyncPending > 0) --bokehAsyncPending;
+            renderError = QStringLiteral("Bokeh async completion query failed: %1").arg(hexResult(ready));
+            continue;
+        }
+        D3D11_MAPPED_SUBRESOURCE read{};
+        const HRESULT mapHr = context->Map(slot.staging.Get(), 0, D3D11_MAP_READ,
+                                           D3D11_MAP_FLAG_DO_NOT_WAIT, &read);
+        if (mapHr == DXGI_ERROR_WAS_STILL_DRAWING) continue;
+        if (FAILED(mapHr)) {
+            slot.pending = false;
+            if (bokehAsyncPending > 0) --bokehAsyncPending;
+            renderError = QStringLiteral("Bokeh async readback map failed: %1").arg(hexResult(mapHr));
+            continue;
+        }
+        QElapsedTimer cpuCopyTimer; cpuCopyTimer.start();
+        QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
+        for (int y = 0; y < height; ++y)
+            std::memcpy(image.scanLine(y),
+                        static_cast<const char *>(read.pData) + size_t(y) * read.RowPitch,
+                        size_t(width) * 4);
+        context->Unmap(slot.staging.Get(), 0);
+        bokehLastCpuCopyMs = cpuCopyTimer.nsecsElapsed() / 1000000.0;
+        cachedBokehImage = std::move(image);
+        slot.pending = false;
+        if (bokehAsyncPending > 0) --bokehAsyncPending;
+        ++bokehAsyncCompleted;
+    }
+    bokehAsyncPollMs = asyncPollTimer.nsecsElapsed() / 1000000.0;
+
+    BokehReadbackSlot *freeSlot = nullptr;
+    for (int offset = 0; offset < 3; ++offset) {
+        const int index = (nextBokehReadbackSlot + offset) % 3;
+        if (!bokehReadbackSlots[index].pending) {
+            freeSlot = &bokehReadbackSlots[index];
+            nextBokehReadbackSlot = (index + 1) % 3;
+            break;
+        }
+    }
+    if (freeSlot) {
+        context->CopyResource(freeSlot->staging.Get(), bokehTexture.Get());
+        context->End(freeSlot->completion.Get());
+        freeSlot->pending = true;
+        ++bokehAsyncPending;
+        ++bokehAsyncQueued;
+    } else {
+        ++bokehAsyncQueueFull;
+    }
+    bokehLastCopyMapWaitMs = 0.0; // No blocking Map wait in the asynchronous path.
+    bokehLastReadbackMs = bokehAsyncPollMs + bokehLastCpuCopyMs;
     bokehLastPathMs = bokehPathTimer.nsecsElapsed() / 1000000.0;
     bokehAveragePathMs += (bokehLastPathMs - bokehAveragePathMs) / double(bokehFrames + 1);
-    ++successfulFrames; ++bokehFrames; return true;
+    ++successfulFrames; ++bokehFrames;
+    if (cachedBokehImage.isNull()) return false; // Keep Qt fallback until first GPU result arrives.
+    *output = cachedBokehImage;
+    return true;
 #else
     Q_UNUSED(width); Q_UNUSED(height); Q_UNUSED(bounds); Q_UNUSED(colors); Q_UNUSED(softness); Q_UNUSED(output);
     renderError = QStringLiteral("Direct3D 11 unavailable on this platform."); return false;
@@ -475,7 +540,8 @@ QString GpuRenderer::runtimeStats() const
                           "Phase 6A Bokeh CPU path: last %18 ms | average %19 ms | draw submit %20 ms | readback %21 ms\n"
                           "Phase 6B GPU draw: last %22 ms | average %23 ms | samples %24 | %25\n"
                           "Phase 6B readback: Copy+Map wait %26 ms | CPU memcpy %27 ms\n"
-                          "Timing note: GPU draw uses asynchronous D3D11 timestamps; Copy+Map includes GPU synchronization.\n"
+                          "Phase 6C async readback: queued %28 | completed %29 | pending %30 | queue-full %31 | poll %32 ms\n"
+                          "Timing note: Phase 6C uses a 3-slot staging ring and non-blocking event-query polling; displayed Bokeh may lag by a few frames.\n"
                           "Last error: %16")
         .arg(successfulFrames > 0 ? QStringLiteral("ACTIVE") : QStringLiteral("not yet successful"))
         .arg(successfulFrames).arg(failedFrames)
@@ -498,7 +564,12 @@ QString GpuRenderer::runtimeStats() const
         .arg(bokehGpuSamples)
         .arg(bokehGpuTimingStatus)
         .arg(bokehLastCopyMapWaitMs, 0, 'f', 3)
-        .arg(bokehLastCpuCopyMs, 0, 'f', 3);
+        .arg(bokehLastCpuCopyMs, 0, 'f', 3)
+        .arg(bokehAsyncQueued)
+        .arg(bokehAsyncCompleted)
+        .arg(bokehAsyncPending)
+        .arg(bokehAsyncQueueFull)
+        .arg(bokehAsyncPollMs, 0, 'f', 3);
 }
 
 QString GpuRenderer::diagnostics() const
