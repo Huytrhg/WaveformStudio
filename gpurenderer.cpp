@@ -320,11 +320,18 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     if (freeSlot) {
         context->CopyResource(freeSlot->staging.Get(), cachedTexture.Get());
         context->End(freeSlot->completion.Get());
+        // An immediate-context event query is not guaranteed to progress while
+        // commands remain buffered. Flush submits the copy/query without waiting
+        // for GPU completion; GetData below remains non-blocking.
+        QElapsedTimer flushTimer; flushTimer.start();
+        context->Flush();
+        phase3AsyncFlushMs = flushTimer.nsecsElapsed() / 1000000.0;
         freeSlot->pending = true;
         ++phase3AsyncPending;
         ++phase3AsyncQueued;
     } else {
         ++phase3AsyncQueueFull;
+        phase3AsyncFlushMs = 0.0;
     }
     lastCopyMapMs = 0.0; // Phase 6D never blocks on the staging texture.
     lastReadbackMs = phase3AsyncPollMs + phase3CpuCopyMs;
@@ -571,11 +578,17 @@ bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF
     if (freeSlot) {
         context->CopyResource(freeSlot->staging.Get(), bokehTexture.Get());
         context->End(freeSlot->completion.Get());
+        // Submit the copy and event query so DONOTFLUSH polling can observe
+        // completion. Flush is asynchronous and does not wait for the GPU.
+        QElapsedTimer flushTimer; flushTimer.start();
+        context->Flush();
+        bokehAsyncFlushMs = flushTimer.nsecsElapsed() / 1000000.0;
         freeSlot->pending = true;
         ++bokehAsyncPending;
         ++bokehAsyncQueued;
     } else {
         ++bokehAsyncQueueFull;
+        bokehAsyncFlushMs = 0.0;
     }
     bokehLastCopyMapWaitMs = 0.0; // No blocking Map wait in the asynchronous path.
     bokehLastReadbackMs = bokehAsyncPollMs + bokehLastCpuCopyMs;
@@ -604,8 +617,8 @@ QString GpuRenderer::runtimeStats() const
                           "Phase 6A Bokeh CPU path: last %18 ms | average %19 ms | draw submit %20 ms | readback %21 ms\n"
                           "Phase 6B GPU draw: last %22 ms | average %23 ms | samples %24 | %25\n"
                           "Phase 6C readback: blocking wait %26 ms | CPU memcpy last %27 ms\n"
-                          "Phase 6C async readback: queued %28 | completed %29 | pending %30 | queue-full %31 | poll %32 ms\n"
-                          "Phase 6D Spectrum async readback: queued %33 | completed %34 | pending %35 | queue-full %36 | poll %37 ms | CPU memcpy %38 ms\n"
+                          "Phase 6C async readback: queued %28 | completed %29 | pending %30 | queue-full %31 | poll %32 ms | flush %39 ms\n"
+                          "Phase 6D Spectrum async readback: queued %33 | completed %34 | pending %35 | queue-full %36 | poll %37 ms | CPU memcpy %38 ms | flush %40 ms\n"
                           "Timing note: Phase 6C Bokeh and Phase 6D Spectrum use independent 3-slot staging rings; both may display a few frames behind.\n"
                           "Last error: %16")
         .arg(successfulFrames > 0 ? QStringLiteral("ACTIVE") : QStringLiteral("not yet successful"))
@@ -640,7 +653,9 @@ QString GpuRenderer::runtimeStats() const
         .arg(phase3AsyncPending)
         .arg(phase3AsyncQueueFull)
         .arg(phase3AsyncPollMs, 0, 'f', 3)
-        .arg(phase3CpuCopyMs, 0, 'f', 3);
+        .arg(phase3CpuCopyMs, 0, 'f', 3)
+        .arg(bokehAsyncFlushMs, 0, 'f', 3)
+        .arg(phase3AsyncFlushMs, 0, 'f', 3);
 }
 
 QString GpuRenderer::diagnostics() const
