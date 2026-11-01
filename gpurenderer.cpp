@@ -282,6 +282,7 @@ bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF
                                      const QVector<QColor> &colors, int softness, QImage *output)
 {
 #ifdef Q_OS_WIN
+    QElapsedTimer bokehPathTimer; bokehPathTimer.start();
     renderError.clear();
     if (!output || width < 1 || height < 1 || bounds.isEmpty() || bounds.size() != colors.size() || bounds.size() > 100) {
         renderError = QStringLiteral("Invalid Bokeh dimensions or particle arrays."); return false;
@@ -361,13 +362,20 @@ bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF
     std::memcpy(params.pData, &paramsData, sizeof(paramsData));
     context->Unmap(bokehConstantBuffer.Get(), 0);
     ID3D11Buffer *cb = bokehConstantBuffer.Get(); context->PSSetConstantBuffers(0, 1, &cb);
+    QElapsedTimer bokehDrawTimer; bokehDrawTimer.start();
     context->Draw(UINT(cachedBokehVertices.size()),0); context->OMSetRenderTargets(0,nullptr,nullptr);
+    bokehLastDrawSubmitMs = bokehDrawTimer.nsecsElapsed() / 1000000.0;
+    QElapsedTimer bokehReadbackTimer; bokehReadbackTimer.start();
     context->CopyResource(bokehStaging.Get(), bokehTexture.Get()); D3D11_MAPPED_SUBRESOURCE read{};
     hr = context->Map(bokehStaging.Get(),0,D3D11_MAP_READ,0,&read);
     if (FAILED(hr)) { renderError = QStringLiteral("Bokeh readback map failed: %1").arg(hexResult(hr)); return false; }
     QImage image(width,height,QImage::Format_ARGB32_Premultiplied);
     for (int y=0;y<height;++y) std::memcpy(image.scanLine(y), static_cast<const char *>(read.pData)+size_t(y)*read.RowPitch,size_t(width)*4);
-    context->Unmap(bokehStaging.Get(),0); *output=std::move(image);
+    context->Unmap(bokehStaging.Get(),0);
+    bokehLastReadbackMs = bokehReadbackTimer.nsecsElapsed() / 1000000.0;
+    *output=std::move(image);
+    bokehLastPathMs = bokehPathTimer.nsecsElapsed() / 1000000.0;
+    bokehAveragePathMs += (bokehLastPathMs - bokehAveragePathMs) / double(bokehFrames + 1);
     ++successfulFrames; ++bokehFrames; return true;
 #else
     Q_UNUSED(width); Q_UNUSED(height); Q_UNUSED(bounds); Q_UNUSED(colors); Q_UNUSED(softness); Q_UNUSED(output);
@@ -385,7 +393,8 @@ QString GpuRenderer::runtimeStats() const
                           "Last resource lookup/create: %11 ms | draw submission: %12 ms | copy+map wait: %13 ms\n"
                           "Phase 4A composite frames: %14 | last video upload: %15 ms\n"
                           "Phase 5 D3D11 Bokeh radial-shader frames: %17\n"
-                          "Timing note: draw submission is CPU-side; it is NOT GPU execution time.\n"
+                          "Phase 6A Bokeh CPU path: last %18 ms | average %19 ms | draw submit %20 ms | readback %21 ms\n"
+                          "Timing note: draw submission is CPU-side; it is NOT GPU execution time. Readback includes GPU synchronization.\n"
                           "Last error: %16")
         .arg(successfulFrames > 0 ? QStringLiteral("ACTIVE") : QStringLiteral("not yet successful"))
         .arg(successfulFrames).arg(failedFrames)
@@ -398,7 +407,11 @@ QString GpuRenderer::runtimeStats() const
         .arg(lastCopyMapMs, 0, 'f', 3)
         .arg(compositedFrames).arg(lastUploadMs, 0, 'f', 3)
         .arg(renderError.isEmpty() ? QStringLiteral("none") : renderError)
-        .arg(bokehFrames);
+        .arg(bokehFrames)
+        .arg(bokehLastPathMs, 0, 'f', 2)
+        .arg(bokehAveragePathMs, 0, 'f', 2)
+        .arg(bokehLastDrawSubmitMs, 0, 'f', 3)
+        .arg(bokehLastReadbackMs, 0, 'f', 2);
 }
 
 QString GpuRenderer::diagnostics() const
