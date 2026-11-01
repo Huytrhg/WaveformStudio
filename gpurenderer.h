@@ -61,6 +61,11 @@ private:
     quint64 resourceReuses = 0;
     quint64 compositedFrames = 0;
     double lastUploadMs = 0.0;
+    // Phase 6A: Bokeh CPU-side submission and synchronous readback diagnostics.
+    double bokehLastPathMs = 0.0;
+    double bokehAveragePathMs = 0.0;
+    double bokehLastDrawSubmitMs = 0.0;
+    double bokehLastReadbackMs = 0.0;
     int cachedWidth = 0;
     int cachedHeight = 0;
 
