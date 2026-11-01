@@ -63,6 +63,7 @@ private:
     double lastUploadMs = 0.0;
     // Phase 6D: asynchronous Phase 3 preview readback diagnostics.
     double phase3AsyncPollMs = 0.0;
+    double phase3AsyncFlushMs = 0.0;
     double phase3CpuCopyMs = 0.0;
     quint64 phase3AsyncQueued = 0;
     quint64 phase3AsyncCompleted = 0;
@@ -76,6 +77,7 @@ private:
     double bokehLastCopyMapWaitMs = 0.0;
     double bokehLastCpuCopyMs = 0.0;
     double bokehAsyncPollMs = 0.0;
+    double bokehAsyncFlushMs = 0.0;
     quint64 bokehAsyncQueued = 0;
     quint64 bokehAsyncCompleted = 0;
     quint64 bokehAsyncQueueFull = 0;
