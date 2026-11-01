@@ -459,6 +459,7 @@ bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF
     // this frame into a free slot. The previous completed image remains visible
     // while newer GPU copies are still in flight.
     QElapsedTimer asyncPollTimer; asyncPollTimer.start();
+    bokehLastCpuCopyMs = 0.0;
     for (auto &slot : bokehReadbackSlots) {
         if (!slot.pending) continue;
         const HRESULT ready = context->GetData(slot.completion.Get(), nullptr, 0,
@@ -539,7 +540,7 @@ QString GpuRenderer::runtimeStats() const
                           "Phase 5 D3D11 Bokeh radial-shader frames: %17\n"
                           "Phase 6A Bokeh CPU path: last %18 ms | average %19 ms | draw submit %20 ms | readback %21 ms\n"
                           "Phase 6B GPU draw: last %22 ms | average %23 ms | samples %24 | %25\n"
-                          "Phase 6B readback: Copy+Map wait %26 ms | CPU memcpy %27 ms\n"
+                          "Phase 6C readback: blocking wait %26 ms | CPU memcpy last %27 ms\n"
                           "Phase 6C async readback: queued %28 | completed %29 | pending %30 | queue-full %31 | poll %32 ms\n"
                           "Timing note: Phase 6C uses a 3-slot staging ring and non-blocking event-query polling; displayed Bokeh may lag by a few frames.\n"
                           "Last error: %16")
