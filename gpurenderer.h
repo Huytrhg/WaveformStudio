@@ -66,6 +66,12 @@ private:
     double bokehAveragePathMs = 0.0;
     double bokehLastDrawSubmitMs = 0.0;
     double bokehLastReadbackMs = 0.0;
+    double bokehLastCopyMapWaitMs = 0.0;
+    double bokehLastCpuCopyMs = 0.0;
+    double bokehLastGpuMs = 0.0;
+    double bokehAverageGpuMs = 0.0;
+    quint64 bokehGpuSamples = 0;
+    QString bokehGpuTimingStatus = QStringLiteral("initializing");
     int cachedWidth = 0;
     int cachedHeight = 0;
 
@@ -94,6 +100,15 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Texture2D> bokehStaging;
     int bokehWidth = 0, bokehHeight = 0;
     QVector<BokehVertex> cachedBokehVertices;
+    struct BokehGpuTimingSlot {
+        Microsoft::WRL::ComPtr<ID3D11Query> disjoint;
+        Microsoft::WRL::ComPtr<ID3D11Query> start;
+        Microsoft::WRL::ComPtr<ID3D11Query> end;
+        bool pending = false;
+    };
+    BokehGpuTimingSlot bokehGpuTimingSlots[4];
+    int nextBokehGpuTimingSlot = 0;
+    bool bokehGpuTimingQueriesReady = false;
 #endif
 };
 
