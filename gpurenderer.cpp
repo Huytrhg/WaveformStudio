@@ -294,14 +294,20 @@ bool GpuRenderer::renderBokehCircles(int width, int height, const QVector<QRectF
     if (!bokehGpuTimingQueriesReady) {
         bool allCreated = true;
         for (auto &slot : bokehGpuTimingSlots) {
+            D3D11_QUERY_DESC qd{};
+            HRESULT qhr = S_OK;
             if (!slot.disjoint) {
-                D3D11_QUERY_DESC qd{};
                 qd.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
-                HRESULT qhr = device->CreateQuery(&qd, slot.disjoint.GetAddressOf());
+                qhr = device->CreateQuery(&qd, slot.disjoint.GetAddressOf());
                 if (FAILED(qhr)) { allCreated = false; break; }
+            }
+            if (!slot.start) {
                 qd.Query = D3D11_QUERY_TIMESTAMP;
                 qhr = device->CreateQuery(&qd, slot.start.GetAddressOf());
                 if (FAILED(qhr)) { allCreated = false; break; }
+            }
+            if (!slot.end) {
+                qd.Query = D3D11_QUERY_TIMESTAMP;
                 qhr = device->CreateQuery(&qd, slot.end.GetAddressOf());
                 if (FAILED(qhr)) { allCreated = false; break; }
             }
