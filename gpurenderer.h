@@ -10,6 +10,7 @@
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <d3d11.h>
+#include <dxgi.h>
 #include <wrl/client.h>
 #endif
 
