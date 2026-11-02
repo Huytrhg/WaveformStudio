@@ -19,6 +19,10 @@
 #include <cmath>
 #include <QPaintEvent>
 #include <QResizeEvent>
+#include <QShowEvent>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 #include <QElapsedTimer>
 
 #include <QAudioOutput>
@@ -266,6 +270,13 @@ public:
     }
 
     QVideoSink *getVideoSink() const { return videoSink; }
+    ~SpectrumDisplay() override
+    {
+#ifdef Q_OS_WIN
+        GpuRenderer::instance().disableNativePresentation();
+        if (nativePreviewHwnd) { DestroyWindow(nativePreviewHwnd); nativePreviewHwnd = nullptr; }
+#endif
+    }
 
     void setBands(const QVector<float> &values)
     {
@@ -705,6 +716,14 @@ private:
     }
 
 protected:
+#ifdef Q_OS_WIN
+    void showEvent(QShowEvent *event) override { QWidget::showEvent(event); ensureNativePreviewWindow(); }
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QWidget::resizeEvent(event);
+        if (nativePreviewHwnd) SetWindowPos(nativePreviewHwnd, HWND_TOP, 0, 0, width(), height(), SWP_NOACTIVATE);
+    }
+#endif
     void paintEvent(QPaintEvent *) override
     {
         ++diagnosticFrameCount;
@@ -723,6 +742,9 @@ protected:
         // stable Qt paint path for all preview modes for now.
 
         QPainter p(this);
+#ifdef Q_OS_WIN
+        if (nativePreviewHwnd && visualMode != 0 && visualMode != 4) ShowWindow(nativePreviewHwnd, SW_HIDE);
+#endif
         p.setRenderHint(QPainter::Antialiasing, true);
         p.setCompositionMode(QPainter::CompositionMode_SourceOver);
         p.fillRect(rect(), QColor("#101114"));
@@ -915,13 +937,23 @@ protected:
             }
 
             QImage gpuComposite;
+#ifdef Q_OS_WIN
+            if (nativePreviewHwnd && !forceCpuFallback)
+                GpuRenderer::instance().configureNativePresentation(nativePreviewHwnd, width(), height());
+#endif
             const bool gpuRendered = !forceCpuFallback && GpuRenderer::instance().renderColoredRects(
                 width(), height(), gpuRects, gpuColors, &gpuComposite, &cachedGpuBackground,
                 &gpuTopColors);
-            if (gpuRendered) {
-                p.setOpacity(1.0); // background must remain opaque
+#ifdef Q_OS_WIN
+            const bool nativePresented = GpuRenderer::instance().nativePresentationActive();
+            if (nativePreviewHwnd) ShowWindow(nativePreviewHwnd, nativePresented ? SW_SHOWNA : SW_HIDE);
+#else
+            const bool nativePresented = false;
+#endif
+            if (gpuRendered && !nativePresented) {
+                p.setOpacity(1.0);
                 p.drawImage(QPoint(0, 0), gpuComposite);
-            } else {
+            } else if (!gpuRendered) {
                 // B2: CPU Bars fallback shares the same drawing engine as export.
                 // Reset opacity: SpectrumRenderer applies its own opacity once.
                 p.setOpacity(1.0);
@@ -1053,6 +1085,16 @@ private:
 
     QVideoSink *videoSink = nullptr;
 #ifdef Q_OS_WIN
+    HWND nativePreviewHwnd = nullptr;
+    void ensureNativePreviewWindow()
+    {
+        if (nativePreviewHwnd || width() < 1 || height() < 1) return;
+        HWND parentHwnd = reinterpret_cast<HWND>(winId());
+        nativePreviewHwnd = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+            0, 0, width(), height(), parentHwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (nativePreviewHwnd)
+            SetWindowPos(nativePreviewHwnd, HWND_TOP, 0, 0, width(), height(), SWP_NOACTIVATE | SWP_HIDEWINDOW);
+    }
     NativeGpuPresenter nativeGpuPresenter;
     bool nativeGpuAttempted = false;
     bool nativeGpuReady = false;
