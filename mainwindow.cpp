@@ -755,7 +755,12 @@ protected:
             p.setPen(QColor(235, 238, 242, 210));
             p.drawText(rect().adjusted(10, 10, -10, -10), Qt::AlignCenter, message);
         }
-        if (bands.isEmpty() || width() < 2 || height() < 2) return;
+        if (bands.isEmpty() || width() < 2 || height() < 2) {
+#ifdef Q_OS_WIN
+            if (nativePreviewHwnd) ShowWindow(nativePreviewHwnd, SW_HIDE);
+#endif
+            return;
+        }
 
         p.save();
         p.setOpacity(opacityPercent / 100.0);
@@ -941,6 +946,7 @@ protected:
             if (nativePreviewHwnd && !forceCpuFallback)
                 GpuRenderer::instance().configureNativePresentation(nativePreviewHwnd, width(), height());
 #endif
+            if (forceCpuFallback) GpuRenderer::instance().disableNativePresentation();
             const bool gpuRendered = !forceCpuFallback && GpuRenderer::instance().renderColoredRects(
                 width(), height(), gpuRects, gpuColors, &gpuComposite, &cachedGpuBackground,
                 &gpuTopColors);
