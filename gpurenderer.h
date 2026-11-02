@@ -8,6 +8,7 @@
 #include <QVector>
 
 #ifdef Q_OS_WIN
+#include <windows.h>
 #include <d3d11.h>
 #include <wrl/client.h>
 #endif
@@ -120,6 +121,7 @@ private:
     HWND nativePreviewHwnd = nullptr;
     int nativePreviewWidth = 0, nativePreviewHeight = 0;
     bool nativePreviewReady = false;
+    bool nativeFramePresented = false;
     bool createNativeSwapChain(int width, int height);
     bool createNativeBackBuffer();
     bool presentNativeTexture();
