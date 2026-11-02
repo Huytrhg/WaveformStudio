@@ -200,7 +200,7 @@ void GpuRenderer::disableNativePresentation()
     nativePreviewHwnd = nullptr; nativePreviewWidth = nativePreviewHeight = 0;
     nativePreviewReady = false;
 }
-bool GpuRenderer::nativePresentationActive() const { return nativePreviewReady; }
+bool GpuRenderer::nativePresentationActive() const { return nativeFramePresented; }
 QString GpuRenderer::nativePresentationError() const { return nativePresentError; }
 
 #ifdef Q_OS_WIN
@@ -295,6 +295,7 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
                                      const QVector<QColor> *topColors)
 {
 #ifdef Q_OS_WIN
+    nativeFramePresented = false;
     QElapsedTimer totalTimer; totalTimer.start();
     renderError.clear();
     if (!output || width < 1 || height < 1 || rects.isEmpty() || rects.size() != colors.size()) {
@@ -416,6 +417,7 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     if (nativePreviewReady && presentNativeTexture()) {
         lastCopyMapMs = 0.0; phase3AsyncPollMs = 0.0; phase3CpuCopyMs = 0.0;
         phase3AsyncFlushMs = 0.0; lastReadbackMs = 0.0;
+        nativeFramePresented = true;
         lastRenderMs = totalTimer.nsecsElapsed() / 1000000.0;
         ++successfulFrames; if (background && !background->isNull()) ++compositedFrames;
         averageRenderMs += (lastRenderMs - averageRenderMs) / double(successfulFrames);
@@ -810,7 +812,7 @@ QString GpuRenderer::runtimeStats() const
         .arg(phase3CpuCopyMs, 0, 'f', 3)
         .arg(bokehAsyncFlushMs, 0, 'f', 3)
         .arg(phase3AsyncFlushMs, 0, 'f', 3)
-        .arg(nativePreviewReady ? QStringLiteral("ACTIVE") : QStringLiteral("fallback/off"))
+        .arg(nativeFramePresented ? QStringLiteral("ACTIVE") : QStringLiteral("fallback/off"))
         .arg(nativePresentFrames)
         .arg(nativePresentCpuMs, 0, 'f', 3)
         .arg(nativePresentError.isEmpty() ? QStringLiteral("none") : nativePresentError);
