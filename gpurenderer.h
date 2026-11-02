@@ -8,6 +8,9 @@
 #include <QVector>
 
 #ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
