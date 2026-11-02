@@ -310,7 +310,7 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     QElapsedTimer resourceTimer; resourceTimer.start();
     if (!cachedTexture || !cachedRtv || cachedWidth != width || cachedHeight != height) {
         cachedRtv.Reset(); cachedTextureSrv.Reset(); cachedTexture.Reset();
-        for (auto &slot : phase3ReadbackSlots {
+        for (auto &slot : phase3ReadbackSlots) {
             slot.staging.Reset(); slot.completion.Reset(); slot.pending = false;
         }
         phase3AsyncPending = 0;
