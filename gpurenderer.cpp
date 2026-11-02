@@ -49,6 +49,15 @@ float4 PSMain(VSOut input) : SV_TARGET {
     return float4(input.color.rgb, alpha);
 }
 )HLSL";
+const char *nativeCopyShaderSource = R"HLSL(
+struct VSIn { float2 pos : POSITION; float2 uv : TEXCOORD0; };
+struct VSOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
+VSOut VSMain(VSIn i) { VSOut o; o.pos=float4(i.pos,0.0,1.0); o.uv=i.uv; return o; }
+Texture2D sourceTexture : register(t0);
+SamplerState sourceSampler : register(s0);
+float4 PSMain(VSOut i) : SV_TARGET { return sourceTexture.Sample(sourceSampler,i.uv); }
+)HLSL";
+struct NativeCopyVertex { float x, y, u, v; };
 }
 #endif
 
@@ -149,6 +158,138 @@ bool GpuRenderer::createPipeline()
 #endif
 }
 
+
+bool GpuRenderer::configureNativePresentation(void *nativeWindow, int width, int height)
+{
+#ifdef Q_OS_WIN
+    if (!initialize() || !nativeWindow || width < 1 || height < 1) {
+        nativePresentError = QStringLiteral("Native preview window or D3D11 device is unavailable.");
+        return false;
+    }
+    HWND hwnd = static_cast<HWND>(nativeWindow);
+    if (nativePreviewReady && nativePreviewHwnd == hwnd &&
+        nativePreviewWidth == width && nativePreviewHeight == height) return true;
+    if (nativeSwapChain && nativePreviewHwnd == hwnd && nativePreviewReady) {
+        context->OMSetRenderTargets(0, nullptr, nullptr);
+        nativeBackBufferRtv.Reset();
+        HRESULT hr = nativeSwapChain->ResizeBuffers(0, UINT(width), UINT(height), DXGI_FORMAT_UNKNOWN, 0);
+        if (SUCCEEDED(hr)) {
+            nativePreviewWidth = width; nativePreviewHeight = height;
+            if (createNativeBackBuffer()) { nativePresentError.clear(); return true; }
+        } else nativePresentError = QStringLiteral("ResizeBuffers failed: %1").arg(hexResult(hr));
+        disableNativePresentation(); return false;
+    }
+    disableNativePresentation();
+    nativePreviewHwnd = hwnd; nativePreviewWidth = width; nativePreviewHeight = height;
+    if (!createNativeSwapChain(width, height)) { disableNativePresentation(); return false; }
+    nativePreviewReady = true; nativePresentError.clear(); return true;
+#else
+    Q_UNUSED(nativeWindow); Q_UNUSED(width); Q_UNUSED(height);
+    nativePresentError = QStringLiteral("Native D3D11 presentation is Windows only."); return false;
+#endif
+}
+
+void GpuRenderer::disableNativePresentation()
+{
+#ifdef Q_OS_WIN
+    if (context) context->OMSetRenderTargets(0, nullptr, nullptr);
+    nativeBackBufferRtv.Reset(); nativeSwapChain.Reset(); nativeCopySampler.Reset();
+    nativeCopyVertexBuffer.Reset(); nativeCopyInputLayout.Reset();
+    nativeCopyPixelShader.Reset(); nativeCopyVertexShader.Reset();
+#endif
+    nativePreviewHwnd = nullptr; nativePreviewWidth = nativePreviewHeight = 0;
+    nativePreviewReady = false;
+}
+bool GpuRenderer::nativePresentationActive() const { return nativePreviewReady; }
+QString GpuRenderer::nativePresentationError() const { return nativePresentError; }
+
+#ifdef Q_OS_WIN
+bool GpuRenderer::createNativeSwapChain(int width, int height)
+{
+    Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+    Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+    Microsoft::WRL::ComPtr<IDXGIFactory> factory;
+    HRESULT hr = device.As(&dxgiDevice);
+    if (FAILED(hr) || FAILED(dxgiDevice->GetAdapter(adapter.GetAddressOf())) ||
+        FAILED(adapter->GetParent(IID_PPV_ARGS(factory.GetAddressOf())))) {
+        nativePresentError = QStringLiteral("Could not obtain DXGI factory from renderer device."); return false;
+    }
+    DXGI_SWAP_CHAIN_DESC desc{};
+    desc.BufferDesc.Width=UINT(width); desc.BufferDesc.Height=UINT(height);
+    desc.BufferDesc.Format=DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.BufferDesc.RefreshRate.Numerator=0; desc.BufferDesc.RefreshRate.Denominator=1;
+    desc.SampleDesc.Count=1; desc.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    desc.BufferCount=2; desc.OutputWindow=nativePreviewHwnd;
+    desc.Windowed=TRUE; desc.SwapEffect=DXGI_SWAP_EFFECT_DISCARD;
+    hr=factory->CreateSwapChain(device.Get(),&desc,nativeSwapChain.GetAddressOf());
+    if(FAILED(hr)){nativePresentError=QStringLiteral("CreateSwapChain failed: %1").arg(hexResult(hr));return false;}
+    factory->MakeWindowAssociation(nativePreviewHwnd,DXGI_MWA_NO_ALT_ENTER);
+
+    Microsoft::WRL::ComPtr<ID3DBlob> vs,ps,errors;
+    hr=D3DCompile(nativeCopyShaderSource,std::strlen(nativeCopyShaderSource),nullptr,nullptr,nullptr,
+                  "VSMain","vs_4_0",D3DCOMPILE_ENABLE_STRICTNESS,0,vs.GetAddressOf(),errors.GetAddressOf());
+    if(FAILED(hr)){nativePresentError=QStringLiteral("Native VS compile failed: %1").arg(hexResult(hr));return false;}
+    hr=D3DCompile(nativeCopyShaderSource,std::strlen(nativeCopyShaderSource),nullptr,nullptr,nullptr,
+                  "PSMain","ps_4_0",D3DCOMPILE_ENABLE_STRICTNESS,0,ps.GetAddressOf(),errors.ReleaseAndGetAddressOf());
+    if(FAILED(hr)){nativePresentError=QStringLiteral("Native PS compile failed: %1").arg(hexResult(hr));return false;}
+    hr=device->CreateVertexShader(vs->GetBufferPointer(),vs->GetBufferSize(),nullptr,nativeCopyVertexShader.GetAddressOf());
+    if(FAILED(hr)){nativePresentError=QStringLiteral("Create native VS failed: %1").arg(hexResult(hr));return false;}
+    hr=device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,nativeCopyPixelShader.GetAddressOf());
+    if(FAILED(hr)){nativePresentError=QStringLiteral("Create native PS failed: %1").arg(hexResult(hr));return false;}
+    const D3D11_INPUT_ELEMENT_DESC layout[]={
+        {"POSITION",0,DXGI_FORMAT_R32G32_FLOAT,0,0,D3D11_INPUT_PER_VERTEX_DATA,0},
+        {"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,8,D3D11_INPUT_PER_VERTEX_DATA,0}};
+    hr=device->CreateInputLayout(layout,2,vs->GetBufferPointer(),vs->GetBufferSize(),nativeCopyInputLayout.GetAddressOf());
+    if(FAILED(hr)){nativePresentError=QStringLiteral("Create native layout failed: %1").arg(hexResult(hr));return false;}
+    D3D11_BUFFER_DESC vb{};vb.ByteWidth=sizeof(NativeCopyVertex)*6;vb.Usage=D3D11_USAGE_DYNAMIC;
+    vb.BindFlags=D3D11_BIND_VERTEX_BUFFER;vb.CPUAccessFlags=D3D11_CPU_ACCESS_WRITE;
+    hr=device->CreateBuffer(&vb,nullptr,nativeCopyVertexBuffer.GetAddressOf());
+    if(FAILED(hr)){nativePresentError=QStringLiteral("Create native VB failed: %1").arg(hexResult(hr));return false;}
+    D3D11_SAMPLER_DESC sd{};sd.Filter=D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP;sd.MaxLOD=D3D11_FLOAT32_MAX;
+    hr=device->CreateSamplerState(&sd,nativeCopySampler.GetAddressOf());
+    if(FAILED(hr)){nativePresentError=QStringLiteral("Create native sampler failed: %1").arg(hexResult(hr));return false;}
+    return createNativeBackBuffer();
+}
+bool GpuRenderer::createNativeBackBuffer()
+{
+    if(!nativeSwapChain)return false;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> back;
+    HRESULT hr=nativeSwapChain->GetBuffer(0,IID_PPV_ARGS(back.GetAddressOf()));
+    if(FAILED(hr)){nativePresentError=QStringLiteral("GetBuffer failed: %1").arg(hexResult(hr));return false;}
+    hr=device->CreateRenderTargetView(back.Get(),nullptr,nativeBackBufferRtv.GetAddressOf());
+    if(FAILED(hr)){nativePresentError=QStringLiteral("Back-buffer RTV failed: %1").arg(hexResult(hr));return false;}
+    return true;
+}
+bool GpuRenderer::presentNativeTexture()
+{
+    if(!nativePreviewReady||!nativeSwapChain||!nativeBackBufferRtv||!cachedTextureSrv)return false;
+    QElapsedTimer timer;timer.start();
+    ID3D11RenderTargetView *rtv=nativeBackBufferRtv.Get();context->OMSetRenderTargets(1,&rtv,nullptr);
+    D3D11_VIEWPORT vp{};vp.Width=float(nativePreviewWidth);vp.Height=float(nativePreviewHeight);
+    vp.MinDepth=0;vp.MaxDepth=1;context->RSSetViewports(1,&vp);
+    const float clear[4]={0.063f,0.067f,0.078f,1.0f};context->ClearRenderTargetView(rtv,clear);
+    const NativeCopyVertex quad[6]={{-1,-1,0,1},{-1,1,0,0},{1,1,1,0},
+                                     {-1,-1,0,1},{1,1,1,0},{1,-1,1,1}};
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    HRESULT hr=context->Map(nativeCopyVertexBuffer.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped);
+    if(FAILED(hr)){nativePresentError=QStringLiteral("Native vertex Map failed: %1").arg(hexResult(hr));context->OMSetRenderTargets(0,nullptr,nullptr);return false;}
+    std::memcpy(mapped.pData,quad,sizeof(quad));context->Unmap(nativeCopyVertexBuffer.Get(),0);
+    UINT stride=sizeof(NativeCopyVertex),offset=0;ID3D11Buffer *vb=nativeCopyVertexBuffer.Get();
+    context->IASetInputLayout(nativeCopyInputLayout.Get());context->IASetVertexBuffers(0,1,&vb,&stride,&offset);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->VSSetShader(nativeCopyVertexShader.Get(),nullptr,0);
+    context->PSSetShader(nativeCopyPixelShader.Get(),nullptr,0);
+    ID3D11ShaderResourceView *srv=cachedTextureSrv.Get();ID3D11SamplerState *sampler=nativeCopySampler.Get();
+    context->PSSetShaderResources(0,1,&srv);context->PSSetSamplers(0,1,&sampler);context->Draw(6,0);
+    ID3D11ShaderResourceView *nullSrv=nullptr;context->PSSetShaderResources(0,1,&nullSrv);
+    context->OMSetRenderTargets(0,nullptr,nullptr);
+    hr=nativeSwapChain->Present(0,0);nativePresentCpuMs=timer.nsecsElapsed()/1000000.0;
+    if(FAILED(hr)){nativePresentError=QStringLiteral("Present failed: %1").arg(hexResult(hr));return false;}
+    ++nativePresentFrames;nativePresentError.clear();return true;
+}
+#endif
+
 bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF> &rects,
                                      const QVector<QColor> &colors, QImage *output, const QImage *background,
                                      const QVector<QColor> *topColors)
@@ -167,8 +308,8 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     // Completed frames are mapped only after their event query signals readiness.
     QElapsedTimer resourceTimer; resourceTimer.start();
     if (!cachedTexture || !cachedRtv || cachedWidth != width || cachedHeight != height) {
-        cachedRtv.Reset(); cachedTexture.Reset();
-        for (auto &slot : phase3ReadbackSlots) {
+        cachedRtv.Reset(); cachedTextureSrv.Reset(); cachedTexture.Reset();
+        for (auto &slot : phase3ReadbackSlots {
             slot.staging.Reset(); slot.completion.Reset(); slot.pending = false;
         }
         phase3AsyncPending = 0;
@@ -178,7 +319,7 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
         D3D11_TEXTURE2D_DESC td{};
         td.Width = UINT(width); td.Height = UINT(height); td.MipLevels = 1; td.ArraySize = 1;
         td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1;
-        td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET;
+        td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
         HRESULT createHr = device->CreateTexture2D(&td, nullptr, cachedTexture.GetAddressOf());
         if (FAILED(createHr)) {
             ++failedFrames;
@@ -191,6 +332,8 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
             renderError = QStringLiteral("CreateRenderTargetView failed: %1").arg(hexResult(createHr));
             return false;
         }
+        createHr = device->CreateShaderResourceView(cachedTexture.Get(), nullptr, cachedTextureSrv.GetAddressOf());
+        if (FAILED(createHr)) { ++failedFrames; renderError = QStringLiteral("Create render-target SRV failed: %1").arg(hexResult(createHr)); return false; }
         D3D11_TEXTURE2D_DESC sd = td;
         sd.Usage = D3D11_USAGE_STAGING; sd.BindFlags = 0;
         sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
@@ -269,6 +412,16 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     context->Draw(UINT(cachedVertices.size()), 0);
     context->OMSetRenderTargets(0, nullptr, nullptr);
     lastDrawSubmitMs = drawTimer.nsecsElapsed() / 1000000.0;
+    // Phase 6E.1: same-device swap-chain presentation bypasses staging readback.
+    if (nativePreviewReady && presentNativeTexture()) {
+        lastCopyMapMs = 0.0; phase3AsyncPollMs = 0.0; phase3CpuCopyMs = 0.0;
+        phase3AsyncFlushMs = 0.0; lastReadbackMs = 0.0;
+        lastRenderMs = totalTimer.nsecsElapsed() / 1000000.0;
+        ++successfulFrames; if (background && !background->isNull()) ++compositedFrames;
+        averageRenderMs += (lastRenderMs - averageRenderMs) / double(successfulFrames);
+        return true;
+    }
+    if (nativePreviewReady) { nativePreviewReady = false; if (nativePresentError.isEmpty()) nativePresentError = QStringLiteral("Native present failed; Phase 6D fallback active."); }
     // Poll completed Phase 3 readbacks without flushing or waiting for the GPU.
     QElapsedTimer asyncPollTimer; asyncPollTimer.start();
     phase3CpuCopyMs = 0.0;
@@ -613,6 +766,7 @@ QString GpuRenderer::runtimeStats() const
                           "Phase 3 resources: rebuilt %7 | reused %8 | cache: %9 x %10\n"
                           "Last resource lookup/create: %11 ms | draw submission: %12 ms | copy+map wait: %13 ms\n"
                           "Phase 4A composite frames: %14 | last video upload: %15 ms\n"
+                          "Phase 6E.1 native presentation: %41 | frames %42 | CPU present %43 ms | %44\n"
                           "Phase 5 D3D11 Bokeh radial-shader frames: %17\n"
                           "Phase 6A Bokeh CPU path: last %18 ms | average %19 ms | draw submit %20 ms | readback %21 ms\n"
                           "Phase 6B GPU draw: last %22 ms | average %23 ms | samples %24 | %25\n"
@@ -655,7 +809,11 @@ QString GpuRenderer::runtimeStats() const
         .arg(phase3AsyncPollMs, 0, 'f', 3)
         .arg(phase3CpuCopyMs, 0, 'f', 3)
         .arg(bokehAsyncFlushMs, 0, 'f', 3)
-        .arg(phase3AsyncFlushMs, 0, 'f', 3);
+        .arg(phase3AsyncFlushMs, 0, 'f', 3)
+        .arg(nativePreviewReady ? QStringLiteral("ACTIVE") : QStringLiteral("fallback/off"))
+        .arg(nativePresentFrames)
+        .arg(nativePresentCpuMs, 0, 'f', 3)
+        .arg(nativePresentError.isEmpty() ? QStringLiteral("none") : nativePresentError);
 }
 
 QString GpuRenderer::diagnostics() const
@@ -663,7 +821,7 @@ QString GpuRenderer::diagnostics() const
     if (!attempted) return QStringLiteral("Direct3D 11 has not been initialized.");
     if (!available) return QStringLiteral("Direct3D 11 unavailable: %1\nCurrent CPU preview remains active.").arg(errorMessage);
     return QStringLiteral("Direct3D 11 device: READY\nAdapter: %1\nFeature level: %2\nDriver: %3\nGPU Spectrum bar renderer: %4\n\n"
-                          "Phase 4A hybrid: video is uploaded to a cached D3D11 render target and Spectrum is composited on GPU.\nPhase 5: circular Bokeh uses a D3D11 radial pixel shader when enabled; the overlay is read back to a QImage for Qt composition. Hexagon/Heart and two-color Gradient retain the Qt fallback. This is NOT zero-copy presentation.")
+                          "Phase 4A uploads CPU-prepared video to a cached D3D11 render target. Phase 6E.1 can present the composited target through a same-device DXGI swap chain without staging readback; Qt video conversion and upload still remain.")
         .arg(adapterName, featureLevelName, hardware ? QStringLiteral("Hardware GPU") : QStringLiteral("WARP software fallback"),
              pipelineReady ? QStringLiteral("READY") : QStringLiteral("not ready: %1").arg(renderError))
         + QStringLiteral("\n\nRuntime rendering statistics:\n") + runtimeStats();
