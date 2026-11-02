@@ -198,7 +198,7 @@ void GpuRenderer::disableNativePresentation()
     nativeCopyPixelShader.Reset(); nativeCopyVertexShader.Reset();
 #endif
     nativePreviewHwnd = nullptr; nativePreviewWidth = nativePreviewHeight = 0;
-    nativePreviewReady = false;
+    nativePreviewReady = false; nativeFramePresented = false;
 }
 bool GpuRenderer::nativePresentationActive() const { return nativeFramePresented; }
 QString GpuRenderer::nativePresentationError() const { return nativePresentError; }
