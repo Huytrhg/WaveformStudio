@@ -23,6 +23,34 @@
 #ifdef Q_OS_WIN
 #include <windows.h>
 #endif
+
+#ifdef Q_OS_WIN
+namespace {
+LRESULT CALLBACK waveformNativePreviewProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    if (message == WM_ERASEBKGND) return 1;
+    if (message == WM_PAINT) {
+        PAINTSTRUCT ps{};
+        BeginPaint(hwnd, &ps);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+bool registerWaveformNativePreviewClass()
+{
+    static const wchar_t className[] = L"WaveformStudioNativePreviewSurface";
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = waveformNativePreviewProc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = className;
+    if (RegisterClassExW(&wc)) return true;
+    return GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+}
+}
+#endif
 #include <QElapsedTimer>
 
 #include <QAudioOutput>
@@ -1095,8 +1123,10 @@ private:
     void ensureNativePreviewWindow()
     {
         if (nativePreviewHwnd || width() < 1 || height() < 1) return;
+        if (!registerWaveformNativePreviewClass()) return;
         HWND parentHwnd = reinterpret_cast<HWND>(winId());
-        nativePreviewHwnd = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+        nativePreviewHwnd = CreateWindowExW(0, L"WaveformStudioNativePreviewSurface", L"",
+            WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
             0, 0, width(), height(), parentHwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
         if (nativePreviewHwnd)
             SetWindowPos(nativePreviewHwnd, HWND_TOP, 0, 0, width(), height(), SWP_NOACTIVATE | SWP_HIDEWINDOW);
