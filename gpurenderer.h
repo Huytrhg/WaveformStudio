@@ -33,6 +33,10 @@ public:
                             int softness, QImage *output);
     QString lastRenderError() const;
     QString runtimeStats() const;
+    bool configureNativePresentation(void *nativeWindow, int width, int height);
+    void disableNativePresentation();
+    bool nativePresentationActive() const;
+    QString nativePresentationError() const;
 
 private:
     GpuRenderer() = default;
@@ -88,6 +92,9 @@ private:
     QString bokehGpuTimingStatus = QStringLiteral("initializing");
     int cachedWidth = 0;
     int cachedHeight = 0;
+    quint64 nativePresentFrames = 0;
+    double nativePresentCpuMs = 0.0;
+    QString nativePresentError;
 
 #ifdef Q_OS_WIN
     struct Vertex { float x, y, r, g, b, a; };
@@ -102,6 +109,20 @@ private:
     Microsoft::WRL::ComPtr<ID3D11BlendState> blendState;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> cachedTexture;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> cachedRtv;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> cachedTextureSrv;
+    Microsoft::WRL::ComPtr<IDXGISwapChain> nativeSwapChain;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> nativeBackBufferRtv;
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> nativeCopyVertexShader;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> nativeCopyPixelShader;
+    Microsoft::WRL::ComPtr<ID3D11InputLayout> nativeCopyInputLayout;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> nativeCopyVertexBuffer;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> nativeCopySampler;
+    HWND nativePreviewHwnd = nullptr;
+    int nativePreviewWidth = 0, nativePreviewHeight = 0;
+    bool nativePreviewReady = false;
+    bool createNativeSwapChain(int width, int height);
+    bool createNativeBackBuffer();
+    bool presentNativeTexture();
     struct Phase3ReadbackSlot {
         Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
         Microsoft::WRL::ComPtr<ID3D11Query> completion;
