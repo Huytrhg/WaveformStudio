@@ -771,7 +771,10 @@ protected:
 
         QPainter p(this);
 #ifdef Q_OS_WIN
-        if (nativePreviewHwnd && visualMode != 0 && visualMode != 4) ShowWindow(nativePreviewHwnd, SW_HIDE);
+        if (nativePreviewHwnd && visualMode != 0 && visualMode != 4) {
+            ShowWindow(nativePreviewHwnd, SW_HIDE);
+            GpuRenderer::instance().disableNativePresentation();
+        }
 #endif
         p.setRenderHint(QPainter::Antialiasing, true);
         p.setCompositionMode(QPainter::CompositionMode_SourceOver);
@@ -785,7 +788,10 @@ protected:
         }
         if (bands.isEmpty() || width() < 2 || height() < 2) {
 #ifdef Q_OS_WIN
-            if (nativePreviewHwnd) ShowWindow(nativePreviewHwnd, SW_HIDE);
+            if (nativePreviewHwnd) {
+                ShowWindow(nativePreviewHwnd, SW_HIDE);
+                GpuRenderer::instance().disableNativePresentation();
+            }
 #endif
             return;
         }
