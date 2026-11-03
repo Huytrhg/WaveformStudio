@@ -866,13 +866,9 @@ protected:
             diagnosticFrameCount = 0;
             diagnosticsClock.restart();
         }
-        // Stability fix: do not present a D3D11 swap chain directly into this
-        // Qt-owned widget HWND. On some Windows/Qt Multimedia configurations,
-        // Qt repaints and the native swap chain compete for the same surface,
-        // causing the preview to flash while audio continues normally.
-        // Keep the native presenter implementation available for a future
-        // integration using a dedicated native child window, but use the
-        // stable Qt paint path for all preview modes for now.
+        // Phase 6E: DXGI presents into a dedicated native child HWND rather
+        // than the Qt-owned widget surface. Qt paints the fallback path; the
+        // compact native HUD is a separate child above the swap-chain surface.
 
         QPainter p(this);
 #ifdef Q_OS_WIN
