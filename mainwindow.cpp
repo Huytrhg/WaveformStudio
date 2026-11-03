@@ -808,6 +808,20 @@ private:
 
 protected:
 #ifdef Q_OS_WIN
+    bool event(QEvent *event) override
+    {
+        const bool nativeHandleChanged = event->type() == QEvent::WinIdChange;
+        const bool handled = QWidget::event(event);
+        if (nativeHandleChanged) {
+            GpuRenderer::instance().disableNativePresentation();
+            if (nativeHudHwnd && IsWindow(nativeHudHwnd)) DestroyWindow(nativeHudHwnd);
+            if (nativePreviewHwnd && IsWindow(nativePreviewHwnd)) DestroyWindow(nativePreviewHwnd);
+            nativeHudHwnd = nullptr;
+            nativePreviewHwnd = nullptr;
+            if (isVisible()) ensureNativePreviewWindow();
+        }
+        return handled;
+    }
     void showEvent(QShowEvent *event) override
     {
         QWidget::showEvent(event);
@@ -1074,7 +1088,7 @@ protected:
             const bool nativePresented = GpuRenderer::instance().nativePresentationActive();
             if (nativePreviewHwnd) {
                 ShowWindow(nativePreviewHwnd, nativePresented ? SW_SHOWNA : SW_HIDE);
-                updateNativeHud(nativePresented, QString());
+                if (!nativePresented) updateNativeHud(false, QString());
             }
 #else
             const bool nativePresented = false;
