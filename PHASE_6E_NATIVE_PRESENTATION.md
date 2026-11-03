@@ -19,7 +19,18 @@ Implemented on branch `feature/b4.3.3-gaussian-glow-filled`.
 
 This is **not end-to-end zero-copy**. Qt Multimedia still converts decoded video frames to `QImage`; the preview still uploads the CPU-prepared background into the D3D11 render target. Phase 6E.1 removes the final D3D11 staging readback for successfully native-presented frames only.
 
-The Qt HUD and other QWidget-painted decorations are behind the dedicated native child surface while native presentation is visible. Overlay/HUD lifecycle and composition are a Phase 6E.2 task.
+The preview HUD is now implemented as a small native child window parented directly to the DXGI preview HWND. It stays above the swap-chain surface, occupies only the top-left HUD area, and returns HTTRANSPARENT so it does not consume mouse input. When native presentation falls back, the native HUD is hidden and the existing Qt-painted HUD remains available. Phase 6E.2 also hides/disables native presentation during widget hide/minimize and reactivates it after restore; it repositions child surfaces on resize and recreates them after a QWidget native-handle change.
+
+## Phase 6E.2 — Native HUD and lifecycle
+
+Implemented on the same feature branch.
+
+- Added a dedicated Win32 HUD child window above the DXGI preview child window. The HUD draws the current renderer status and preview FPS using GDI; no additional graphics library or D3D rendering pass is required.
+- The HUD is sized to the label rather than covering the full preview. `WM_NCHITTEST` returns `HTTRANSPARENT`, and `WM_MOUSEACTIVATE` returns `MA_NOACTIVATE`.
+- The Qt HUD remains the fallback when native presentation is inactive or the selected visualizer uses Qt painting.
+- Added hide/minimize handling to hide the native surfaces and release the swap chain; restore causes the preview to be initialized again on the next paint.
+- Resize updates the preview child HWND and HUD geometry. `QEvent::WinIdChange` destroys stale child handles and recreates the preview child.
+- The existing D3D11 render/composite path, supported modes (Bars and Dancing Particles), Bokeh composition, and Phase 6D fallback are unchanged.
 
 ### Test plan in Qt Creator
 
@@ -30,10 +41,13 @@ The Qt HUD and other QWidget-painted decorations are behind the dedicated native
    - `Phase 6E.1 native presentation: ACTIVE`
    - `frames` should increase while the preview is playing.
    - `Phase 6D Spectrum async readback queued` should stop increasing during native-presented frames (completed/pending counters may retain their earlier values).
-5. Resize the preview / main window, minimize and restore, and reopen a video.
-6. Switch to Waveform, Circular, or another Qt-rendered mode and confirm the native child surface hides.
-7. Force the native presenter to fail only in a controlled development test; verify the Phase 6D asynchronous readback path resumes.
+5. Confirm the native HUD is visible at the top-left of the preview, updates its frame count/FPS, and does not block mouse input.
+6. Resize the preview / main window and confirm both the native preview and HUD remain correctly aligned.
+7. Minimize and restore the main window; confirm the native preview and HUD return without flashing, stale surfaces, or errors.
+8. Switch to Waveform, Circular, or another Qt-rendered mode and confirm the native preview/HUD hide and the Qt HUD remains visible.
+9. Reopen a video and repeat the mode/resize checks.
+10. Force the native presenter to fail only in a controlled development test; verify the Phase 6D asynchronous readback path resumes.
 
 ### Build and runtime validation
 
-The source changes are committed, but they have **not** been compiled or run on the user's Windows/Qt 6.12 machine. Treat the first Qt Creator build and preview test as required validation before enabling this path for regular use.
+The Phase 6E.1 and 6E.2 source changes are committed, but they have **not** been compiled or run on the user's Windows/Qt 6.12 machine. Treat the first Qt Creator build and the test plan above as required validation before enabling this path for regular use.
