@@ -44,7 +44,7 @@ Implemented on the same feature branch.
 5. Confirm the native HUD is visible at the top-left of the preview, updates its frame count/FPS, and does not block mouse input.
 6. Resize the preview / main window and confirm both the native preview and HUD remain correctly aligned.
 7. Minimize and restore the main window; confirm the native preview and HUD return without flashing, stale surfaces, or errors.
-8. Switch to Waveform, Circular, or another Qt-rendered mode and confirm the native preview/HUD hide and the Qt HUD remains visible.
+8. Switch to Waveform, Circular, or another Qt-rendered mode and confirm the native preview/HUD hide and Qt-rendered visualizer output is visible. When Bars or Dancing Particles use the Qt fallback, the existing QPainter HUD should remain visible.
 9. Reopen a video and repeat the mode/resize checks.
 10. Force the native presenter to fail only in a controlled development test; verify the Phase 6D asynchronous readback path resumes.
 
