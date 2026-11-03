@@ -462,10 +462,21 @@ public:
         if (!motionTimer->isActive()) motionTimer->start();
     }
     void setMessage(const QString &text) { message = text; update(); }
-    void setVisualMode(int mode) { visualMode = qBound(0, mode, 4); update(); }
+    void setVisualMode(int mode)
+    {
+        const int nextMode = qBound(0, mode, 4);
+        if (visualMode != nextMode) resetPhase6fRenderStats();
+        visualMode = nextMode;
+        update();
+    }
     void setPosition(int x, int y) { positionX = qBound(0, x, 100); positionY = qBound(0, y, 100); update(); }
     void setOpacityPercent(int value) { opacityPercent = qBound(0, value, 100); update(); }
-    void setForceCpuFallback(bool enabled) { forceCpuFallback = enabled; update(); }
+    void setForceCpuFallback(bool enabled)
+    {
+        if (forceCpuFallback != enabled) resetPhase6fRenderStats();
+        forceCpuFallback = enabled;
+        update();
+    }
     QString diagnosticsText() const
     {
         const QString modeName = visualMode == 0 ? QStringLiteral("Bars")
@@ -511,7 +522,7 @@ public:
             .arg(qtSpectrumSamples);
         return QStringLiteral("Preview mode: %1\nMeasured paint rate: %2 FPS\n\n%3\n%4")
             .arg(forceCpuFallback ? QStringLiteral("CPU fallback (QPainter)")
-                                  : QStringLiteral("Hybrid GPU (D3D11 composite + readback)"))
+                                  : QStringLiteral("Hybrid GPU (D3D11; native presentation when supported)"))
             .arg(measuredFps, 0, 'f', 1)
             .arg(cpuStats)
             .arg(GpuRenderer::instance().diagnostics());
@@ -1261,6 +1272,22 @@ protected:
     }
 
 private:
+    void resetPhase6fRenderStats()
+    {
+        paintLastMs = paintAverageMs = paintMaxMs = 0.0;
+        paintSamples = 0;
+        scenePrepLastMs = scenePrepAverageMs = scenePrepMaxMs = 0.0;
+        scenePrepSamples = 0;
+        backgroundBuildLastMs = backgroundBuildAverageMs = backgroundBuildMaxMs = 0.0;
+        backgroundBuildSamples = 0;
+        qtSpectrumLastMs = qtSpectrumAverageMs = qtSpectrumMaxMs = 0.0;
+        qtSpectrumSamples = 0;
+        gpuBackgroundBuilds = 0;
+        diagnosticFrameCount = 0;
+        measuredFps = 0.0;
+        diagnosticsClock.restart();
+    }
+
     static void recordPhase6fTiming(qint64 elapsedNs, double &lastMs,
                                     double &averageMs, double &maxMs,
                                     quint64 &samples)
