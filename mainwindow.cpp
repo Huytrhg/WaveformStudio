@@ -66,6 +66,8 @@ LRESULT CALLBACK waveformNativeHudProc(HWND hwnd, UINT message, WPARAM wParam, L
         HPEN border = CreatePen(PS_SOLID, 1, RGB(58, 68, 78));
         HGDIOBJ oldBrush = SelectObject(dc, background);
         HGDIOBJ oldPen = SelectObject(dc, border);
+        // Initialize every pixel in the back buffer before drawing the border.
+        FillRect(dc, &rc, background);
         RoundRect(dc, rc.left, rc.top, rc.right, rc.bottom, 9, 9);
 
         wchar_t text[512]{};
