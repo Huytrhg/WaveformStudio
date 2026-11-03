@@ -49,9 +49,18 @@ LRESULT CALLBACK waveformNativeHudProc(HWND hwnd, UINT message, WPARAM wParam, L
     if (message == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
     if (message == WM_PAINT) {
         PAINTSTRUCT ps{};
-        HDC dc = BeginPaint(hwnd, &ps);
+        HDC targetDc = BeginPaint(hwnd, &ps);
         RECT rc{};
         GetClientRect(hwnd, &rc);
+        const int width = qMax(1L, rc.right - rc.left);
+        const int height = qMax(1L, rc.bottom - rc.top);
+
+        // Paint off-screen and blit once. This prevents visible tearing/flicker
+        // when the native preview is presenting at the same time.
+        HDC memoryDc = CreateCompatibleDC(targetDc);
+        HBITMAP bitmap = memoryDc ? CreateCompatibleBitmap(targetDc, width, height) : nullptr;
+        HGDIOBJ oldBitmap = bitmap ? SelectObject(memoryDc, bitmap) : nullptr;
+        HDC dc = bitmap ? memoryDc : targetDc;
 
         HBRUSH background = CreateSolidBrush(RGB(10, 14, 20));
         HPEN border = CreatePen(PS_SOLID, 1, RGB(58, 68, 78));
@@ -77,6 +86,12 @@ LRESULT CALLBACK waveformNativeHudProc(HWND hwnd, UINT message, WPARAM wParam, L
         SelectObject(dc, oldFont);
         SelectObject(dc, oldPen);
         SelectObject(dc, oldBrush);
+        if (bitmap) {
+            BitBlt(targetDc, 0, 0, width, height, memoryDc, 0, 0, SRCCOPY);
+            SelectObject(memoryDc, oldBitmap);
+            DeleteObject(bitmap);
+            DeleteDC(memoryDc);
+        }
         DeleteObject(font);
         DeleteObject(border);
         DeleteObject(background);
@@ -818,6 +833,9 @@ protected:
             if (nativePreviewHwnd && IsWindow(nativePreviewHwnd)) DestroyWindow(nativePreviewHwnd);
             nativeHudHwnd = nullptr;
             nativePreviewHwnd = nullptr;
+            nativeHudVisible = false;
+            nativeHudWidth = 0;
+            nativeHudLastText.clear();
             if (isVisible()) ensureNativePreviewWindow();
         }
         return handled;
@@ -840,7 +858,9 @@ protected:
             SetWindowPos(nativePreviewHwnd, HWND_TOP, 0, 0, width(), height(), SWP_NOACTIVATE);
         if (nativeHudHwnd && nativePreviewHwnd && width() > 40) {
             const int hudWidth = qMin(width() - 16, 640);
-            SetWindowPos(nativeHudHwnd, HWND_TOP, 8, 8, hudWidth, 28, SWP_NOACTIVATE);
+            nativeHudWidth = hudWidth;
+            SetWindowPos(nativeHudHwnd, HWND_TOP, 8, 8, hudWidth, 28,
+                         SWP_NOACTIVATE | SWP_NOZORDER);
         }
     }
     bool eventFilter(QObject *watched, QEvent *event) override
@@ -889,6 +909,21 @@ protected:
 #ifdef Q_OS_WIN
             if (nativePreviewHwnd) hideNativePreviewSurfaces();
 #endif
+            const QString idleHudText =
+                GpuRenderer::instance().runtimeStats().section('\n', 0, 0)
+                + QStringLiteral("  |  Preview FPS: %1").arg(measuredFps, 0, 'f', 1);
+            p.save();
+            p.setOpacity(0.92);
+            p.setFont(QFont(QStringLiteral("Consolas"), 9));
+            p.setPen(QColor(230, 240, 245));
+            p.setBrush(QColor(10, 14, 20, 205));
+            const QRect hudRect(8, 8, qMin(width() - 16, 640), 28);
+            if (hudRect.width() > 0 && hudRect.height() > 0) {
+                p.drawRoundedRect(hudRect, 5, 5);
+                p.drawText(hudRect.adjusted(8, 0, -6, 0),
+                           Qt::AlignVCenter | Qt::AlignLeft, idleHudText);
+            }
+            p.restore();
             return;
         }
 
@@ -1105,25 +1140,35 @@ protected:
             SpectrumRenderer::paint(p, QRectF(rect()), bands,
                                     currentRenderSettings(), peakLevels);
         }
-        if (visualMode == 0 || visualMode == 4) {
-            const QString gpuFrameLine = GpuRenderer::instance().runtimeStats().section('\n', 0, 0);
-            const QString fpsLine = QStringLiteral("Preview FPS: %1")
-                .arg(measuredFps, 0, 'f', 1);
-            const QString hudText = gpuFrameLine + QStringLiteral("  |  ") + fpsLine;
+        const QString gpuFrameLine = GpuRenderer::instance().runtimeStats().section('\n', 0, 0);
+        const QString fpsLine = QStringLiteral("Preview FPS: %1")
+            .arg(measuredFps, 0, 'f', 1);
+        const QString hudText = gpuFrameLine + QStringLiteral("  |  ") + fpsLine;
 #ifdef Q_OS_WIN
-            if (nativePreviewHwnd && GpuRenderer::instance().nativePresentationActive())
-                updateNativeHud(true, hudText);
-            else
-                updateNativeHud(false, QString());
+        const bool nativeHudActive = nativePreviewHwnd
+            && GpuRenderer::instance().nativePresentationActive();
+        if (nativeHudActive)
+            updateNativeHud(true, hudText);
+        else
+            updateNativeHud(false, QString());
+#else
+        const bool nativeHudActive = false;
 #endif
+        // Native DXGI frames need a child HWND HUD above the swap-chain surface.
+        // All Qt-rendered modes (including Waveform and Circular) use this
+        // QPainter HUD instead, so diagnostics remain visible on every mode.
+        if (!nativeHudActive) {
             p.save();
             p.setOpacity(0.92);
             p.setFont(QFont(QStringLiteral("Consolas"), 9));
             p.setPen(QColor(230, 240, 245));
             p.setBrush(QColor(10, 14, 20, 205));
             const QRect hudRect(8, 8, qMin(width() - 16, 640), 28);
-            p.drawRoundedRect(hudRect, 5, 5);
-            p.drawText(hudRect.adjusted(8, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft, hudText);
+            if (hudRect.width() > 0) {
+                p.drawRoundedRect(hudRect, 5, 5);
+                p.drawText(hudRect.adjusted(8, 0, -6, 0),
+                           Qt::AlignVCenter | Qt::AlignLeft, hudText);
+            }
             p.restore();
         }
         p.restore();
@@ -1232,6 +1277,9 @@ private:
 #ifdef Q_OS_WIN
     HWND nativePreviewHwnd = nullptr;
     HWND nativeHudHwnd = nullptr;
+    QString nativeHudLastText;
+    int nativeHudWidth = 0;
+    bool nativeHudVisible = false;
 
     void ensureNativePreviewWindow()
     {
@@ -1251,31 +1299,50 @@ private:
         // Parent the small HUD directly to the swap-chain child HWND. This
         // guarantees it remains above the DXGI surface without covering the
         // rest of the preview or intercepting mouse input.
-        nativeHudHwnd = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+        nativeHudHwnd = CreateWindowExW(WS_EX_NOACTIVATE,
             L"WaveformStudioNativePreviewHud", L"",
             WS_CHILD | WS_CLIPSIBLINGS,
             8, 8, qMin(width() - 16, 640), 28,
             nativePreviewHwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+        nativeHudWidth = qMin(width() - 16, 640);
+        nativeHudVisible = false;
+        nativeHudLastText.clear();
     }
 
     void updateNativeHud(bool visible, const QString &text)
     {
         if (!visible || width() < 80 || height() < 40) {
-            if (nativeHudHwnd) ShowWindow(nativeHudHwnd, SW_HIDE);
+            if (nativeHudHwnd && nativeHudVisible) ShowWindow(nativeHudHwnd, SW_HIDE);
+            nativeHudVisible = false;
             return;
         }
         ensureNativeHudWindow();
         if (!nativeHudHwnd) return;
-        SetWindowTextW(nativeHudHwnd, reinterpret_cast<LPCWSTR>(text.utf16()));
+
+        // Do not reset the window text or invalidate it on every video frame.
+        // FPS is sampled once per second, so the HUD only repaints when it changes.
+        if (nativeHudLastText != text) {
+            nativeHudLastText = text;
+            SetWindowTextW(nativeHudHwnd, reinterpret_cast<LPCWSTR>(text.utf16()));
+            InvalidateRect(nativeHudHwnd, nullptr, FALSE);
+        }
         const int hudWidth = qMin(width() - 16, 640);
-        SetWindowPos(nativeHudHwnd, HWND_TOP, 8, 8, hudWidth, 28,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        InvalidateRect(nativeHudHwnd, nullptr, FALSE);
+        if (nativeHudWidth != hudWidth) {
+            nativeHudWidth = hudWidth;
+            SetWindowPos(nativeHudHwnd, HWND_TOP, 8, 8, hudWidth, 28,
+                         SWP_NOACTIVATE | SWP_NOZORDER);
+        }
+        if (!nativeHudVisible) {
+            ShowWindow(nativeHudHwnd, SW_SHOWNOACTIVATE);
+            nativeHudVisible = true;
+            InvalidateRect(nativeHudHwnd, nullptr, FALSE);
+        }
     }
 
     void hideNativePreviewSurfaces()
     {
-        if (nativeHudHwnd) ShowWindow(nativeHudHwnd, SW_HIDE);
+        if (nativeHudHwnd && nativeHudVisible) ShowWindow(nativeHudHwnd, SW_HIDE);
+        nativeHudVisible = false;
         if (nativePreviewHwnd) {
             ShowWindow(nativePreviewHwnd, SW_HIDE);
             GpuRenderer::instance().disableNativePresentation();
