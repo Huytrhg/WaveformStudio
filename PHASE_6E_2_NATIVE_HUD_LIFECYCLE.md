@@ -9,10 +9,12 @@ Phase 6E.2 builds on the tested Phase 6E.1 DXGI presentation path. It does not c
 ## Native HUD overlay
 
 - A small Win32 child HWND is created as a child of the DXGI preview HWND, guaranteeing it is above the swap-chain surface.
-- The HUD displays the same first-line renderer statistics and preview FPS as the previous Qt HUD.
+- The HUD displays the first-line renderer statistics and preview FPS.
+- Native HUD text is refreshed at most once per second; the frame counter can advance internally without forcing a repaint on every frame.
+- Native HUD painting uses an off-screen compatible bitmap followed by one `BitBlt`, avoiding direct incremental drawing over the swap-chain surface.
 - It draws only its own compact top-left rectangle; it does not cover the rest of the video.
-- `WM_NCHITTEST` returns `HTTRANSPARENT`; `WM_MOUSEACTIVATE` returns `MA_NOACTIVATE`.
-- The native HUD is shown only after a successful native-presented frame. On Qt fallback, it is hidden and the existing QPainter HUD is used.
+- `WM_NCHITTEST` returns `HTTRANSPARENT`; `WM_MOUSEACTIVATE` returns `MA_NOACTIVATE`. The HUD does not request activation.
+- The native HUD is shown only after a successful native-presented frame. On Qt fallback, it is hidden and the QPainter HUD is shown for every visual mode, including Waveform and Circular.
 
 ## Lifecycle handling
 
@@ -33,8 +35,9 @@ Phase 6E.2 builds on the tested Phase 6E.1 DXGI presentation path. It does not c
 6. Resize the preview and main window repeatedly; confirm HUD alignment.
 7. Minimize and restore the main window; confirm preview/HUD return and native frame count resumes.
 8. Repeat with Dancing Particles.
-9. Switch to Waveform, Circular, and other Qt modes; confirm native HUD/preview hide and Qt HUD remains visible.
-10. Reopen another video and repeat.
+9. Switch to Waveform, Circular, and other Qt-rendered modes; confirm native presentation turns off and the QPainter HUD remains visible.
+10. Confirm the native HUD no longer flickers during Bars/Dancing Particles playback; its displayed frame count/FPS may update about once per second.
+11. Reopen another video and repeat.
 
 ## Validation status
 
