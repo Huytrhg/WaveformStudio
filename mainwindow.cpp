@@ -299,17 +299,33 @@ public:
         connect(videoSink, &QVideoSink::videoFrameChanged, this,
                 [this](const QVideoFrame &frame) {
                     if (!frame.isValid()) return;
+                    ++videoFramesReceived;
                     // Keep the preview video close to 30 FPS when frames are available.
                     // A 41 ms gate capped the video near 24 FPS and could look choppy
                     // even while Spectrum continued repainting smoothly.
-                    if (frameClock.isValid() && frameClock.elapsed() < 33) return;
+                    if (frameClock.isValid() && frameClock.elapsed() < 33) {
+                        ++videoFramesThrottled;
+                        return;
+                    }
                     frameClock.restart();
+                    QElapsedTimer conversionTimer;
+                    conversionTimer.start();
                     QImage image = frame.toImage();
+                    recordPhase6fTiming(conversionTimer.nsecsElapsed(),
+                        videoConvertLastMs, videoConvertAverageMs,
+                        videoConvertMaxMs, videoConvertSamples);
                     if (image.isNull()) return;
                     // Preview only: cap image size to reduce CPU painting cost.
                     const QSize limit(960, 540);
-                    if (image.width() > limit.width() || image.height() > limit.height())
+                    if (image.width() > limit.width() || image.height() > limit.height()) {
+                        QElapsedTimer scaleTimer;
+                        scaleTimer.start();
                         image = image.scaled(limit, Qt::KeepAspectRatio, Qt::FastTransformation);
+                        recordPhase6fTiming(scaleTimer.nsecsElapsed(),
+                            videoScaleLastMs, videoScaleAverageMs,
+                            videoScaleMaxMs, videoScaleSamples);
+                    }
+                    ++videoFramesAccepted;
                     videoImage = std::move(image);
                     gpuBackgroundDirty = true;
                     update();
@@ -452,10 +468,52 @@ public:
     void setForceCpuFallback(bool enabled) { forceCpuFallback = enabled; update(); }
     QString diagnosticsText() const
     {
-        return QStringLiteral("Preview mode: %1\nMeasured paint rate: %2 FPS\n\n%3")
+        const QString modeName = visualMode == 0 ? QStringLiteral("Bars")
+            : visualMode == 1 ? QStringLiteral("Waveform")
+            : visualMode == 2 ? QStringLiteral("Circular")
+            : visualMode == 3 ? QStringLiteral("Filled")
+                              : QStringLiteral("Dancing Particles");
+        const QString cpuStats = QStringLiteral(
+            "Phase 6F CPU preview profiling (since preview start)\n"
+            "Mode: %1 | paint FPS: %2 | paint last/avg/max: %3 / %4 / %5 ms | samples: %6\n"
+            "Video frames: received %7 | accepted %8 | throttled by 33 ms gate %9\n"
+            "QVideoFrame to QImage: last/avg/max %10 / %11 / %12 ms | samples: %13\n"
+            "Video downscale: last/avg/max %14 / %15 / %16 ms | samples: %17\n"
+            "Visualizer scene preparation: last/avg/max %18 / %19 / %20 ms | samples: %21\n"
+            "Cached video background rebuild: last/avg/max %22 / %23 / %24 ms | builds: %25\n"
+            "Qt SpectrumRenderer paint: last/avg/max %26 / %27 / %28 ms | samples: %29\n\n")
+            .arg(modeName)
+            .arg(measuredFps, 0, 'f', 1)
+            .arg(paintLastMs, 0, 'f', 3)
+            .arg(paintAverageMs, 0, 'f', 3)
+            .arg(paintMaxMs, 0, 'f', 3)
+            .arg(paintSamples)
+            .arg(videoFramesReceived).arg(videoFramesAccepted).arg(videoFramesThrottled)
+            .arg(videoConvertLastMs, 0, 'f', 3)
+            .arg(videoConvertAverageMs, 0, 'f', 3)
+            .arg(videoConvertMaxMs, 0, 'f', 3)
+            .arg(videoConvertSamples)
+            .arg(videoScaleLastMs, 0, 'f', 3)
+            .arg(videoScaleAverageMs, 0, 'f', 3)
+            .arg(videoScaleMaxMs, 0, 'f', 3)
+            .arg(videoScaleSamples)
+            .arg(scenePrepLastMs, 0, 'f', 3)
+            .arg(scenePrepAverageMs, 0, 'f', 3)
+            .arg(scenePrepMaxMs, 0, 'f', 3)
+            .arg(scenePrepSamples)
+            .arg(backgroundBuildLastMs, 0, 'f', 3)
+            .arg(backgroundBuildAverageMs, 0, 'f', 3)
+            .arg(backgroundBuildMaxMs, 0, 'f', 3)
+            .arg(gpuBackgroundBuilds)
+            .arg(qtSpectrumLastMs, 0, 'f', 3)
+            .arg(qtSpectrumAverageMs, 0, 'f', 3)
+            .arg(qtSpectrumMaxMs, 0, 'f', 3)
+            .arg(qtSpectrumSamples);
+        return QStringLiteral("Preview mode: %1\nMeasured paint rate: %2 FPS\n\n%3\n%4")
             .arg(forceCpuFallback ? QStringLiteral("CPU fallback (QPainter)")
                                   : QStringLiteral("Hybrid GPU (D3D11 composite + readback)"))
             .arg(measuredFps, 0, 'f', 1)
+            .arg(cpuStats)
             .arg(GpuRenderer::instance().diagnostics());
     }
     void setScalePercent(int value) { scalePercent = qBound(20, value, 100); update(); }
@@ -884,6 +942,8 @@ protected:
 #endif
     void paintEvent(QPaintEvent *) override
     {
+        QElapsedTimer paintTimer;
+        paintTimer.start();
         ++diagnosticFrameCount;
         if (!diagnosticsClock.isValid()) diagnosticsClock.start();
         else if (diagnosticsClock.elapsed() >= 1000) {
@@ -929,6 +989,8 @@ protected:
                            Qt::AlignVCenter | Qt::AlignLeft, idleHudText);
             }
             p.restore();
+            recordPhase6fTiming(paintTimer.nsecsElapsed(),
+                paintLastMs, paintAverageMs, paintMaxMs, paintSamples);
             return;
         }
 
@@ -940,6 +1002,8 @@ protected:
         const qreal maxH = height() * 0.42 * (scalePercent / 72.0) * (heightPercent / 100.0);
 
         if (visualMode == 0 || visualMode == 4) { // Bars / Dancing Particles: shared D3D11 GPU path.
+            QElapsedTimer scenePrepTimer;
+            scenePrepTimer.start();
             const int count = columnCount;
             const qreal cellW = maxW / count;
             const qreal barW = visualMode == 4
@@ -1089,6 +1153,8 @@ protected:
             // this full-size image on every Spectrum tick.
             if (gpuBackgroundDirty || cachedGpuBackground.size() != size()
                 || cachedGpuBackground.format() != QImage::Format_ARGB32) {
+                QElapsedTimer backgroundBuildTimer;
+                backgroundBuildTimer.start();
                 cachedGpuBackground = QImage(size(), QImage::Format_ARGB32);
                 cachedGpuBackground.fill(QColor("#101114"));
                 {
@@ -1098,6 +1164,9 @@ protected:
                 }
                 gpuBackgroundDirty = false;
                 ++gpuBackgroundBuilds;
+                recordPhase6fTiming(backgroundBuildTimer.nsecsElapsed(),
+                    backgroundBuildLastMs, backgroundBuildAverageMs,
+                    backgroundBuildMaxMs, backgroundBuildSamples);
             }
             // The GPU composite contains an opaque video background, so
             // QPainter::setOpacity() cannot fade only the Spectrum after the
@@ -1111,6 +1180,8 @@ protected:
                 gpuColor.setAlphaF(qBound(0.0, gpuColor.alphaF() * spectrumOpacity, 1.0));
             }
 
+            recordPhase6fTiming(scenePrepTimer.nsecsElapsed(),
+                scenePrepLastMs, scenePrepAverageMs, scenePrepMaxMs, scenePrepSamples);
             QImage gpuComposite;
 #ifdef Q_OS_WIN
             if (nativePreviewHwnd && !forceCpuFallback)
@@ -1136,14 +1207,22 @@ protected:
                 // B2: CPU Bars fallback shares the same drawing engine as export.
                 // Reset opacity: SpectrumRenderer applies its own opacity once.
                 p.setOpacity(1.0);
+                QElapsedTimer qtSpectrumTimer;
+                qtSpectrumTimer.start();
                 SpectrumRenderer::paint(p, QRectF(rect()), bands,
                                         currentRenderSettings(), peakLevels);
+                recordPhase6fTiming(qtSpectrumTimer.nsecsElapsed(),
+                    qtSpectrumLastMs, qtSpectrumAverageMs, qtSpectrumMaxMs, qtSpectrumSamples);
             }
         } else {
             // B2: Lines, Circular and Filled share one offscreen-capable renderer.
             p.setOpacity(1.0);
+            QElapsedTimer qtSpectrumTimer;
+            qtSpectrumTimer.start();
             SpectrumRenderer::paint(p, QRectF(rect()), bands,
                                     currentRenderSettings(), peakLevels);
+            recordPhase6fTiming(qtSpectrumTimer.nsecsElapsed(),
+                qtSpectrumLastMs, qtSpectrumAverageMs, qtSpectrumMaxMs, qtSpectrumSamples);
         }
         const QString gpuFrameLine = GpuRenderer::instance().runtimeStats().section('\n', 0, 0);
         const QString fpsLine = QStringLiteral("Preview FPS: %1")
@@ -1177,9 +1256,21 @@ protected:
             p.restore();
         }
         p.restore();
+        recordPhase6fTiming(paintTimer.nsecsElapsed(),
+            paintLastMs, paintAverageMs, paintMaxMs, paintSamples);
     }
 
 private:
+    static void recordPhase6fTiming(qint64 elapsedNs, double &lastMs,
+                                    double &averageMs, double &maxMs,
+                                    quint64 &samples)
+    {
+        lastMs = elapsedNs / 1000000.0;
+        maxMs = qMax(maxMs, lastMs);
+        ++samples;
+        averageMs += (lastMs - averageMs) / double(samples);
+    }
+
     SpectrumRenderSettings currentRenderSettings() const
     {
         SpectrumRenderSettings s;
@@ -1365,6 +1456,23 @@ private:
     QImage cachedGpuBackground;
     bool gpuBackgroundDirty = true;
     quint64 gpuBackgroundBuilds = 0;
+    // Phase 6F: CPU-side preview pipeline profiling. Averages/maxima are
+    // cumulative from the lifetime of this preview widget.
+    quint64 videoFramesReceived = 0;
+    quint64 videoFramesAccepted = 0;
+    quint64 videoFramesThrottled = 0;
+    double videoConvertLastMs = 0.0, videoConvertAverageMs = 0.0, videoConvertMaxMs = 0.0;
+    quint64 videoConvertSamples = 0;
+    double videoScaleLastMs = 0.0, videoScaleAverageMs = 0.0, videoScaleMaxMs = 0.0;
+    quint64 videoScaleSamples = 0;
+    double paintLastMs = 0.0, paintAverageMs = 0.0, paintMaxMs = 0.0;
+    quint64 paintSamples = 0;
+    double scenePrepLastMs = 0.0, scenePrepAverageMs = 0.0, scenePrepMaxMs = 0.0;
+    quint64 scenePrepSamples = 0;
+    double backgroundBuildLastMs = 0.0, backgroundBuildAverageMs = 0.0, backgroundBuildMaxMs = 0.0;
+    quint64 backgroundBuildSamples = 0;
+    double qtSpectrumLastMs = 0.0, qtSpectrumAverageMs = 0.0, qtSpectrumMaxMs = 0.0;
+    quint64 qtSpectrumSamples = 0;
     QElapsedTimer frameClock;
     QElapsedTimer diagnosticsClock;
     int diagnosticFrameCount = 0;
