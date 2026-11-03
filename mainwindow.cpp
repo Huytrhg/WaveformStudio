@@ -365,7 +365,9 @@ public:
                 changed = true;
             }
             if (changed) {
-                gpuBackgroundDirty = true;
+                // Spectrum smoothing alone does not change the cached video background.
+                // Invalidate it only when an audio-reactive background effect needs new values.
+                if (hasAudioReactiveBackgroundEffects()) gpuBackgroundDirty = true;
                 update();
             }
         });
@@ -452,7 +454,9 @@ public:
         };
         framePulseEnergy = smoothEnergy(framePulseEnergy, pulseSmoothing);
         frameGradientEnergy = smoothEnergy(frameGradientEnergy, edgeSmoothing);
-        gpuBackgroundDirty = true;
+        // Do not rebuild the full-size background for ordinary Spectrum animation.
+        // Only audio-reactive background effects consume these smoothed energy values.
+        if (hasAudioReactiveBackgroundEffects()) gpuBackgroundDirty = true;
         if (bands.size() != targetBands.size()) {
             bands = targetBands; // First sample: no ramp from stale values.
             peakLevels = targetBands;
@@ -1272,6 +1276,14 @@ protected:
     }
 
 private:
+    bool hasAudioReactiveBackgroundEffects() const
+    {
+        const bool animatedBokeh = bokehEnabled
+            && (bokehSpeed > 0 || bokehTwinkle > 0 || bokehAudioReactive);
+        return audioZoomEnabled || audioShakeEnabled || exposurePulseEnabled
+            || edgeGlowEnabled || animatedBokeh;
+    }
+
     void resetPhase6fRenderStats()
     {
         paintLastMs = paintAverageMs = paintMaxMs = 0.0;
