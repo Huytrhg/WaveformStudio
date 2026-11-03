@@ -32,7 +32,7 @@ The D3D11 diagnostics below these measurements continue to report the existing G
 - High **video downscale** time suggests preview image scaling is a candidate for a later targeted optimization.
 - Native Bars / Dancing Particles skip staging readback on successful Phase 6E.1 frames. Qt fallback modes and CPU fallback remain useful comparison cases.
 
-All timing averages and maxima are cumulative for the lifetime of the preview widget. The counters are diagnostic only and do not reset when switching visualizer modes. Compare the same video, preview dimensions, visualizer settings, and playback segment when collecting mode-to-mode measurements.
+Video-frame receive/conversion/downscale counters are cumulative for the lifetime of the preview widget because they measure the shared video input path. Render-side paint, scene-preparation, background-rebuild, and Qt-renderer statistics reset when the visualizer mode or CPU/GPU renderer path changes. After switching a mode/path, let playback run for 20–30 seconds before recording the new sample. Compare the same video, preview dimensions, visualizer settings, and playback segment when collecting mode-to-mode measurements.
 
 ## Qt Creator validation
 
