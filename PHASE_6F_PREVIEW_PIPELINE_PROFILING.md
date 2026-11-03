@@ -50,8 +50,32 @@ Video-frame receive/conversion/downscale counters are cumulative for the lifetim
 7. Keep the same video, preview size, resolution, and visualizer settings for comparisons.
 8. Confirm the visual preview, HUD, resize, minimize/restore, and export behavior remain unchanged.
 
+## Phase 6F.2 — avoid redundant background rebuilds
+
+The first user measurements showed:
+
+- Hybrid Bars: 25.2 FPS; scene preparation average 9.235 ms; cached background rebuild average 9.145 ms.
+- CPU fallback Bars: 21.5 FPS; Qt SpectrumRenderer paint average 1.722 ms.
+- Hybrid Dancing Particles: 25.7 FPS; scene preparation average 9.293 ms; background rebuild average 9.078 ms.
+- CPU fallback Dancing Particles: 25.4 FPS; Qt SpectrumRenderer paint average 1.644 ms.
+- Native GPU path averaged approximately 0.53–0.54 ms, with no fallback/errors; native Present CPU time was approximately 0.215–0.231 ms.
+
+The close match between scene-preparation and background-rebuild times indicated that rebuilding the full-size cached video background dominated the measured scene-preparation interval. In the existing code, ordinary Spectrum band smoothing and the 16 ms motion timer both marked the background dirty, even when no audio-reactive background effect was enabled. That caused redundant full-size QImage allocation and QPainter background composition between video frames.
+
+Phase 6F.2 changes invalidation behavior:
+
+- New video frames still invalidate the background cache.
+- Size changes still trigger a rebuild through the existing cache-size check.
+- Explicit background-effect setting changes still invalidate the cache.
+- Spectrum smoothing only invalidates the cache when an audio-reactive background effect is enabled (audio zoom, audio shake, exposure pulse, edge glow, or animated/audio-reactive Bokeh).
+- The motion timer follows the same conditional invalidation rule.
+- Bokeh's own animation timer continues to invalidate the background while animated Bokeh is active.
+
+This keeps dynamic background effects responsive while allowing static-background Bars / Dancing Particles to reuse the prepared background across Spectrum animation paints. The native presentation, D3D11 renderer, staging rings, export path, and video conversion path are not changed.
+
 ## Current status
 
 - Phase 6F.1 CPU instrumentation has been committed.
-- This environment has not compiled the project with the user's Windows / Qt 6.12 MSVC toolchain. A successful Qt Creator build and the runtime comparison above are still required.
-- No performance optimization is claimed in this profiling-only step. Phase 6F optimization should be selected only after reviewing the user's measured results.
+- Phase 6F.2 conditional background-cache invalidation has been committed.
+- This environment has not compiled the project with the user's Windows / Qt 6.12 MSVC toolchain. A successful Qt Creator build and runtime validation are still required.
+- Phase 6F.2 is expected to reduce the Cached video background rebuild count from roughly one per paint toward one per accepted video frame when no dynamic background effects are active. Actual FPS and timing improvements must be measured on the user's system; no build or performance result is claimed here.
