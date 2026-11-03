@@ -91,6 +91,8 @@ LRESULT CALLBACK waveformNativeHudProc(HWND hwnd, UINT message, WPARAM wParam, L
             SelectObject(memoryDc, oldBitmap);
             DeleteObject(bitmap);
             DeleteDC(memoryDc);
+        } else if (memoryDc) {
+            DeleteDC(memoryDc);
         }
         DeleteObject(font);
         DeleteObject(border);
@@ -836,6 +838,7 @@ protected:
             nativeHudVisible = false;
             nativeHudWidth = 0;
             nativeHudLastText.clear();
+            nativeHudRefreshClock.invalidate();
             if (isVisible()) ensureNativePreviewWindow();
         }
         return handled;
@@ -1278,6 +1281,7 @@ private:
     HWND nativePreviewHwnd = nullptr;
     HWND nativeHudHwnd = nullptr;
     QString nativeHudLastText;
+    QElapsedTimer nativeHudRefreshClock;
     int nativeHudWidth = 0;
     bool nativeHudVisible = false;
 
@@ -1307,6 +1311,7 @@ private:
         nativeHudWidth = qMin(width() - 16, 640);
         nativeHudVisible = false;
         nativeHudLastText.clear();
+        nativeHudRefreshClock.invalidate();
     }
 
     void updateNativeHud(bool visible, const QString &text)
@@ -1321,8 +1326,10 @@ private:
 
         // Do not reset the window text or invalidate it on every video frame.
         // FPS is sampled once per second, so the HUD only repaints when it changes.
-        if (nativeHudLastText != text) {
+        if (nativeHudLastText != text
+            && (!nativeHudRefreshClock.isValid() || nativeHudRefreshClock.elapsed() >= 1000)) {
             nativeHudLastText = text;
+            nativeHudRefreshClock.restart();
             SetWindowTextW(nativeHudHwnd, reinterpret_cast<LPCWSTR>(text.utf16()));
             InvalidateRect(nativeHudHwnd, nullptr, FALSE);
         }
