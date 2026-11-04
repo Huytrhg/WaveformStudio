@@ -169,6 +169,10 @@ bool registerWaveformNativeHudClass()
 #include <QMouseEvent>
 #include <QSettings>
 #include <QInputDialog>
+#include <QApplication>
+#include <QClipboard>
+#include <QDialog>
+#include <QPlainTextEdit>
 #include <QProcess>
 #include <QProgressDialog>
 #include <QScrollArea>
@@ -2323,9 +2327,40 @@ MainWindow::MainWindow(QWidget *parent)
             ? "Preview renderer: CPU fallback (QPainter)"
             : "Preview renderer: Hybrid GPU (D3D11 composite + readback)", 4000);
     });
-    connect(diagnosticsButton, &QPushButton::clicked, this, [overlay]() {
-        QMessageBox::information(nullptr, "WaveformStudio — Renderer Diagnostics",
-                                 overlay->diagnosticsText());
+    connect(diagnosticsButton, &QPushButton::clicked, this, [this, overlay]() {
+        // Capture one consistent text snapshot so the user can inspect it or
+        // copy the complete CPU + D3D11 report without opening other panels.
+        const QString diagnostics = overlay->diagnosticsText();
+
+        QDialog dialog(this);
+        dialog.setWindowTitle("WaveformStudio — Renderer Diagnostics");
+        dialog.resize(900, 640);
+
+        auto *dialogLayout = new QVBoxLayout(&dialog);
+        auto *textView = new QPlainTextEdit(&dialog);
+        textView->setReadOnly(true);
+        textView->setLineWrapMode(QPlainTextEdit::NoWrap);
+        textView->setPlainText(diagnostics);
+        dialogLayout->addWidget(textView, 1);
+
+        auto *buttonLayout = new QHBoxLayout;
+        buttonLayout->addStretch();
+        auto *copyButton = new QPushButton("Copy all diagnostics", &dialog);
+        auto *closeButton = new QPushButton("Close", &dialog);
+        buttonLayout->addWidget(copyButton);
+        buttonLayout->addWidget(closeButton);
+        dialogLayout->addLayout(buttonLayout);
+
+        connect(copyButton, &QPushButton::clicked, &dialog,
+                [this, diagnostics, copyButton]() {
+            QApplication::clipboard()->setText(diagnostics);
+            copyButton->setText("Copied to clipboard");
+            statusBar()->showMessage(
+                "Renderer diagnostics copied — paste them into the chat", 5000);
+        });
+        connect(closeButton, &QPushButton::clicked,
+                &dialog, &QDialog::accept);
+        dialog.exec();
     });
 
     // Populate the Photoshop-like editable gradient-stop list.
