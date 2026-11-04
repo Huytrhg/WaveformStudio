@@ -183,7 +183,7 @@ the existing 33 ms preview acceptance gate:
   minimum and maximum.
 - Counts of PTS gaps greater than 50 ms and 100 ms, duplicate timestamps,
   non-monotonic timestamps, and frames whose PTS is unavailable.
-- Frame-rate metadata from `QVideoFrame::surfaceFormat().frameRate()`, when Qt
+- Frame-rate metadata from `QVideoFrame::streamFrameRate()`, when Qt
   reports a positive value.
 
 PTS interval statistics include frames rejected by the 33 ms gate. This is
