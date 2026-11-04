@@ -314,38 +314,26 @@ public:
                     }
                     frameClock.restart();
 
-                    // Phase 6F.4: probe the mapped frame layout before Qt performs
-                    // its own toImage conversion. This is diagnostic only; the probe
-                    // does not read or modify pixel contents.
-                    QVideoFrame probeFrame(frame);
-                    QElapsedTimer mapTimer;
-                    mapTimer.start();
-                    const bool mapped = probeFrame.map(QVideoFrame::ReadOnly);
-                    recordPhase6fTiming(mapTimer.nsecsElapsed(),
-                        videoMapLastMs, videoMapAverageMs,
-                        videoMapMaxMs, videoMapSamples);
+                    // Phase 6F.5: inspect metadata only. Do not map the frame here:
+                    // mapping can force GPU-backed buffers into CPU-readable memory
+                    // and perturb the conversion timing being measured.
                     videoPixelFormat = QVideoFrameFormat::pixelFormatToString(frame.pixelFormat());
                     videoFrameWidth = frame.size().width();
                     videoFrameHeight = frame.size().height();
                     videoPlaneCount = frame.planeCount();
-                    videoPlaneLayout.clear();
-                    if (mapped) {
-                        for (int plane = 0; plane < qMin(videoPlaneCount, 4); ++plane) {
-                            if (!videoPlaneLayout.isEmpty()) videoPlaneLayout += QStringLiteral("; ");
-                            videoPlaneLayout += QStringLiteral("P%1 stride=%2 bytes=%3")
-                                .arg(plane)
-                                .arg(probeFrame.bytesPerLine(plane))
-                                .arg(probeFrame.mappedBytes(plane));
-                        }
-                        QElapsedTimer unmapTimer;
-                        unmapTimer.start();
-                        probeFrame.unmap();
-                        recordPhase6fTiming(unmapTimer.nsecsElapsed(),
-                            videoUnmapLastMs, videoUnmapAverageMs,
-                            videoUnmapMaxMs, videoUnmapSamples);
-                    } else {
-                        ++videoMapFailures;
-                        videoPlaneLayout = QStringLiteral("map failed");
+                    switch (frame.handleType()) {
+                    case QVideoFrame::NoHandle:
+                        videoHandleType = QStringLiteral("NoHandle");
+                        ++videoNoHandleFrames;
+                        break;
+                    case QVideoFrame::RhiTextureHandle:
+                        videoHandleType = QStringLiteral("RhiTextureHandle");
+                        ++videoRhiTextureFrames;
+                        break;
+                    default:
+                        videoHandleType = QStringLiteral("Other");
+                        ++videoOtherHandleFrames;
+                        break;
                     }
 
                     QElapsedTimer conversionTimer;
@@ -565,22 +553,13 @@ public:
             .arg(qtSpectrumMaxMs, 0, 'f', 3)
             .arg(qtSpectrumSamples);
         const QString videoFrameDetails = QStringLiteral(
-            "Phase 6F.4 video-frame probe\n"
-            "Frame format: %1 | size: %2 x %3 | planes: %4\n"
-            "Plane layout: %5\n"
-            "QVideoFrame map: last/avg/max %6 / %7 / %8 ms | samples: %9 | failures: %10\n"
-            "QVideoFrame unmap: last/avg/max %11 / %12 / %13 ms | samples: %14\n\n")
+            "Phase 6F.5 native frame capability audit (metadata only; no map)\\n"
+            "Frame format: %1 | size: %2 x %3 | planes: %4\\n"
+            "Handle type: %5 | NoHandle frames: %6 | RhiTextureHandle frames: %7 | other: %8\\n\\n")
             .arg(videoPixelFormat)
             .arg(videoFrameWidth).arg(videoFrameHeight).arg(videoPlaneCount)
-            .arg(videoPlaneLayout.isEmpty() ? QStringLiteral("not available") : videoPlaneLayout)
-            .arg(videoMapLastMs, 0, 'f', 3)
-            .arg(videoMapAverageMs, 0, 'f', 3)
-            .arg(videoMapMaxMs, 0, 'f', 3)
-            .arg(videoMapSamples).arg(videoMapFailures)
-            .arg(videoUnmapLastMs, 0, 'f', 3)
-            .arg(videoUnmapAverageMs, 0, 'f', 3)
-            .arg(videoUnmapMaxMs, 0, 'f', 3)
-            .arg(videoUnmapSamples);
+            .arg(videoHandleType)
+            .arg(videoNoHandleFrames).arg(videoRhiTextureFrames).arg(videoOtherHandleFrames);
         return QStringLiteral("Preview mode: %1\nMeasured paint rate: %2 FPS\n\n%3%4\n%5")
             .arg(forceCpuFallback ? QStringLiteral("CPU fallback (QPainter)")
                                   : QStringLiteral("Hybrid GPU (D3D11; native presentation when supported)"))
@@ -1560,12 +1539,9 @@ private:
     quint64 videoFramesThrottled = 0;
     double videoConvertLastMs = 0.0, videoConvertAverageMs = 0.0, videoConvertMaxMs = 0.0;
     quint64 videoConvertSamples = 0;
-    double videoMapLastMs = 0.0, videoMapAverageMs = 0.0, videoMapMaxMs = 0.0;
-    quint64 videoMapSamples = 0, videoMapFailures = 0;
-    double videoUnmapLastMs = 0.0, videoUnmapAverageMs = 0.0, videoUnmapMaxMs = 0.0;
-    quint64 videoUnmapSamples = 0;
     QString videoPixelFormat = QStringLiteral("unknown");
-    QString videoPlaneLayout;
+    QString videoHandleType = QStringLiteral("unknown");
+    quint64 videoNoHandleFrames = 0, videoRhiTextureFrames = 0, videoOtherHandleFrames = 0;
     int videoFrameWidth = 0, videoFrameHeight = 0, videoPlaneCount = 0;
     double videoScaleLastMs = 0.0, videoScaleAverageMs = 0.0, videoScaleMaxMs = 0.0;
     quint64 videoScaleSamples = 0;
