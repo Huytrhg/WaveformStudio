@@ -99,6 +99,37 @@ These results do not justify adding another broad cache throttle: accepted video
 5. Confirm the pasted report contains both the Phase 6F CPU section and the D3D11 section.
 6. Confirm preview playback, Bokeh, Audio Zoom, native presentation, and export behavior remain unchanged.
 
+## Phase 6F.4 — inspect the QVideoFrame mapping path
+
+Phase 6F.4 adds diagnostic-only measurements immediately before the existing `QVideoFrame::toImage()` call. It records:
+
+- Actual Qt pixel-format name, frame width/height, and plane count.
+- Per-plane stride and mapped byte count (up to four planes).
+- Time spent mapping a read-only copy of the accepted frame.
+- Time spent unmapping that probe frame, plus map failures.
+- The existing `QVideoFrame::toImage()` last / average / maximum timing remains available as the separate end-to-end conversion measurement.
+
+The probe maps a copy of the `QVideoFrame` handle in read-only mode, reads only layout metadata, then unmaps it. It does not modify frame pixels or replace the existing `toImage()` conversion. The probe timings are diagnostic measurements and must **not** be added to the `toImage()` time as if they were sequential sub-phases: Qt's internal conversion may use its own mapping path, and the probe itself may affect buffer readiness/cache state. Compare the map/unmap figures alongside the conversion average, not as an exact decomposition of it.
+
+### How to collect Phase 6F.4 data
+
+1. Pull the latest branch and build with the existing Qt 6.12 MSVC 2022 kit.
+2. Play the same MP4 for 20–30 seconds.
+3. Open **Preview → Diagnostics** and click **Copy all diagnostics**.
+4. Paste the complete report. Keep the video and preview dimensions unchanged when comparing runs.
+5. Include the frame format, dimensions, plane layout, map/unmap timings, and the existing conversion average/max.
+
+This phase does not change Bokeh rendering, D3D11 presentation, frame pacing, image scaling, export, or the selected video conversion method. It is not an export optimization and does not yet attempt direct GPU texture sharing or a format-specific conversion shortcut.
+
+### Decision gate after measurement
+
+- If map time is high, investigate the frame's memory/backend mapping cost before considering a different input path.
+- If map is cheap but `toImage()` remains high, inspect Qt's format conversion and color-space path for the reported pixel format.
+- If the frame is already in a GPU-backed or hardware surface format, determine whether the current Qt 6.12 Multimedia backend exposes a safe native-handle path before designing a D3D11 import.
+- Any later optimization must preserve a tested fallback for unsupported formats and verify color range, matrix, transfer characteristics, orientation, and frame lifetime.
+
+No conversion implementation has been changed in Phase 6F.4. No build or runtime result is claimed in this environment.
+
 ## Current status
 
 - Phase 6F.1 CPU instrumentation has been committed.
