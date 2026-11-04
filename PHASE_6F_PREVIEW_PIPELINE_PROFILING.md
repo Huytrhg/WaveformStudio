@@ -167,3 +167,44 @@ A future GPU-import prototype is justified only after confirming the actual back
 5. Keep preview dimensions and visualizer settings identical between the two tests.
 
 The Phase 6F.4 map/unmap timing fields are intentionally removed from the live diagnostics because the extra mapping was potentially intrusive. Its earlier captured measurements remain historical observations only and should not be treated as a clean baseline. Phase 6F.5 makes no claim that the project has been built or runtime-tested in this environment.
+
+
+## Phase 6F.6 — Temporal cadence profiling
+
+Phase 6F.6 adds metadata-only timing of the decoded video's presentation timestamps
+to explain differences between source videos that have similar resolution and pixel
+format but different preview frame cadence.
+
+The `QVideoSink::videoFrameChanged` callback now observes each valid frame before
+the existing 33 ms preview acceptance gate:
+
+- `QVideoFrame::startTime()` presentation timestamp (microseconds).
+- Positive inter-frame PTS intervals, reported in milliseconds as last, average,
+  minimum and maximum.
+- Counts of PTS gaps greater than 50 ms and 100 ms, duplicate timestamps,
+  non-monotonic timestamps, and frames whose PTS is unavailable.
+- Frame-rate metadata from `QVideoFrame::surfaceFormat().frameRate()`, when Qt
+  reports a positive value.
+
+PTS interval statistics include frames rejected by the 33 ms gate. This is
+important: they describe the decoded source-frame timeline rather than only the
+subset accepted for preview. A gap count is a threshold count, not proof of a
+decoder stall; interpret it together with the reported source frame rate and
+the actual test duration.
+
+No frame mapping, conversion, rendering, throttling, or export behavior is changed.
+The existing 33 ms gate remains intact. The profiling is cumulative for the
+lifetime of the preview widget, consistent with the Phase 6F.5 metadata audit.
+
+### Validation
+
+1. Build and run the current branch in the existing Qt 6.12 / MSVC environment.
+2. Play each comparison video for a similar duration (preferably 30–60 seconds).
+3. Open the preview diagnostics and record the Phase 6F.6 lines.
+4. Compare source FPS metadata and PTS interval average/min/max, then compare
+   >50 ms and >100 ms gap counts and PTS unavailable/duplicate/non-monotonic counts.
+5. Keep the visual mode and preview size the same for both tests.
+
+Do not change the preview gate or renderer based only on the older received/accepted/
+throttled totals. Use the timestamp profile first to determine whether the two
+sources actually deliver different presentation cadence.
