@@ -136,6 +136,7 @@ bool registerWaveformNativeHudClass()
 #include <QVideoWidget>
 #include <QVideoSink>
 #include <QVideoFrame>
+#include <QVideoFrameFormat>
 #include <QFileDialog>
 #include <QFile>
 #include <QFileInfo>
