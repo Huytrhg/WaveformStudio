@@ -137,3 +137,33 @@ No conversion implementation has been changed in Phase 6F.4. No build or runtime
 - Phase 6F.3 one-click copyable CPU + D3D11 diagnostics has been committed.
 - This environment has not compiled the project with the user's Windows / Qt 6.12 MSVC toolchain. A successful Qt Creator build and runtime validation are still required.
 - Phase 6F.2 is expected to reduce the Cached video background rebuild count from roughly one per paint toward one per accepted video frame when no dynamic background effects are active. Actual FPS and timing improvements must be measured on the user's system; no build or performance result is claimed here.
+
+## Phase 6F.5 — non-invasive native frame capability audit
+
+Phase 6F.5 replaces the per-frame map/unmap probe introduced in Phase 6F.4. The probe was useful for inspecting plane strides and mapped byte counts, but mapping a QVideoFrame can cause a GPU-backed or otherwise non-CPU-readable buffer to be transferred or copied into CPU-readable memory. The probe could therefore perturb the very preview and conversion timings it was intended to explain.
+
+The current audit reads metadata only, without calling map() or unmap():
+
+- Qt pixel format, frame dimensions, and plane count.
+- QVideoFrame::handleType() for the latest accepted frame.
+- Cumulative counts for NoHandle, RhiTextureHandle, and other handle types.
+
+The existing QVideoFrame::toImage() measurement remains in place. No frame pixels are read by the audit, and the original conversion, scaling, rendering, native presentation, and export paths are unchanged.
+
+### Interpreting the handle audit
+
+- NoHandle means the public QVideoFrame handle does not identify an exposed RHI texture. It does not prove that the decoder did all work on the CPU; the Qt Multimedia backend may still manage internal GPU resources.
+- RhiTextureHandle is evidence that the frame is represented by an RHI texture handle. It is a useful capability signal, but it does not by itself provide a safe, directly usable ID3D11Texture2D* for this application's existing D3D11 device.
+- Other is retained as a forward-compatible bucket for any handle type not explicitly classified here.
+
+A future GPU-import prototype is justified only after confirming the actual backend, native texture ownership/lifetime, device compatibility, synchronization, and color metadata. If the audit reports NoHandle, do not assume a direct D3D11 texture import is available through the public frame handle.
+
+### How to collect Phase 6F.5 data
+
+1. Pull the latest branch and build with the existing Qt 6.12 MSVC 2022 kit.
+2. Test the same video used for the prior measurement first, then test the alternate video separately.
+3. For each video, let playback run for 20–30 seconds and copy the complete Preview → Diagnostics report.
+4. Compare frame format, dimensions, plane count, handle type/counts, QVideoFrame to QImage timing, paint FPS, and the D3D11 runtime section.
+5. Keep preview dimensions and visualizer settings identical between the two tests.
+
+The Phase 6F.4 map/unmap timing fields are intentionally removed from the live diagnostics because the extra mapping was potentially intrusive. Its earlier captured measurements remain historical observations only and should not be treated as a clean baseline. Phase 6F.5 makes no claim that the project has been built or runtime-tested in this environment.
