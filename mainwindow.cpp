@@ -308,7 +308,7 @@ public:
                     // Phase 6F.6: observe source presentation timestamps before the
                     // preview throttle. Metadata only; no frame mapping or copying.
                     const qint64 framePtsUs = frame.startTime();
-                    const qreal sourceRate = frame.surfaceFormat().frameRate();
+                    const qreal sourceRate = frame.streamFrameRate();
                     if (sourceRate > 0.0) videoSourceFrameRate = sourceRate;
                     if (framePtsUs >= 0) {
                         if (lastVideoPtsUs >= 0) {
