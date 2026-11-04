@@ -305,6 +305,34 @@ public:
                 [this](const QVideoFrame &frame) {
                     if (!frame.isValid()) return;
                     ++videoFramesReceived;
+                    // Phase 6F.6: observe source presentation timestamps before the
+                    // preview throttle. Metadata only; no frame mapping or copying.
+                    const qint64 framePtsUs = frame.startTime();
+                    const qreal sourceRate = frame.surfaceFormat().frameRate();
+                    if (sourceRate > 0.0) videoSourceFrameRate = sourceRate;
+                    if (framePtsUs >= 0) {
+                        if (lastVideoPtsUs >= 0) {
+                            const qint64 intervalUs = framePtsUs - lastVideoPtsUs;
+                            if (intervalUs > 0) {
+                                videoPtsIntervalLastMs = intervalUs / 1000.0;
+                                videoPtsIntervalMinMs = videoPtsIntervalSamples == 0
+                                    ? videoPtsIntervalLastMs : qMin(videoPtsIntervalMinMs, videoPtsIntervalLastMs);
+                                videoPtsIntervalMaxMs = qMax(videoPtsIntervalMaxMs, videoPtsIntervalLastMs);
+                                ++videoPtsIntervalSamples;
+                                videoPtsIntervalAverageMs += (videoPtsIntervalLastMs - videoPtsIntervalAverageMs)
+                                    / double(videoPtsIntervalSamples);
+                                if (intervalUs > 50000) ++videoPtsGapsOver50ms;
+                                if (intervalUs > 100000) ++videoPtsGapsOver100ms;
+                            } else if (intervalUs == 0) {
+                                ++videoPtsDuplicate;
+                            } else {
+                                ++videoPtsNonMonotonic;
+                            }
+                        }
+                        lastVideoPtsUs = framePtsUs;
+                    } else {
+                        ++videoPtsUnavailable;
+                    }
                     // Keep the preview video close to 30 FPS when frames are available.
                     // A 41 ms gate capped the video near 24 FPS and could look choppy
                     // even while Spectrum continued repainting smoothly.
@@ -553,9 +581,20 @@ public:
             .arg(qtSpectrumMaxMs, 0, 'f', 3)
             .arg(qtSpectrumSamples);
         const QString videoFrameDetails = QStringLiteral(
+            "Phase 6F.6 temporal cadence profiling (QVideoFrame PTS; metadata only)\n"
+            "Source frame rate metadata: %1 FPS | PTS interval last/avg/min/max: %2 / %3 / %4 / %5 ms | samples: %6\n"
+            "PTS gaps >50 ms: %7 | >100 ms: %8 | duplicate: %9 | non-monotonic: %10 | unavailable: %11\n"
             "Phase 6F.5 native frame capability audit (metadata only; no map)\n"
-            "Frame format: %1 | size: %2 x %3 | planes: %4\n"
-            "Handle type: %5 | NoHandle frames: %6 | RhiTextureHandle frames: %7 | other: %8\n\n")
+            "Frame format: %12 | size: %13 x %14 | planes: %15\n"
+            "Handle type: %16 | NoHandle frames: %17 | RhiTextureHandle frames: %18 | other: %19\n\n")
+            .arg(videoSourceFrameRate, 0, 'f', 3)
+            .arg(videoPtsIntervalLastMs, 0, 'f', 3)
+            .arg(videoPtsIntervalAverageMs, 0, 'f', 3)
+            .arg(videoPtsIntervalSamples ? videoPtsIntervalMinMs : 0.0, 0, 'f', 3)
+            .arg(videoPtsIntervalMaxMs, 0, 'f', 3)
+            .arg(videoPtsIntervalSamples)
+            .arg(videoPtsGapsOver50ms).arg(videoPtsGapsOver100ms)
+            .arg(videoPtsDuplicate).arg(videoPtsNonMonotonic).arg(videoPtsUnavailable)
             .arg(videoPixelFormat)
             .arg(videoFrameWidth).arg(videoFrameHeight).arg(videoPlaneCount)
             .arg(videoHandleType)
@@ -1539,6 +1578,14 @@ private:
     quint64 videoFramesThrottled = 0;
     double videoConvertLastMs = 0.0, videoConvertAverageMs = 0.0, videoConvertMaxMs = 0.0;
     quint64 videoConvertSamples = 0;
+    // Phase 6F.6 PTS cadence counters include every valid frame, even throttled frames.
+    qint64 lastVideoPtsUs = -1;
+    double videoSourceFrameRate = 0.0;
+    double videoPtsIntervalLastMs = 0.0, videoPtsIntervalAverageMs = 0.0;
+    double videoPtsIntervalMinMs = 0.0, videoPtsIntervalMaxMs = 0.0;
+    quint64 videoPtsIntervalSamples = 0;
+    quint64 videoPtsGapsOver50ms = 0, videoPtsGapsOver100ms = 0;
+    quint64 videoPtsDuplicate = 0, videoPtsNonMonotonic = 0, videoPtsUnavailable = 0;
     QString videoPixelFormat = QStringLiteral("unknown");
     QString videoHandleType = QStringLiteral("unknown");
     quint64 videoNoHandleFrames = 0, videoRhiTextureFrames = 0, videoOtherHandleFrames = 0;
