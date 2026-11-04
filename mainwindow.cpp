@@ -553,9 +553,9 @@ public:
             .arg(qtSpectrumMaxMs, 0, 'f', 3)
             .arg(qtSpectrumSamples);
         const QString videoFrameDetails = QStringLiteral(
-            "Phase 6F.5 native frame capability audit (metadata only; no map)\\n"
-            "Frame format: %1 | size: %2 x %3 | planes: %4\\n"
-            "Handle type: %5 | NoHandle frames: %6 | RhiTextureHandle frames: %7 | other: %8\\n\\n")
+            "Phase 6F.5 native frame capability audit (metadata only; no map)\n"
+            "Frame format: %1 | size: %2 x %3 | planes: %4\n"
+            "Handle type: %5 | NoHandle frames: %6 | RhiTextureHandle frames: %7 | other: %8\n\n")
             .arg(videoPixelFormat)
             .arg(videoFrameWidth).arg(videoFrameHeight).arg(videoPlaneCount)
             .arg(videoHandleType)
