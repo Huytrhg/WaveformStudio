@@ -73,9 +73,36 @@ Phase 6F.2 changes invalidation behavior:
 
 This keeps dynamic background effects responsive while allowing static-background Bars / Dancing Particles to reuse the prepared background across Spectrum animation paints. The native presentation, D3D11 renderer, staging rings, export path, and video conversion path are not changed.
 
+## Phase 6F.3 — one-click text diagnostics and cache review
+
+The Preview panel's **Diagnostics** button now opens a selectable, read-only text report instead of a message-only popup. The report contains the complete Phase 6F CPU preview measurements followed by the D3D11 runtime diagnostics. **Copy all diagnostics** copies that same report to the system clipboard; the user can paste it directly into a chat or issue report. The report can also be selected and copied manually. No screenshot or manual transcription is required.
+
+The copy action captures one report snapshot when the dialog opens, so the text shown and copied are identical. This change is limited to diagnostics UI and clipboard handling; it does not change preview rendering, frame pacing, cache invalidation, GPU resources, native presentation, or export.
+
+### Review of the Phase 6F.2 measurements
+
+The follow-up measurements show that the cached background is already being rebuilt close to once per accepted video frame in the tested Bars run:
+
+- Hybrid Bars: 640 background builds / 651 accepted video frames.
+- Hybrid Dancing Particles: 631 background builds / 1,301 accepted video frames.
+- Scene preparation average fell from approximately 9.2 ms to 4.3–4.5 ms.
+- QVideoFrame-to-QImage conversion remains approximately 19.8–20.1 ms.
+
+These results do not justify adding another broad cache throttle: accepted video frames legitimately change the background, and audio-reactive effects can also require fresh background composition. Further reducing rebuilds without separating the static video layer from dynamic effect layers could introduce stale frames or delayed Bokeh / Audio Zoom response. Phase 6F.3 therefore preserves the current invalidation behavior and makes the complete measurements easier to collect. The next performance investigation should focus on the expensive QVideoFrame conversion path, with format/backend-aware measurements before changing its implementation.
+
+### Qt Creator validation
+
+1. Pull the latest branch and build with the existing Qt 6.12 MSVC 2022 kit.
+2. Play a video and open **Preview → Diagnostics**.
+3. Confirm the full CPU and D3D11 report is visible in a selectable text area.
+4. Click **Copy all diagnostics**, then paste into Notepad or directly into the chat.
+5. Confirm the pasted report contains both the Phase 6F CPU section and the D3D11 section.
+6. Confirm preview playback, Bokeh, Audio Zoom, native presentation, and export behavior remain unchanged.
+
 ## Current status
 
 - Phase 6F.1 CPU instrumentation has been committed.
 - Phase 6F.2 conditional background-cache invalidation has been committed.
+- Phase 6F.3 one-click copyable CPU + D3D11 diagnostics has been committed.
 - This environment has not compiled the project with the user's Windows / Qt 6.12 MSVC toolchain. A successful Qt Creator build and runtime validation are still required.
 - Phase 6F.2 is expected to reduce the Cached video background rebuild count from roughly one per paint toward one per accepted video frame when no dynamic background effects are active. Actual FPS and timing improvements must be measured on the user's system; no build or performance result is claimed here.
