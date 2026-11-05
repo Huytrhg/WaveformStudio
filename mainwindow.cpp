@@ -307,10 +307,11 @@ public:
                     ++videoFramesReceived;
                     if (videoFramesReceived == 1) videoProfilingClock.start();
                     // Phase 6F.7: measure callback arrival cadence independently of PTS.
-                    const qint64 callbackElapsedMs = videoCallbackClock.isValid()
-                        ? videoCallbackClock.restart() : -1;
-                    if (callbackElapsedMs >= 0) {
-                        videoCallbackIntervalLastMs = double(callbackElapsedMs);
+                    const qint64 callbackElapsedNs = videoCallbackClock.isValid()
+                        ? videoCallbackClock.nsecsElapsed() : -1;
+                    videoCallbackClock.restart();
+                    if (callbackElapsedNs >= 0) {
+                        videoCallbackIntervalLastMs = double(callbackElapsedNs) / 1000000.0;
                         videoCallbackIntervalMinMs = videoCallbackIntervalSamples == 0
                             ? videoCallbackIntervalLastMs
                             : qMin(videoCallbackIntervalMinMs, videoCallbackIntervalLastMs);
@@ -319,12 +320,10 @@ public:
                         videoCallbackIntervalAverageMs +=
                             (videoCallbackIntervalLastMs - videoCallbackIntervalAverageMs)
                             / double(videoCallbackIntervalSamples);
-                        if (callbackElapsedMs < 16) ++videoCallbackIntervalsUnder16;
-                        else if (callbackElapsedMs < 25) ++videoCallbackIntervals16To25;
-                        else if (callbackElapsedMs < 33) ++videoCallbackIntervals25To33;
+                        if (videoCallbackIntervalLastMs < 16.0) ++videoCallbackIntervalsUnder16;
+                        else if (videoCallbackIntervalLastMs < 25.0) ++videoCallbackIntervals16To25;
+                        else if (videoCallbackIntervalLastMs < 33.0) ++videoCallbackIntervals25To33;
                         else ++videoCallbackIntervalsOver33;
-                    } else {
-                        videoCallbackClock.start();
                     }
                     // Phase 6F.6: observe source presentation timestamps before the
                     // preview throttle. Metadata only; no frame mapping or copying.
