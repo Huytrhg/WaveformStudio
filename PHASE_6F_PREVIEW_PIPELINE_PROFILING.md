@@ -332,14 +332,14 @@ Windows / Qt 6.12 MSVC toolchain. Build and runtime validation remain required.
 ## Phase 6F.9 — PTS-aware preview frame pacing
 
 Phase 6F.9 replaces the preview's callback-wall-clock 33 ms rejection gate
-with source-PTS pacing. The target interval is 33,333 microseconds (approximately
+with source-PTS pacing. The target interval is 33,300 microseconds (approximately
 30 preview frames per second).
 
 For each valid incoming frame:
 
 1. Read its source presentation timestamp (PTS), as before.
 2. Compare that PTS with the PTS of the last frame actually accepted for preview.
-3. If the positive PTS distance is below 33,333 microseconds, skip conversion
+3. If the positive PTS distance is below 33,300 microseconds, skip conversion
    and return quickly. The next callback is evaluated against the same last
    presented PTS, so a burst of 16.666 ms frames can advance to the next eligible
    frame without requiring 33 ms of wall-clock callback spacing.
@@ -354,7 +354,7 @@ For each valid incoming frame:
    the next valid PTS starts a fresh baseline.
 
 This is a latest-eligible-frame policy: early callbacks do not incur image
-conversion, and when a burst reaches the 33.333 ms PTS threshold, the current
+conversion, and when a burst reaches the 33.300 ms PTS threshold, the current
 (newest received) frame is selected. It does not queue or convert every frame.
 The callback still handles each frame synchronously; no new worker thread,
 frame mapping, or extra image copy is introduced.
@@ -367,8 +367,8 @@ frame mapping, or extra image copy is introduced.
 - Duplicate PTS frames skipped.
 - PTS timeline resets.
 - Frames skipped by the PTS interval since the last presented frame, bucketed
-  into less than 20 ms, 20–30 ms, 30–33.333 ms, and duplicate/unknown.
-- Target PTS interval (33.333 ms).
+  into less than 20 ms, 20–30 ms, 30–33.300 ms, and duplicate/unknown.
+- Target PTS interval (33.300 ms).
 
 The existing callback-arrival/burst measurements remain available. Callback
 processing duration now includes conversion only for frames that pass the PTS
@@ -376,14 +376,14 @@ pacing decision; skipped callbacks should be much cheaper.
 
 ### Expected behavior and limitations
 
-- A stable 30 FPS source with approximately 33.333 ms PTS spacing should continue
+- A stable 30 FPS source with approximately 33.300 ms PTS spacing should continue
   to present nearly every source frame.
 - A 60 FPS source with approximately 16.666 ms PTS spacing should present about
   every second source frame, targeting 30 FPS.
 - Mixed 30/60 cadence should select the newest frame once the accumulated PTS
   distance reaches the target, rather than rejecting frames solely because
   callback delivery happened within 33 ms.
-- The 33.333 ms target is fixed in this phase; it is not dynamically derived
+- The 33.300 ms target is fixed in this phase; it is not dynamically derived
   from display refresh rate or audio analysis.
 - PTS is a media timeline, not a wall-clock deadline. This change improves
   selection under callback bursts but does not guarantee that Qt delivers frames
