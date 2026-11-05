@@ -299,20 +299,43 @@ public:
         setAttribute(Qt::WA_AlwaysStackOnTop, false);
         setAutoFillBackground(false);
         effectClock.start();
+        videoProfilingClock.start();
         setToolTip("Spectrum Overlay — Bars / Waveform / Circular");
         videoSink = new QVideoSink(this);
         connect(videoSink, &QVideoSink::videoFrameChanged, this,
                 [this](const QVideoFrame &frame) {
                     if (!frame.isValid()) return;
                     ++videoFramesReceived;
+                    // Phase 6F.7: measure callback arrival cadence independently of PTS.
+                    const qint64 callbackElapsedMs = videoCallbackClock.isValid()
+                        ? videoCallbackClock.restart() : -1;
+                    if (callbackElapsedMs >= 0) {
+                        videoCallbackIntervalLastMs = double(callbackElapsedMs);
+                        videoCallbackIntervalMinMs = videoCallbackIntervalSamples == 0
+                            ? videoCallbackIntervalLastMs
+                            : qMin(videoCallbackIntervalMinMs, videoCallbackIntervalLastMs);
+                        videoCallbackIntervalMaxMs = qMax(videoCallbackIntervalMaxMs, videoCallbackIntervalLastMs);
+                        ++videoCallbackIntervalSamples;
+                        videoCallbackIntervalAverageMs +=
+                            (videoCallbackIntervalLastMs - videoCallbackIntervalAverageMs)
+                            / double(videoCallbackIntervalSamples);
+                        if (callbackElapsedMs < 16) ++videoCallbackIntervalsUnder16;
+                        else if (callbackElapsedMs < 25) ++videoCallbackIntervals16To25;
+                        else if (callbackElapsedMs < 33) ++videoCallbackIntervals25To33;
+                        else ++videoCallbackIntervalsOver33;
+                    } else {
+                        videoCallbackClock.start();
+                    }
                     // Phase 6F.6: observe source presentation timestamps before the
                     // preview throttle. Metadata only; no frame mapping or copying.
                     const qint64 framePtsUs = frame.startTime();
                     const qreal sourceRate = frame.streamFrameRate();
                     if (sourceRate > 0.0) videoSourceFrameRate = sourceRate;
+                    qint64 currentPtsIntervalUs = -1;
                     if (framePtsUs >= 0) {
                         if (lastVideoPtsUs >= 0) {
                             const qint64 intervalUs = framePtsUs - lastVideoPtsUs;
+                            currentPtsIntervalUs = intervalUs;
                             if (intervalUs > 0) {
                                 videoPtsIntervalLastMs = intervalUs / 1000.0;
                                 videoPtsIntervalMinMs = videoPtsIntervalSamples == 0
@@ -338,6 +361,14 @@ public:
                     // even while Spectrum continued repainting smoothly.
                     if (frameClock.isValid() && frameClock.elapsed() < 33) {
                         ++videoFramesThrottled;
+                        if (currentPtsIntervalUs > 0 && currentPtsIntervalUs < 20000)
+                            ++videoThrottledPtsUnder20;
+                        else if (currentPtsIntervalUs >= 20000 && currentPtsIntervalUs < 30000)
+                            ++videoThrottledPts20To30;
+                        else if (currentPtsIntervalUs >= 30000)
+                            ++videoThrottledPtsOver30;
+                        else
+                            ++videoThrottledPtsUnknown;
                         return;
                     }
                     frameClock.restart();
@@ -580,6 +611,28 @@ public:
             .arg(qtSpectrumAverageMs, 0, 'f', 3)
             .arg(qtSpectrumMaxMs, 0, 'f', 3)
             .arg(qtSpectrumSamples);
+        const double profileSeconds = videoProfilingClock.isValid()
+            ? qMax(0.001, videoProfilingClock.elapsed() / 1000.0) : 0.001;
+        const double callbackFps = videoCallbackIntervalSamples > 0
+            ? double(videoFramesReceived - 1) / profileSeconds : 0.0;
+        const double acceptedFps = double(videoFramesAccepted) / profileSeconds;
+        const QString callbackStats = QStringLiteral(
+            "Phase 6F.7 callback arrival & throttle profiling (wall-clock; metadata only)\\n"
+            "Callback interval last/avg/min/max: %1 / %2 / %3 / %4 ms | samples: %5\\n"
+            "Callback intervals: <16 ms %6 | 16–25 ms %7 | 25–33 ms %8 | >33 ms %9\\n"
+            "Approx. callback FPS: %10 | accepted preview FPS: %11 | elapsed: %12 s\\n"
+            "Throttled frames by preceding PTS interval: <20 ms %13 | 20–30 ms %14 | >=30 ms %15 | unknown %16\\n\\n")
+            .arg(videoCallbackIntervalLastMs, 0, 'f', 3)
+            .arg(videoCallbackIntervalAverageMs, 0, 'f', 3)
+            .arg(videoCallbackIntervalSamples ? videoCallbackIntervalMinMs : 0.0, 0, 'f', 3)
+            .arg(videoCallbackIntervalMaxMs, 0, 'f', 3)
+            .arg(videoCallbackIntervalSamples)
+            .arg(videoCallbackIntervalsUnder16).arg(videoCallbackIntervals16To25)
+            .arg(videoCallbackIntervals25To33).arg(videoCallbackIntervalsOver33)
+            .arg(callbackFps, 0, 'f', 2).arg(acceptedFps, 0, 'f', 2)
+            .arg(profileSeconds, 0, 'f', 1)
+            .arg(videoThrottledPtsUnder20).arg(videoThrottledPts20To30)
+            .arg(videoThrottledPtsOver30).arg(videoThrottledPtsUnknown);
         const QString videoFrameDetails = QStringLiteral(
             "Phase 6F.6 temporal cadence profiling (QVideoFrame PTS; metadata only)\n"
             "Source frame rate metadata: %1 FPS | PTS interval last/avg/min/max: %2 / %3 / %4 / %5 ms | samples: %6\n"
@@ -604,6 +657,7 @@ public:
                                   : QStringLiteral("Hybrid GPU (D3D11; native presentation when supported)"))
             .arg(measuredFps, 0, 'f', 1)
             .arg(cpuStats)
+            .arg(callbackStats)
             .arg(videoFrameDetails)
             .arg(GpuRenderer::instance().diagnostics());
     }
@@ -1578,6 +1632,16 @@ private:
     quint64 videoFramesThrottled = 0;
     double videoConvertLastMs = 0.0, videoConvertAverageMs = 0.0, videoConvertMaxMs = 0.0;
     quint64 videoConvertSamples = 0;
+    // Phase 6F.7 callback arrival and throttle profiling; no frame pacing changes.
+    QElapsedTimer videoCallbackClock;
+    QElapsedTimer videoProfilingClock;
+    double videoCallbackIntervalLastMs = 0.0, videoCallbackIntervalAverageMs = 0.0;
+    double videoCallbackIntervalMinMs = 0.0, videoCallbackIntervalMaxMs = 0.0;
+    quint64 videoCallbackIntervalSamples = 0;
+    quint64 videoCallbackIntervalsUnder16 = 0, videoCallbackIntervals16To25 = 0;
+    quint64 videoCallbackIntervals25To33 = 0, videoCallbackIntervalsOver33 = 0;
+    quint64 videoThrottledPtsUnder20 = 0, videoThrottledPts20To30 = 0;
+    quint64 videoThrottledPtsOver30 = 0, videoThrottledPtsUnknown = 0;
     // Phase 6F.6 PTS cadence counters include every valid frame, even throttled frames.
     qint64 lastVideoPtsUs = -1;
     double videoSourceFrameRate = 0.0;
