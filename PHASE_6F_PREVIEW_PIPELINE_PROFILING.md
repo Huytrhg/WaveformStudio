@@ -464,3 +464,75 @@ Interpretation:
 
 This environment has not built or runtime-tested the project with the user's
 Windows / Qt 6.12 MSVC toolchain. Build and runtime validation remain required.
+
+## Phase 6F.11 — GUI-thread workload and update-to-paint latency
+
+Phase 6F.11 adds diagnostic-only measurements to separate the cost of accepted
+video callbacks from inexpensive callbacks skipped by PTS pacing, and to measure
+how long video-driven QWidget updates wait before a paint event begins.
+
+New diagnostics:
+
+- Accepted callback work last/average/maximum and sample count. This covers the
+  callback from entry through metadata/PTS checks, QVideoFrame-to-QImage
+  conversion, optional downscale, and the video-driven update request, but only
+  when conversion succeeds and the frame is accepted.
+- Skipped callback work last/average/maximum and sample count. These are callbacks
+  rejected by PTS pacing or the no-PTS fallback gate; their timing ends at the
+  skip decision.
+- QVideoFrame-to-QImage conversion failures, counted separately. They are not
+  included in accepted or skipped callback averages.
+- Oldest pending video update request to the next paint-event start, with
+  last/average/maximum and sample count. If multiple update requests accumulate
+  before a paint, this measures from the earliest outstanding request and thus
+  captures the wait associated with QWidget update coalescing.
+- Newest pending video update request to paint start, last and maximum. This
+  distinguishes the wait for the most recent frame request from the age of the
+  oldest coalesced request.
+- Paint-to-paint interval last/average/maximum, measured on the same profiling
+  clock. This is an observed presentation cadence, not a direct measurement of
+  idle event-loop time.
+
+The update-to-paint timestamps are captured immediately around the existing
+video-driven update() request and at paintEvent entry. Pending timestamps are
+cleared at the next paint event. Paints caused by other invalidations may also
+consume a pending request, so interpret these latency values alongside the
+Phase 6F.10 update-request/coalescing counters.
+
+No worker thread, frame queue, mapping, extra image copy, conversion, pacing
+change, render-path change, or export-path change is introduced. The PTS target
+remains 33.300 ms. Existing Phase 6F.1–6F.10 measurements remain in place.
+Native D3D11 Present timing remains reported by the GPU renderer and is not
+included in the accepted-callback timing.
+
+### Validation
+
+1. Pull the latest branch and build with the existing Qt 6.12 / MSVC 2022 kit.
+2. Run the same 60 FPS video with Bars selected and native presentation active
+   for 30–60 seconds.
+3. Copy the complete Preview → Diagnostics report, including the Phase 6F.10
+   native-present section at the end.
+4. Record accepted versus skipped callback work, oldest/newest update-to-paint
+   latency, paint-to-paint interval, and Phase 6F.10 update/paint/coalescing
+   counts.
+5. Repeat with a Qt fallback visual mode if useful, keeping the video and preview
+   size unchanged.
+6. Confirm PTS accepted/skipped counts, visual output, resize/minimize/restore,
+   Bokeh combinations, and export behavior remain unchanged.
+
+Interpretation:
+
+- High accepted callback time with low skipped callback time points toward the
+  accepted-frame conversion/downscale/update path as a significant GUI-thread
+  workload.
+- High oldest update-to-paint latency with a much lower newest latency indicates
+  that earlier requests are waiting behind later coalesced updates.
+- High newest update-to-paint latency together with long paint-to-paint intervals
+  indicates delayed delivery of the most recent preview update; correlate with
+  callback and paint stage timings before assigning a cause.
+- Paint-to-paint interval includes time spent processing callbacks, timers,
+  painting, and other event-loop work. It is not a pure idle-time or event-loop
+  utilization metric.
+
+This environment has not built or runtime-tested the project with the user's
+Windows / Qt 6.12 MSVC toolchain. Build and runtime validation remain required.
