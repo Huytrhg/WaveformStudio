@@ -536,3 +536,53 @@ Interpretation:
 
 This environment has not built or runtime-tested the project with the user's
 Windows / Qt 6.12 MSVC toolchain. Build and runtime validation remain required.
+
+
+## Phase 6F.12 — opt-in direct NV12 preview conversion experiment
+
+Phase 6F.12 adds an experimental NV12-to-preview conversion path for the
+observed 1920x1080, two-plane NV12 input. It is deliberately opt-in; the
+existing `QVideoFrame::toImage()` plus Qt downscale remains the default
+baseline and automatic fallback.
+
+To enable the experimental path on Windows, set
+`WAVEFORM_PREVIEW_NV12_DIRECT=1` before launching WaveformStudio. Restart
+the application after changing the variable. Remove the variable or set it
+to another value to use the baseline path.
+
+The experimental path maps a copy of the incoming QVideoFrame read-only,
+samples the NV12 luma/chroma planes into a 960x540-or-smaller RGB32 preview
+image, and unmaps the frame before returning. It uses the frame's declared
+color range and selects BT.601 when explicitly declared; otherwise it uses
+BT.709 coefficients. This is a performance experiment, not a claim of
+bit-identical color reproduction for sources with missing or unusual color
+metadata. Compare image appearance, especially saturated colors and dark
+gradients, as well as timing.
+
+If the frame is not NV12, mapping fails, plane pointers/strides are invalid,
+or output allocation fails, the code falls back to the original Qt conversion
+path. The PTS pacing decision is made before either conversion path. The
+experimental conversion only affects preview; export remains unchanged.
+
+### Diagnostics and A/B test
+
+The new diagnostics section reports direct NV12 frames/fallbacks and direct
+conversion last/average/maximum time. Existing QVideoFrame-to-QImage and
+downscale timings measure the baseline path. Compare direct conversion time
+with the sum of baseline conversion and baseline downscale time.
+
+1. Build and run the branch with the existing Qt 6.12 / MSVC 2022 kit.
+2. First run with `WAVEFORM_PREVIEW_NV12_DIRECT` unset. Play the same 60 FPS
+   video for 30–60 seconds and save the complete diagnostics.
+3. Set `WAVEFORM_PREVIEW_NV12_DIRECT=1`, restart the application, and repeat
+   with the same video, preview size, visual mode, and duration.
+4. Compare direct conversion time against baseline conversion plus downscale,
+   accepted preview FPS, paint FPS, callback processing, and update-to-paint
+   latency. Inspect visual quality and check that direct fallbacks are zero.
+5. Repeat with a non-NV12 source to verify the original conversion fallback.
+
+Mapping can itself trigger a CPU-accessible copy on some backends, so this
+experiment may be slower than Qt's optimized `toImage()` conversion. Keep the
+default baseline unless measurements show a repeatable end-to-end benefit.
+This environment has not built or runtime-tested the project with the user's
+Windows / Qt 6.12 MSVC toolchain; build and runtime validation remain required.
