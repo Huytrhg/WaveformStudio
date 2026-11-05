@@ -401,6 +401,8 @@ public:
                     // callback arrival time. A burst can deliver several frames close
                     // together; compare each frame with the last frame actually shown.
                     constexpr qint64 targetPreviewIntervalUs = 33300; // ~30 FPS; tolerates 16.666 ms timestamp rounding
+                    bool acceptedByPts = false;
+                    bool acceptedByFallback = false;
                     if (framePtsUs >= 0) {
                         if (lastPresentedVideoPtsUs >= 0) {
                             const qint64 sincePresentedUs = framePtsUs - lastPresentedVideoPtsUs;
@@ -425,9 +427,7 @@ public:
                             if (sincePresentedUs < 0)
                                 ++videoPtsTimelineResets;
                         }
-                        ++videoFramesPacedByPts;
-                        lastPresentedVideoPtsUs = framePtsUs;
-                        frameClock.restart();
+                        acceptedByPts = true;
                     } else {
                         ++videoFramesWithoutPts;
                         // Fallback only for sources that do not provide usable PTS.
@@ -437,9 +437,7 @@ public:
                             finishCallbackProcessing();
                             return;
                         }
-                        ++videoFramesFallbackPaced;
-                        lastPresentedVideoPtsUs = -1;
-                        frameClock.restart();
+                        acceptedByFallback = true;
                     }
 
                     // Phase 6F.5: inspect metadata only. Do not map the frame here:
@@ -480,6 +478,17 @@ public:
                         recordPhase6fTiming(scaleTimer.nsecsElapsed(),
                             videoScaleLastMs, videoScaleAverageMs,
                             videoScaleMaxMs, videoScaleSamples);
+                    }
+                    // Commit the pacing baseline only after conversion succeeds,
+                    // so a failed QImage conversion cannot advance the preview timeline.
+                    if (acceptedByPts) {
+                        ++videoFramesPacedByPts;
+                        lastPresentedVideoPtsUs = framePtsUs;
+                        frameClock.restart();
+                    } else if (acceptedByFallback) {
+                        ++videoFramesFallbackPaced;
+                        lastPresentedVideoPtsUs = -1;
+                        frameClock.restart();
                     }
                     ++videoFramesAccepted;
                     videoImage = std::move(image);
