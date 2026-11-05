@@ -264,6 +264,7 @@ bool GpuRenderer::createNativeBackBuffer()
 bool GpuRenderer::presentNativeTexture()
 {
     if(!nativePreviewReady||!nativeSwapChain||!nativeBackBufferRtv||!cachedTextureSrv)return false;
+    ++nativePresentAttempts;
     QElapsedTimer timer;timer.start();
     ID3D11RenderTargetView *rtv=nativeBackBufferRtv.Get();context->OMSetRenderTargets(1,&rtv,nullptr);
     D3D11_VIEWPORT vp{};vp.Width=float(nativePreviewWidth);vp.Height=float(nativePreviewHeight);
@@ -273,7 +274,13 @@ bool GpuRenderer::presentNativeTexture()
                                      {-1,-1,0,1},{1,1,1,0},{1,-1,1,1}};
     D3D11_MAPPED_SUBRESOURCE mapped{};
     HRESULT hr=context->Map(nativeCopyVertexBuffer.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped);
-    if(FAILED(hr)){nativePresentError=QStringLiteral("Native vertex Map failed: %1").arg(hexResult(hr));context->OMSetRenderTargets(0,nullptr,nullptr);return false;}
+    if(FAILED(hr)){
+        nativePresentCpuMs=timer.nsecsElapsed()/1000000.0;
+        nativePresentCpuMaxMs=qMax(nativePresentCpuMaxMs,nativePresentCpuMs);
+        ++nativePresentFailures;
+        nativePresentError=QStringLiteral("Native vertex Map failed: %1").arg(hexResult(hr));
+        context->OMSetRenderTargets(0,nullptr,nullptr);return false;
+    }
     std::memcpy(mapped.pData,quad,sizeof(quad));context->Unmap(nativeCopyVertexBuffer.Get(),0);
     UINT stride=sizeof(NativeCopyVertex),offset=0;ID3D11Buffer *vb=nativeCopyVertexBuffer.Get();
     context->IASetInputLayout(nativeCopyInputLayout.Get());context->IASetVertexBuffers(0,1,&vb,&stride,&offset);
@@ -284,8 +291,17 @@ bool GpuRenderer::presentNativeTexture()
     context->PSSetShaderResources(0,1,&srv);context->PSSetSamplers(0,1,&sampler);context->Draw(6,0);
     ID3D11ShaderResourceView *nullSrv=nullptr;context->PSSetShaderResources(0,1,&nullSrv);
     context->OMSetRenderTargets(0,nullptr,nullptr);
-    hr=nativeSwapChain->Present(0,0);nativePresentCpuMs=timer.nsecsElapsed()/1000000.0;
-    if(FAILED(hr)){nativePresentError=QStringLiteral("Present failed: %1").arg(hexResult(hr));return false;}
+    hr=nativeSwapChain->Present(0,0);
+    nativePresentCpuMs=timer.nsecsElapsed()/1000000.0;
+    nativePresentCpuMaxMs=qMax(nativePresentCpuMaxMs,nativePresentCpuMs);
+    const quint64 completedAttempts = nativePresentAttempts - nativePresentFailures;
+    if (completedAttempts > 0)
+        nativePresentCpuAverageMs += (nativePresentCpuMs-nativePresentCpuAverageMs)
+            / double(completedAttempts);
+    if(FAILED(hr)){
+        ++nativePresentFailures;
+        nativePresentError=QStringLiteral("Present failed: %1").arg(hexResult(hr));return false;
+    }
     ++nativePresentFrames;nativePresentError.clear();return true;
 }
 #endif
@@ -815,7 +831,12 @@ QString GpuRenderer::runtimeStats() const
         .arg(nativeFramePresented ? QStringLiteral("ACTIVE") : QStringLiteral("fallback/off"))
         .arg(nativePresentFrames)
         .arg(nativePresentCpuMs, 0, 'f', 3)
-        .arg(nativePresentError.isEmpty() ? QStringLiteral("none") : nativePresentError);
+        .arg(nativePresentError.isEmpty() ? QStringLiteral("none") : nativePresentError)
+        + QStringLiteral("\nPhase 6F.10 native present calls: attempts %1 | success %2 | failures %3 | CPU last/avg/max %4 / %5 / %6 ms (render submission + DXGI Present)")
+            .arg(nativePresentAttempts).arg(nativePresentFrames).arg(nativePresentFailures)
+            .arg(nativePresentCpuMs, 0, 'f', 3)
+            .arg(nativePresentCpuAverageMs, 0, 'f', 3)
+            .arg(nativePresentCpuMaxMs, 0, 'f', 3);
 }
 
 QString GpuRenderer::diagnostics() const
