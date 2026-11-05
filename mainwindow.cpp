@@ -664,7 +664,7 @@ public:
                               : QStringLiteral("Dancing Particles");
         const QString cpuStats = QStringLiteral(
             "Phase 6F CPU preview profiling (since preview start)\n"
-            "Mode: %1 | paint FPS: %2 | paint last/avg/max: %3 / %4 / %5 ms | samples: %6\n"
+            "Mode: %1 | paint FPS (rolling ~1 s): %2 | paint last/avg/max: %3 / %4 / %5 ms | samples: %6\n"
             "Video frames: received %7 | accepted %8 | skipped by PTS pacing/fallback %9\n"
             "QVideoFrame to QImage: last/avg/max %10 / %11 / %12 ms | samples: %13\n"
             "Video downscale: last/avg/max %14 / %15 / %16 ms | samples: %17\n"
