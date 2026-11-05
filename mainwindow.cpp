@@ -668,16 +668,16 @@ public:
             return sortedCallbackIntervals[index];
         };
         const QString callbackStats = QStringLiteral(
-            "Phase 6F.8 callback burst & processing-gap analysis\\n"
-            "Callback interval P50/P90/P95/P99: %1 / %2 / %3 / %4 ms | window samples: %5\\n"
-            "Callback intervals <5 ms: %6 | burst groups (2+ consecutive): %7 | max consecutive: %8\\n"
-            "Callback processing last/avg/max: %9 / %10 / %11 ms | samples: %12\\n"
-            "Arrival interval minus PTS interval last/avg/min/max: %13 / %14 / %15 / %16 ms | samples: %17\\n"
-            "Fast callback (<5 ms) with PTS interval: <20 ms %18 | 20–30 ms %19 | >=30 ms %20\\n"
-            "Callback interval last/avg/min/max: %21 / %22 / %23 / %24 ms | total samples: %25\\n"
-            "Callback intervals: <16 ms %26 | 16–25 ms %27 | 25–33 ms %28 | >33 ms %29\\n"
-            "Approx. callback FPS: %30 | accepted preview FPS: %31 | elapsed: %32 s\\n"
-            "Throttled frames by preceding PTS interval: <20 ms %33 | 20–30 ms %34 | >=30 ms %35 | unknown %36\\n\\n")
+            "Phase 6F.8 callback burst & processing-gap analysis\n"
+            "Callback interval P50/P90/P95/P99: %1 / %2 / %3 / %4 ms | window samples: %5\n"
+            "Callback intervals <5 ms: %6 | burst groups (2+ consecutive): %7 | max consecutive: %8\n"
+            "Callback processing last/avg/max: %9 / %10 / %11 ms | samples: %12\n"
+            "Arrival interval minus PTS interval last/avg/min/max: %13 / %14 / %15 / %16 ms | samples: %17\n"
+            "Fast callback (<5 ms) with PTS interval: <20 ms %18 | 20–30 ms %19 | >=30 ms %20\n"
+            "Callback interval last/avg/min/max: %21 / %22 / %23 / %24 ms | total samples: %25\n"
+            "Callback intervals: <16 ms %26 | 16–25 ms %27 | 25–33 ms %28 | >33 ms %29\n"
+            "Approx. callback FPS: %30 | accepted preview FPS: %31 | elapsed: %32 s\n"
+            "Throttled frames by preceding PTS interval: <20 ms %33 | 20–30 ms %34 | >=30 ms %35 | unknown %36\n\n")
             .arg(callbackPercentile(0.50), 0, 'f', 3)
             .arg(callbackPercentile(0.90), 0, 'f', 3)
             .arg(callbackPercentile(0.95), 0, 'f', 3)
