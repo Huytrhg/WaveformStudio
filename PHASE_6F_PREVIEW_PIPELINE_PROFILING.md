@@ -266,3 +266,66 @@ and Phase 6F.6 PTS profiling remain in place.
 6. Confirm preview pacing and export behavior are unchanged.
 
 The project has not been built or runtime-tested in this environment.
+
+## Phase 6F.8 — callback burst and processing-gap analysis
+
+Phase 6F.8 extends the Phase 6F.7 callback-arrival measurements to distinguish
+irregular delivery cadence, short callback bursts, and time spent processing
+each callback. It is diagnostic-only and preserves the existing 33 ms preview
+acceptance gate.
+
+The diagnostics now include:
+
+- Callback interval P50, P90, P95 and P99 percentiles. Percentiles are calculated
+  from a bounded rolling window of up to the most recent 8,192 callback intervals;
+  the existing last/average/minimum/maximum and interval buckets remain cumulative.
+- Number of callback intervals below 5 ms, burst-group count (at least two
+  consecutive intervals below 5 ms), and the longest consecutive run.
+- Total callback processing duration, measured from callback entry through
+  frame metadata/PTS inspection, throttle decision, QVideoFrame-to-QImage
+  conversion, optional downscale, and preview update. Processing time is
+  recorded for accepted frames, throttled frames, and conversion failures.
+- Difference between callback arrival interval and positive source PTS interval
+  (last/average/minimum/maximum). This is a comparison of two interval series,
+  not a decoder-latency measurement or a frame-by-frame timestamp correlation.
+- PTS interval buckets for callbacks arriving less than 5 ms after the prior
+  callback. This helps identify whether closely spaced callbacks are delivering
+  source frames with ordinary 16–33 ms PTS spacing or genuinely short PTS steps.
+
+### Interpretation
+
+- A low P50 but much higher P95/P99, together with many sub-5 ms intervals,
+  indicates callback delivery is uneven and may arrive in bursts.
+- If sub-5 ms callback intervals commonly pair with PTS intervals of 16–33 ms,
+  Qt is likely delivering frames close together even though their source
+  presentation timestamps are spaced farther apart. This is evidence of
+  callback batching/scheduling, not proof of a particular decoder behavior.
+- High callback processing average/max indicates work inside the
+  `videoFrameChanged` handler may itself delay subsequent callback handling
+  when callbacks are serialized on the same thread. Compare this with the
+  callback arrival percentiles; do not assume causality from one metric alone.
+- The arrival-minus-PTS interval average near zero means the two interval
+  sequences have similar average spacing. It does not establish that individual
+  frames arrived at their presentation deadlines.
+
+The percentile window is bounded to avoid unbounded memory growth. The other
+counters and timing averages remain cumulative for the preview widget lifetime.
+The phase adds no frame mapping, pixel copies, additional conversion, or
+rendering work beyond lightweight timing/counter updates and sorting the
+bounded sample window when the diagnostics report is requested.
+
+### Validation
+
+1. Pull the latest branch and build with the existing Qt 6.12 / MSVC 2022 kit.
+2. Play the same old and new comparison videos separately for 30–60 seconds.
+3. Open Preview → Diagnostics and copy the complete report for each video.
+4. Compare callback P50/P90/P95/P99, sub-5 ms intervals, burst groups, and
+   maximum consecutive run.
+5. Compare callback processing average/max and arrival-minus-PTS intervals.
+6. Check the PTS buckets associated with sub-5 ms callback intervals.
+7. Confirm the 33 ms gate, preview behavior, native presentation, and export
+   remain unchanged.
+
+This environment has not built or runtime-tested the project with the user's
+Windows / Qt 6.12 MSVC toolchain. Build and runtime validation remain required.
+
