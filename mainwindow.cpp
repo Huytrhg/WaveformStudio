@@ -299,13 +299,13 @@ public:
         setAttribute(Qt::WA_AlwaysStackOnTop, false);
         setAutoFillBackground(false);
         effectClock.start();
-        videoProfilingClock.start();
         setToolTip("Spectrum Overlay — Bars / Waveform / Circular");
         videoSink = new QVideoSink(this);
         connect(videoSink, &QVideoSink::videoFrameChanged, this,
                 [this](const QVideoFrame &frame) {
                     if (!frame.isValid()) return;
                     ++videoFramesReceived;
+                    if (videoFramesReceived == 1) videoProfilingClock.start();
                     // Phase 6F.7: measure callback arrival cadence independently of PTS.
                     const qint64 callbackElapsedMs = videoCallbackClock.isValid()
                         ? videoCallbackClock.restart() : -1;
