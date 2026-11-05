@@ -408,3 +408,59 @@ pacing decision; skipped callbacks should be much cheaper.
 This environment has not built or runtime-tested the project with the user's
 Windows / Qt 6.12 MSVC toolchain. Build and runtime validation remain required.
 
+
+
+## Phase 6F.10 — actual preview presentation profiling
+
+Phase 6F.10 measures whether accepted video-frame updates are reaching the
+QWidget paint path, and records native DXGI presentation calls separately.
+The QWidget/video-update counters begin when the first valid video callback
+starts the existing profiling clock, so their rates use the same elapsed window.
+
+The diagnostics add:
+
+- Video-driven `update()` requests and their average rate.
+- Actual `paintEvent()` calls and their average rate over the same profiling
+  interval. The existing measured paint rate is a rolling approximately
+  one-second value and is labelled accordingly in the detailed report.
+- Number of video update requests that accumulated before a paint event, plus
+  the maximum requests observed between two paint events. This is a QWidget
+  update-coalescing indicator, not a count of decoded frames dropped by Qt.
+- Ratio of paint events to video update requests. Other causes can also trigger
+  paint events, so this ratio is a diagnostic comparison rather than a strict
+  one-to-one delivery guarantee.
+- Native presentation attempts, successful DXGI presents, failures, and CPU
+  duration last/average/maximum. The measured native duration includes D3D11
+  render-target setup, vertex submission, and the DXGI `Present(0, 0)` call;
+  it is not a GPU execution-time measurement.
+
+The phase does not change PTS pacing, frame conversion, rendering decisions,
+swap-chain synchronization, native presentation behavior, or export. It adds
+only counters and CPU-side timers. Native present measurements are recorded
+inside the existing D3D11 presenter and remain cumulative for that renderer
+instance; QWidget/video-update counters share the preview profiling window.
+
+### Validation
+
+1. Pull the latest branch and build with the Qt 6.12 / MSVC 2022 kit.
+2. Play the same 60 FPS comparison video for 30–60 seconds with Bars or
+   Dancing Particles selected and native presentation active.
+3. Copy Preview → Diagnostics and compare video update requests, paint events,
+   coalesced requests, and native present attempts/successes.
+4. Repeat with a Qt fallback mode to compare the QWidget paint path without
+   native DXGI presentation.
+5. Confirm PTS accepted/skipped totals and preview behavior remain unchanged.
+6. Verify Bokeh combinations, resize/minimize/restore, and export behavior.
+
+Interpretation:
+- If video update requests are near 30 FPS but paint events are much lower,
+  inspect QWidget scheduling, other event-loop work, and paint invalidation.
+- If update requests greatly exceed paint events and coalesced counts are high,
+  QWidget update coalescing is a likely contributor to the observed difference.
+- If paint events and native present successes track closely but native CPU
+  duration is high, investigate the CPU submission/Present path next.
+- If paint events are frequent but native presents are fewer, investigate
+  native render readiness/fallback conditions rather than the video pacing gate.
+
+This environment has not built or runtime-tested the project with the user's
+Windows / Qt 6.12 MSVC toolchain. Build and runtime validation remain required.
