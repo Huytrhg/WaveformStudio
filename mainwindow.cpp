@@ -312,7 +312,14 @@ public:
                             videoCallbackProcessingMaxMs, videoCallbackProcessingSamples);
                     };
                     ++videoFramesReceived;
-                    if (videoFramesReceived == 1) videoProfilingClock.start();
+                    if (videoFramesReceived == 1) {
+                        videoProfilingClock.start();
+                        previewPaintEvents = 0;
+                        previewVideoUpdateRequests = 0;
+                        previewVideoUpdateRequestsCoalesced = 0;
+                        previewMaxVideoUpdatesBetweenPaints = 0;
+                        lastPaintedVideoUpdateRequestCount = 0;
+                    }
                     // Phase 6F.7: measure callback arrival cadence independently of PTS.
                     const qint64 callbackElapsedNs = videoCallbackClock.isValid()
                         ? videoCallbackClock.nsecsElapsed() : -1;
@@ -493,6 +500,7 @@ public:
                     ++videoFramesAccepted;
                     videoImage = std::move(image);
                     gpuBackgroundDirty = true;
+                    ++previewVideoUpdateRequests;
                     update();
                     finishCallbackProcessing();
                 });
@@ -695,6 +703,23 @@ public:
         const double callbackFps = videoCallbackIntervalSamples > 0
             ? double(videoFramesReceived - 1) / profileSeconds : 0.0;
         const double acceptedFps = double(videoFramesAccepted) / profileSeconds;
+        const double actualPaintFps = double(previewPaintEvents) / profileSeconds;
+        const double updateRequestFps = double(previewVideoUpdateRequests) / profileSeconds;
+        const QString presentationStats = QStringLiteral(
+            "Phase 6F.10 actual preview presentation (same window: %1 s)\n"
+            "Video update() requests: %2 (%3 FPS) | QWidget paintEvent calls: %4 (%5 FPS)\n"
+            "Video update requests coalesced before paint: %6 | max requests between paints: %7\n"
+            "Paint events / video update requests: %8%\n")
+            .arg(profileSeconds, 0, 'f', 1)
+            .arg(previewVideoUpdateRequests)
+            .arg(updateRequestFps, 0, 'f', 2)
+            .arg(previewPaintEvents)
+            .arg(actualPaintFps, 0, 'f', 2)
+            .arg(previewVideoUpdateRequestsCoalesced)
+            .arg(previewMaxVideoUpdatesBetweenPaints)
+            .arg(previewVideoUpdateRequests > 0
+                ? 100.0 * double(previewPaintEvents) / double(previewVideoUpdateRequests)
+                : 0.0, 0, 'f', 1);
         QVector<double> sortedCallbackIntervals = videoCallbackIntervalWindow;
         std::sort(sortedCallbackIntervals.begin(), sortedCallbackIntervals.end());
         const auto callbackPercentile = [&sortedCallbackIntervals](double percentile) {
@@ -770,7 +795,7 @@ public:
                                   : QStringLiteral("Hybrid GPU (D3D11; native presentation when supported)"))
             .arg(measuredFps, 0, 'f', 1)
             .arg(cpuStats)
-            .arg(callbackStats)
+            .arg(callbackStats + presentationStats)
             .arg(videoFrameDetails)
             .arg(GpuRenderer::instance().diagnostics());
     }
@@ -1203,6 +1228,16 @@ protected:
         QElapsedTimer paintTimer;
         paintTimer.start();
         ++diagnosticFrameCount;
+        if (videoProfilingClock.isValid()) {
+            ++previewPaintEvents;
+            const quint64 updatesSinceLastPaint =
+                previewVideoUpdateRequests - lastPaintedVideoUpdateRequestCount;
+            if (updatesSinceLastPaint > 1)
+                previewVideoUpdateRequestsCoalesced += updatesSinceLastPaint - 1;
+            previewMaxVideoUpdatesBetweenPaints = qMax(
+                previewMaxVideoUpdatesBetweenPaints, updatesSinceLastPaint);
+            lastPaintedVideoUpdateRequestCount = previewVideoUpdateRequests;
+        }
         if (!diagnosticsClock.isValid()) diagnosticsClock.start();
         else if (diagnosticsClock.elapsed() >= 1000) {
             measuredFps = diagnosticFrameCount * 1000.0 / diagnosticsClock.elapsed();
@@ -1742,6 +1777,12 @@ private:
     // cumulative from the lifetime of this preview widget.
     quint64 videoFramesReceived = 0;
     quint64 videoFramesAccepted = 0;
+    // Phase 6F.10 counters share the videoProfilingClock start point.
+    quint64 previewPaintEvents = 0;
+    quint64 previewVideoUpdateRequests = 0;
+    quint64 previewVideoUpdateRequestsCoalesced = 0;
+    quint64 previewMaxVideoUpdatesBetweenPaints = 0;
+    quint64 lastPaintedVideoUpdateRequestCount = 0;
     quint64 videoFramesThrottled = 0; // Frames skipped by the PTS pacing policy or no-PTS fallback.
     quint64 videoFramesPacedByPts = 0;
     quint64 videoFramesFallbackPaced = 0;
