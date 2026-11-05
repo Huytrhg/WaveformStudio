@@ -397,23 +397,50 @@ public:
                             else ++videoBurstPtsAtLeast30;
                         }
                     }
-                    // Keep the preview video close to 30 FPS when frames are available.
-                    // A 41 ms gate capped the video near 24 FPS and could look choppy
-                    // even while Spectrum continued repainting smoothly.
-                    if (frameClock.isValid() && frameClock.elapsed() < 33) {
-                        ++videoFramesThrottled;
-                        if (currentPtsIntervalUs > 0 && currentPtsIntervalUs < 20000)
-                            ++videoThrottledPtsUnder20;
-                        else if (currentPtsIntervalUs >= 20000 && currentPtsIntervalUs < 30000)
-                            ++videoThrottledPts20To30;
-                        else if (currentPtsIntervalUs >= 30000)
-                            ++videoThrottledPtsOver30;
-                        else
+                    // Phase 6F.9: pace accepted preview frames by source PTS, not
+                    // callback arrival time. A burst can deliver several frames close
+                    // together; compare each frame with the last frame actually shown.
+                    constexpr qint64 targetPreviewIntervalUs = 33333; // ~30 FPS
+                    if (framePtsUs >= 0) {
+                        if (lastPresentedVideoPtsUs >= 0) {
+                            const qint64 sincePresentedUs = framePtsUs - lastPresentedVideoPtsUs;
+                            if (sincePresentedUs > 0 && sincePresentedUs < targetPreviewIntervalUs) {
+                                ++videoFramesThrottled;
+                                if (sincePresentedUs < 20000)
+                                    ++videoThrottledPtsUnder20;
+                                else if (sincePresentedUs < 30000)
+                                    ++videoThrottledPts20To30;
+                                else
+                                    ++videoThrottledPtsOver30;
+                                finishCallbackProcessing();
+                                return;
+                            }
+                            if (sincePresentedUs == 0) {
+                                ++videoFramesThrottled;
+                                ++videoDuplicatePtsSkipped;
+                                ++videoThrottledPtsUnknown;
+                                finishCallbackProcessing();
+                                return;
+                            }
+                            if (sincePresentedUs < 0)
+                                ++videoPtsTimelineResets;
+                        }
+                        ++videoFramesPacedByPts;
+                        lastPresentedVideoPtsUs = framePtsUs;
+                        frameClock.restart();
+                    } else {
+                        ++videoFramesWithoutPts;
+                        // Fallback only for sources that do not provide usable PTS.
+                        if (frameClock.isValid() && frameClock.elapsed() < 33) {
+                            ++videoFramesThrottled;
                             ++videoThrottledPtsUnknown;
-                        finishCallbackProcessing();
-                        return;
+                            finishCallbackProcessing();
+                            return;
+                        }
+                        ++videoFramesFallbackPaced;
+                        lastPresentedVideoPtsUs = -1;
+                        frameClock.restart();
                     }
-                    frameClock.restart();
 
                     // Phase 6F.5: inspect metadata only. Do not map the frame here:
                     // mapping can force GPU-backed buffers into CPU-readable memory
@@ -621,7 +648,7 @@ public:
         const QString cpuStats = QStringLiteral(
             "Phase 6F CPU preview profiling (since preview start)\n"
             "Mode: %1 | paint FPS: %2 | paint last/avg/max: %3 / %4 / %5 ms | samples: %6\n"
-            "Video frames: received %7 | accepted %8 | throttled by 33 ms gate %9\n"
+            "Video frames: received %7 | accepted %8 | skipped by PTS pacing/fallback %9\n"
             "QVideoFrame to QImage: last/avg/max %10 / %11 / %12 ms | samples: %13\n"
             "Video downscale: last/avg/max %14 / %15 / %16 ms | samples: %17\n"
             "Visualizer scene preparation: last/avg/max %18 / %19 / %20 ms | samples: %21\n"
@@ -677,7 +704,8 @@ public:
             "Callback interval last/avg/min/max: %21 / %22 / %23 / %24 ms | total samples: %25\n"
             "Callback intervals: <16 ms %26 | 16–25 ms %27 | 25–33 ms %28 | >33 ms %29\n"
             "Approx. callback FPS: %30 | accepted preview FPS: %31 | elapsed: %32 s\n"
-            "Throttled frames by preceding PTS interval: <20 ms %33 | 20–30 ms %34 | >=30 ms %35 | unknown %36\n\n")
+            "Skipped by interval since last presented PTS: <20 ms %33 | 20–30 ms %34 | >=30 ms %35 | duplicate/unknown %36\n"
+            "Pacing decisions: PTS accepted %37 | no-PTS fallback accepted %38 | duplicate PTS skipped %39 | PTS timeline resets %40 | frames without PTS %41 | target interval 33.333 ms\n\n")
             .arg(callbackPercentile(0.50), 0, 'f', 3)
             .arg(callbackPercentile(0.90), 0, 'f', 3)
             .arg(callbackPercentile(0.95), 0, 'f', 3)
@@ -705,7 +733,10 @@ public:
             .arg(callbackFps, 0, 'f', 2).arg(acceptedFps, 0, 'f', 2)
             .arg(profileSeconds, 0, 'f', 1)
             .arg(videoThrottledPtsUnder20).arg(videoThrottledPts20To30)
-            .arg(videoThrottledPtsOver30).arg(videoThrottledPtsUnknown);
+            .arg(videoThrottledPtsOver30).arg(videoThrottledPtsUnknown)
+            .arg(videoFramesPacedByPts).arg(videoFramesFallbackPaced)
+            .arg(videoDuplicatePtsSkipped).arg(videoPtsTimelineResets)
+            .arg(videoFramesWithoutPts);
         const QString videoFrameDetails = QStringLiteral(
             "Phase 6F.6 temporal cadence profiling (QVideoFrame PTS; metadata only)\n"
             "Source frame rate metadata: %1 FPS | PTS interval last/avg/min/max: %2 / %3 / %4 / %5 ms | samples: %6\n"
@@ -1702,7 +1733,13 @@ private:
     // cumulative from the lifetime of this preview widget.
     quint64 videoFramesReceived = 0;
     quint64 videoFramesAccepted = 0;
-    quint64 videoFramesThrottled = 0;
+    quint64 videoFramesThrottled = 0; // Frames skipped by the PTS pacing policy or no-PTS fallback.
+    quint64 videoFramesPacedByPts = 0;
+    quint64 videoFramesFallbackPaced = 0;
+    quint64 videoFramesWithoutPts = 0;
+    quint64 videoDuplicatePtsSkipped = 0;
+    quint64 videoPtsTimelineResets = 0;
+    qint64 lastPresentedVideoPtsUs = -1;
     double videoConvertLastMs = 0.0, videoConvertAverageMs = 0.0, videoConvertMaxMs = 0.0;
     quint64 videoConvertSamples = 0;
     // Phase 6F.8 callback arrival, burst, PTS-correlation and processing profiling.
@@ -1750,7 +1787,7 @@ private:
     quint64 backgroundBuildSamples = 0;
     double qtSpectrumLastMs = 0.0, qtSpectrumAverageMs = 0.0, qtSpectrumMaxMs = 0.0;
     quint64 qtSpectrumSamples = 0;
-    QElapsedTimer frameClock;
+    QElapsedTimer frameClock; // Fallback pacing clock for frames without valid PTS.
     QElapsedTimer diagnosticsClock;
     int diagnosticFrameCount = 0;
     double measuredFps = 0.0;
