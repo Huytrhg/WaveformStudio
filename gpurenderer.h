@@ -98,7 +98,11 @@ private:
     int cachedWidth = 0;
     int cachedHeight = 0;
     quint64 nativePresentFrames = 0;
+    quint64 nativePresentAttempts = 0;
+    quint64 nativePresentFailures = 0;
     double nativePresentCpuMs = 0.0;
+    double nativePresentCpuAverageMs = 0.0;
+    double nativePresentCpuMaxMs = 0.0;
     QString nativePresentError;
 
 #ifdef Q_OS_WIN
