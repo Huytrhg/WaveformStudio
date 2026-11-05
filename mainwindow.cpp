@@ -306,10 +306,22 @@ public:
                     if (!frame.isValid()) return;
                     QElapsedTimer callbackProcessingTimer;
                     callbackProcessingTimer.start();
-                    const auto finishCallbackProcessing = [this, &callbackProcessingTimer]() {
-                        recordPhase6fTiming(callbackProcessingTimer.nsecsElapsed(),
-                            videoCallbackProcessingLastMs, videoCallbackProcessingAverageMs,
-                            videoCallbackProcessingMaxMs, videoCallbackProcessingSamples);
+                    const auto finishCallbackProcessing = [this, &callbackProcessingTimer](int outcome) {
+                        const qint64 elapsedNs = callbackProcessingTimer.nsecsElapsed();
+                        recordPhase6fTiming(elapsedNs, videoCallbackProcessingLastMs,
+                            videoCallbackProcessingAverageMs, videoCallbackProcessingMaxMs,
+                            videoCallbackProcessingSamples);
+                        if (outcome == 1) {
+                            recordPhase6fTiming(elapsedNs, acceptedCallbackLastMs,
+                                acceptedCallbackAverageMs, acceptedCallbackMaxMs,
+                                acceptedCallbackSamples);
+                        } else if (outcome == 0) {
+                            recordPhase6fTiming(elapsedNs, skippedCallbackLastMs,
+                                skippedCallbackAverageMs, skippedCallbackMaxMs,
+                                skippedCallbackSamples);
+                        } else {
+                            ++videoConversionFailures;
+                        }
                     };
                     ++videoFramesReceived;
                     if (videoFramesReceived == 1) {
@@ -319,6 +331,9 @@ public:
                         previewVideoUpdateRequestsCoalesced = 0;
                         previewMaxVideoUpdatesBetweenPaints = 0;
                         lastPaintedVideoUpdateRequestCount = 0;
+                        firstPendingVideoUpdateNs = -1;
+                        lastPendingVideoUpdateNs = -1;
+                        lastPreviewPaintNs = -1;
                     }
                     // Phase 6F.7: measure callback arrival cadence independently of PTS.
                     const qint64 callbackElapsedNs = videoCallbackClock.isValid()
@@ -421,14 +436,14 @@ public:
                                     ++videoThrottledPts20To30;
                                 else
                                     ++videoThrottledPtsOver30;
-                                finishCallbackProcessing();
+                                finishCallbackProcessing(0);
                                 return;
                             }
                             if (sincePresentedUs == 0) {
                                 ++videoFramesThrottled;
                                 ++videoDuplicatePtsSkipped;
                                 ++videoThrottledPtsUnknown;
-                                finishCallbackProcessing();
+                                finishCallbackProcessing(0);
                                 return;
                             }
                             if (sincePresentedUs < 0)
@@ -441,7 +456,7 @@ public:
                         if (frameClock.isValid() && frameClock.elapsed() < 33) {
                             ++videoFramesThrottled;
                             ++videoThrottledPtsUnknown;
-                            finishCallbackProcessing();
+                            finishCallbackProcessing(0);
                             return;
                         }
                         acceptedByFallback = true;
@@ -475,7 +490,7 @@ public:
                     recordPhase6fTiming(conversionTimer.nsecsElapsed(),
                         videoConvertLastMs, videoConvertAverageMs,
                         videoConvertMaxMs, videoConvertSamples);
-                    if (image.isNull()) { finishCallbackProcessing(); return; }
+                    if (image.isNull()) { finishCallbackProcessing(2); return; }
                     // Preview only: cap image size to reduce CPU painting cost.
                     const QSize limit(960, 540);
                     if (image.width() > limit.width() || image.height() > limit.height()) {
@@ -501,8 +516,14 @@ public:
                     videoImage = std::move(image);
                     gpuBackgroundDirty = true;
                     ++previewVideoUpdateRequests;
+                    if (videoProfilingClock.isValid()) {
+                        const qint64 requestNs = videoProfilingClock.nsecsElapsed();
+                        if (firstPendingVideoUpdateNs < 0)
+                            firstPendingVideoUpdateNs = requestNs;
+                        lastPendingVideoUpdateNs = requestNs;
+                    }
                     update();
-                    finishCallbackProcessing();
+                    finishCallbackProcessing(1);
                 });
         // Phase 4D.1: animate between 20 Hz FFT samples at ~30 Hz.
         // Stop the animation when the analyzer clears its bands.
@@ -720,6 +741,34 @@ public:
             .arg(previewVideoUpdateRequests > 0
                 ? 100.0 * double(previewPaintEvents) / double(previewVideoUpdateRequests)
                 : 0.0, 0, 'f', 1);
+        const QString guiWorkloadStats = QStringLiteral(
+            "Phase 6F.11 GUI-thread workload (callback outcome timing)\n"
+            "Accepted callback work last/avg/max: %1 / %2 / %3 ms | samples: %4\n"
+            "Skipped callback work last/avg/max: %5 / %6 / %7 ms | samples: %8\n"
+            "QVideoFrame::toImage failures: %9\n"
+            "Phase 6F.11 update-to-paint latency\n"
+            "Oldest pending update to paint last/avg/max: %10 / %11 / %12 ms | samples: %13\n"
+            "Newest update to paint last/max: %14 / %15 ms\n"
+            "Paint-to-paint interval last/avg/max: %16 / %17 / %18 ms | samples: %19\n")
+            .arg(acceptedCallbackLastMs, 0, 'f', 3)
+            .arg(acceptedCallbackAverageMs, 0, 'f', 3)
+            .arg(acceptedCallbackMaxMs, 0, 'f', 3)
+            .arg(acceptedCallbackSamples)
+            .arg(skippedCallbackLastMs, 0, 'f', 3)
+            .arg(skippedCallbackAverageMs, 0, 'f', 3)
+            .arg(skippedCallbackMaxMs, 0, 'f', 3)
+            .arg(skippedCallbackSamples)
+            .arg(videoConversionFailures)
+            .arg(updateToPaintOldestLastMs, 0, 'f', 3)
+            .arg(updateToPaintOldestAverageMs, 0, 'f', 3)
+            .arg(updateToPaintOldestMaxMs, 0, 'f', 3)
+            .arg(updateToPaintSamples)
+            .arg(updateToPaintNewestLastMs, 0, 'f', 3)
+            .arg(updateToPaintNewestMaxMs, 0, 'f', 3)
+            .arg(previewPaintGapLastMs, 0, 'f', 3)
+            .arg(previewPaintGapAverageMs, 0, 'f', 3)
+            .arg(previewPaintGapMaxMs, 0, 'f', 3)
+            .arg(previewPaintGapSamples);
         QVector<double> sortedCallbackIntervals = videoCallbackIntervalWindow;
         std::sort(sortedCallbackIntervals.begin(), sortedCallbackIntervals.end());
         const auto callbackPercentile = [&sortedCallbackIntervals](double percentile) {
@@ -795,7 +844,7 @@ public:
                                   : QStringLiteral("Hybrid GPU (D3D11; native presentation when supported)"))
             .arg(measuredFps, 0, 'f', 1)
             .arg(cpuStats)
-            .arg(callbackStats + presentationStats)
+            .arg(callbackStats + presentationStats + guiWorkloadStats)
             .arg(videoFrameDetails)
             .arg(GpuRenderer::instance().diagnostics());
     }
@@ -1230,6 +1279,24 @@ protected:
         ++diagnosticFrameCount;
         if (videoProfilingClock.isValid()) {
             ++previewPaintEvents;
+            const qint64 paintStartNs = videoProfilingClock.nsecsElapsed();
+            if (lastPreviewPaintNs >= 0) {
+                recordPhase6fTiming(paintStartNs - lastPreviewPaintNs,
+                    previewPaintGapLastMs, previewPaintGapAverageMs,
+                    previewPaintGapMaxMs, previewPaintGapSamples);
+            }
+            lastPreviewPaintNs = paintStartNs;
+            if (firstPendingVideoUpdateNs >= 0) {
+                const qint64 oldestLatencyNs = qMax<qint64>(0, paintStartNs - firstPendingVideoUpdateNs);
+                const qint64 newestLatencyNs = qMax<qint64>(0, paintStartNs - lastPendingVideoUpdateNs);
+                recordPhase6fTiming(oldestLatencyNs, updateToPaintOldestLastMs,
+                    updateToPaintOldestAverageMs, updateToPaintOldestMaxMs,
+                    updateToPaintSamples);
+                updateToPaintNewestLastMs = newestLatencyNs / 1000000.0;
+                updateToPaintNewestMaxMs = qMax(updateToPaintNewestMaxMs, updateToPaintNewestLastMs);
+                firstPendingVideoUpdateNs = -1;
+                lastPendingVideoUpdateNs = -1;
+            }
             const quint64 updatesSinceLastPaint =
                 previewVideoUpdateRequests - lastPaintedVideoUpdateRequestCount;
             if (updatesSinceLastPaint > 1)
@@ -1783,6 +1850,22 @@ private:
     quint64 previewVideoUpdateRequestsCoalesced = 0;
     quint64 previewMaxVideoUpdatesBetweenPaints = 0;
     quint64 lastPaintedVideoUpdateRequestCount = 0;
+    // Phase 6F.11: GUI-thread callback outcome and update-to-paint timing.
+    double acceptedCallbackLastMs = 0.0, acceptedCallbackAverageMs = 0.0;
+    double acceptedCallbackMaxMs = 0.0;
+    quint64 acceptedCallbackSamples = 0;
+    double skippedCallbackLastMs = 0.0, skippedCallbackAverageMs = 0.0;
+    double skippedCallbackMaxMs = 0.0;
+    quint64 skippedCallbackSamples = 0, videoConversionFailures = 0;
+    qint64 firstPendingVideoUpdateNs = -1, lastPendingVideoUpdateNs = -1;
+    qint64 lastPreviewPaintNs = -1;
+    double updateToPaintOldestLastMs = 0.0, updateToPaintOldestAverageMs = 0.0;
+    double updateToPaintOldestMaxMs = 0.0, updateToPaintNewestLastMs = 0.0;
+    double updateToPaintNewestMaxMs = 0.0;
+    quint64 updateToPaintSamples = 0;
+    double previewPaintGapLastMs = 0.0, previewPaintGapAverageMs = 0.0;
+    double previewPaintGapMaxMs = 0.0;
+    quint64 previewPaintGapSamples = 0;
     quint64 videoFramesThrottled = 0; // Frames skipped by the PTS pacing policy or no-PTS fallback.
     quint64 videoFramesPacedByPts = 0;
     quint64 videoFramesFallbackPaced = 0;
