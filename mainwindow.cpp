@@ -304,6 +304,13 @@ public:
         connect(videoSink, &QVideoSink::videoFrameChanged, this,
                 [this](const QVideoFrame &frame) {
                     if (!frame.isValid()) return;
+                    QElapsedTimer callbackProcessingTimer;
+                    callbackProcessingTimer.start();
+                    const auto finishCallbackProcessing = [this, &callbackProcessingTimer]() {
+                        recordPhase6fTiming(callbackProcessingTimer.nsecsElapsed(),
+                            videoCallbackProcessingLastMs, videoCallbackProcessingAverageMs,
+                            videoCallbackProcessingMaxMs, videoCallbackProcessingSamples);
+                    };
                     ++videoFramesReceived;
                     if (videoFramesReceived == 1) videoProfilingClock.start();
                     // Phase 6F.7: measure callback arrival cadence independently of PTS.
@@ -320,6 +327,23 @@ public:
                         videoCallbackIntervalAverageMs +=
                             (videoCallbackIntervalLastMs - videoCallbackIntervalAverageMs)
                             / double(videoCallbackIntervalSamples);
+                        if (videoCallbackIntervalWindow.size() < 8192)
+                            videoCallbackIntervalWindow.append(videoCallbackIntervalLastMs);
+                        else {
+                            videoCallbackIntervalWindow[videoCallbackIntervalWindowWriteIndex] =
+                                videoCallbackIntervalLastMs;
+                            videoCallbackIntervalWindowWriteIndex =
+                                (videoCallbackIntervalWindowWriteIndex + 1) % 8192;
+                        }
+                        if (videoCallbackIntervalLastMs < 5.0) {
+                            ++videoCallbackIntervalsUnder5;
+                            ++videoCallbackFastRunLength;
+                            if (videoCallbackFastRunLength == 2) ++videoCallbackBurstCount;
+                            videoCallbackBurstMaxRun = qMax(videoCallbackBurstMaxRun,
+                                videoCallbackFastRunLength);
+                        } else {
+                            videoCallbackFastRunLength = 0;
+                        }
                         if (videoCallbackIntervalLastMs < 16.0) ++videoCallbackIntervalsUnder16;
                         else if (videoCallbackIntervalLastMs < 25.0) ++videoCallbackIntervals16To25;
                         else if (videoCallbackIntervalLastMs < 33.0) ++videoCallbackIntervals25To33;
@@ -355,6 +379,24 @@ public:
                     } else {
                         ++videoPtsUnavailable;
                     }
+                    if (callbackElapsedNs >= 0 && currentPtsIntervalUs > 0) {
+                        const double ptsIntervalMs = currentPtsIntervalUs / 1000.0;
+                        const double arrivalVsPtsMs = double(callbackElapsedNs) / 1000000.0
+                            - ptsIntervalMs;
+                        videoArrivalPtsDeltaLastMs = arrivalVsPtsMs;
+                        videoArrivalPtsDeltaMinMs = videoArrivalPtsDeltaSamples == 0
+                            ? arrivalVsPtsMs : qMin(videoArrivalPtsDeltaMinMs, arrivalVsPtsMs);
+                        videoArrivalPtsDeltaMaxMs = qMax(videoArrivalPtsDeltaMaxMs, arrivalVsPtsMs);
+                        ++videoArrivalPtsDeltaSamples;
+                        videoArrivalPtsDeltaAverageMs +=
+                            (arrivalVsPtsMs - videoArrivalPtsDeltaAverageMs)
+                            / double(videoArrivalPtsDeltaSamples);
+                        if (double(callbackElapsedNs) / 1000000.0 < 5.0) {
+                            if (currentPtsIntervalUs < 20000) ++videoBurstPtsUnder20;
+                            else if (currentPtsIntervalUs < 30000) ++videoBurstPts20To30;
+                            else ++videoBurstPtsAtLeast30;
+                        }
+                    }
                     // Keep the preview video close to 30 FPS when frames are available.
                     // A 41 ms gate capped the video near 24 FPS and could look choppy
                     // even while Spectrum continued repainting smoothly.
@@ -368,6 +410,7 @@ public:
                             ++videoThrottledPtsOver30;
                         else
                             ++videoThrottledPtsUnknown;
+                        finishCallbackProcessing();
                         return;
                     }
                     frameClock.restart();
@@ -400,7 +443,7 @@ public:
                     recordPhase6fTiming(conversionTimer.nsecsElapsed(),
                         videoConvertLastMs, videoConvertAverageMs,
                         videoConvertMaxMs, videoConvertSamples);
-                    if (image.isNull()) return;
+                    if (image.isNull()) { finishCallbackProcessing(); return; }
                     // Preview only: cap image size to reduce CPU painting cost.
                     const QSize limit(960, 540);
                     if (image.width() > limit.width() || image.height() > limit.height()) {
@@ -415,6 +458,7 @@ public:
                     videoImage = std::move(image);
                     gpuBackgroundDirty = true;
                     update();
+                    finishCallbackProcessing();
                 });
         // Phase 4D.1: animate between 20 Hz FFT samples at ~30 Hz.
         // Stop the animation when the analyzer clears its bands.
@@ -615,12 +659,42 @@ public:
         const double callbackFps = videoCallbackIntervalSamples > 0
             ? double(videoFramesReceived - 1) / profileSeconds : 0.0;
         const double acceptedFps = double(videoFramesAccepted) / profileSeconds;
+        QVector<double> sortedCallbackIntervals = videoCallbackIntervalWindow;
+        std::sort(sortedCallbackIntervals.begin(), sortedCallbackIntervals.end());
+        const auto callbackPercentile = [&sortedCallbackIntervals](double percentile) {
+            if (sortedCallbackIntervals.isEmpty()) return 0.0;
+            const int index = qBound(0, int(std::ceil(percentile
+                * sortedCallbackIntervals.size())) - 1, sortedCallbackIntervals.size() - 1);
+            return sortedCallbackIntervals[index];
+        };
         const QString callbackStats = QStringLiteral(
-            "Phase 6F.7 callback arrival & throttle profiling (wall-clock; metadata only)\n"
-            "Callback interval last/avg/min/max: %1 / %2 / %3 / %4 ms | samples: %5\n"
-            "Callback intervals: <16 ms %6 | 16–25 ms %7 | 25–33 ms %8 | >33 ms %9\n"
-            "Approx. callback FPS: %10 | accepted preview FPS: %11 | elapsed: %12 s\n"
-            "Throttled frames by preceding PTS interval: <20 ms %13 | 20–30 ms %14 | >=30 ms %15 | unknown %16\n\n")
+            "Phase 6F.8 callback burst & processing-gap analysis\\n"
+            "Callback interval P50/P90/P95/P99: %1 / %2 / %3 / %4 ms | window samples: %5\\n"
+            "Callback intervals <5 ms: %6 | burst groups (2+ consecutive): %7 | max consecutive: %8\\n"
+            "Callback processing last/avg/max: %9 / %10 / %11 ms | samples: %12\\n"
+            "Arrival interval minus PTS interval last/avg/min/max: %13 / %14 / %15 / %16 ms | samples: %17\\n"
+            "Fast callback (<5 ms) with PTS interval: <20 ms %18 | 20–30 ms %19 | >=30 ms %20\\n"
+            "Callback interval last/avg/min/max: %21 / %22 / %23 / %24 ms | total samples: %25\\n"
+            "Callback intervals: <16 ms %26 | 16–25 ms %27 | 25–33 ms %28 | >33 ms %29\\n"
+            "Approx. callback FPS: %30 | accepted preview FPS: %31 | elapsed: %32 s\\n"
+            "Throttled frames by preceding PTS interval: <20 ms %33 | 20–30 ms %34 | >=30 ms %35 | unknown %36\\n\\n")
+            .arg(callbackPercentile(0.50), 0, 'f', 3)
+            .arg(callbackPercentile(0.90), 0, 'f', 3)
+            .arg(callbackPercentile(0.95), 0, 'f', 3)
+            .arg(callbackPercentile(0.99), 0, 'f', 3)
+            .arg(sortedCallbackIntervals.size())
+            .arg(videoCallbackIntervalsUnder5).arg(videoCallbackBurstCount)
+            .arg(videoCallbackBurstMaxRun)
+            .arg(videoCallbackProcessingLastMs, 0, 'f', 3)
+            .arg(videoCallbackProcessingAverageMs, 0, 'f', 3)
+            .arg(videoCallbackProcessingMaxMs, 0, 'f', 3)
+            .arg(videoCallbackProcessingSamples)
+            .arg(videoArrivalPtsDeltaLastMs, 0, 'f', 3)
+            .arg(videoArrivalPtsDeltaAverageMs, 0, 'f', 3)
+            .arg(videoArrivalPtsDeltaSamples ? videoArrivalPtsDeltaMinMs : 0.0, 0, 'f', 3)
+            .arg(videoArrivalPtsDeltaMaxMs, 0, 'f', 3)
+            .arg(videoArrivalPtsDeltaSamples)
+            .arg(videoBurstPtsUnder20).arg(videoBurstPts20To30).arg(videoBurstPtsAtLeast30)
             .arg(videoCallbackIntervalLastMs, 0, 'f', 3)
             .arg(videoCallbackIntervalAverageMs, 0, 'f', 3)
             .arg(videoCallbackIntervalSamples ? videoCallbackIntervalMinMs : 0.0, 0, 'f', 3)
@@ -1631,9 +1705,22 @@ private:
     quint64 videoFramesThrottled = 0;
     double videoConvertLastMs = 0.0, videoConvertAverageMs = 0.0, videoConvertMaxMs = 0.0;
     quint64 videoConvertSamples = 0;
-    // Phase 6F.7 callback arrival and throttle profiling; no frame pacing changes.
+    // Phase 6F.8 callback arrival, burst, PTS-correlation and processing profiling.
     QElapsedTimer videoCallbackClock;
     QElapsedTimer videoProfilingClock;
+    QVector<double> videoCallbackIntervalWindow;
+    int videoCallbackIntervalWindowWriteIndex = 0;
+    quint64 videoCallbackIntervalsUnder5 = 0;
+    quint64 videoCallbackBurstCount = 0;
+    quint64 videoCallbackFastRunLength = 0;
+    quint64 videoCallbackBurstMaxRun = 0;
+    double videoCallbackProcessingLastMs = 0.0, videoCallbackProcessingAverageMs = 0.0;
+    double videoCallbackProcessingMaxMs = 0.0;
+    quint64 videoCallbackProcessingSamples = 0;
+    double videoArrivalPtsDeltaLastMs = 0.0, videoArrivalPtsDeltaAverageMs = 0.0;
+    double videoArrivalPtsDeltaMinMs = 0.0, videoArrivalPtsDeltaMaxMs = 0.0;
+    quint64 videoArrivalPtsDeltaSamples = 0;
+    quint64 videoBurstPtsUnder20 = 0, videoBurstPts20To30 = 0, videoBurstPtsAtLeast30 = 0;
     double videoCallbackIntervalLastMs = 0.0, videoCallbackIntervalAverageMs = 0.0;
     double videoCallbackIntervalMinMs = 0.0, videoCallbackIntervalMaxMs = 0.0;
     quint64 videoCallbackIntervalSamples = 0;
