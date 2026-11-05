@@ -277,6 +277,10 @@ bool GpuRenderer::presentNativeTexture()
     if(FAILED(hr)){
         nativePresentCpuMs=timer.nsecsElapsed()/1000000.0;
         nativePresentCpuMaxMs=qMax(nativePresentCpuMaxMs,nativePresentCpuMs);
+        const quint64 completedAttempts = nativePresentAttempts - nativePresentFailures;
+        if (completedAttempts > 0)
+            nativePresentCpuAverageMs += (nativePresentCpuMs-nativePresentCpuAverageMs)
+                / double(completedAttempts);
         ++nativePresentFailures;
         nativePresentError=QStringLiteral("Native vertex Map failed: %1").arg(hexResult(hr));
         context->OMSetRenderTargets(0,nullptr,nullptr);return false;
