@@ -400,7 +400,7 @@ public:
                     // Phase 6F.9: pace accepted preview frames by source PTS, not
                     // callback arrival time. A burst can deliver several frames close
                     // together; compare each frame with the last frame actually shown.
-                    constexpr qint64 targetPreviewIntervalUs = 33333; // ~30 FPS
+                    constexpr qint64 targetPreviewIntervalUs = 33300; // ~30 FPS; tolerates 16.666 ms timestamp rounding
                     if (framePtsUs >= 0) {
                         if (lastPresentedVideoPtsUs >= 0) {
                             const qint64 sincePresentedUs = framePtsUs - lastPresentedVideoPtsUs;
@@ -705,7 +705,7 @@ public:
             "Callback intervals: <16 ms %26 | 16–25 ms %27 | 25–33 ms %28 | >33 ms %29\n"
             "Approx. callback FPS: %30 | accepted preview FPS: %31 | elapsed: %32 s\n"
             "Skipped by interval since last presented PTS: <20 ms %33 | 20–30 ms %34 | >=30 ms %35 | duplicate/unknown %36\n"
-            "Pacing decisions: PTS accepted %37 | no-PTS fallback accepted %38 | duplicate PTS skipped %39 | PTS timeline resets %40 | frames without PTS %41 | target interval 33.333 ms\n\n")
+            "Pacing decisions: PTS accepted %37 | no-PTS fallback accepted %38 | duplicate PTS skipped %39 | PTS timeline resets %40 | frames without PTS %41 | target interval 33.300 ms\n\n")
             .arg(callbackPercentile(0.50), 0, 'f', 3)
             .arg(callbackPercentile(0.90), 0, 'f', 3)
             .arg(callbackPercentile(0.95), 0, 'f', 3)
