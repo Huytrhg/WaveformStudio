@@ -208,3 +208,61 @@ lifetime of the preview widget, consistent with the Phase 6F.5 metadata audit.
 Do not change the preview gate or renderer based only on the older received/accepted/
 throttled totals. Use the timestamp profile first to determine whether the two
 sources actually deliver different presentation cadence.
+
+
+
+## Phase 6F.7 — callback arrival and throttle profiling
+
+Phase 6F.7 adds wall-clock measurements at the start of every valid
+`QVideoSink::videoFrameChanged` callback. The callback arrival clock is
+independent of the frame's presentation timestamp (PTS), so the report can
+compare when Qt delivers callbacks with the source timeline measured in
+Phase 6F.6.
+
+The diagnostics report:
+
+- Last, average, minimum and maximum callback-to-callback wall-clock intervals.
+- Callback interval buckets: below 16 ms, 16–25 ms, 25–33 ms, and above 33 ms.
+- Approximate callback FPS and accepted preview FPS, calculated over the
+  profiling widget's elapsed lifetime.
+- Counts of frames rejected by the existing 33 ms gate, grouped by the
+  immediately preceding positive PTS interval: below 20 ms, 20–30 ms,
+  at least 30 ms, or unknown/non-positive.
+
+Callback interval samples include every valid callback, whether or not the
+frame is accepted for conversion. The PTS group assigned to a throttled frame
+is the interval between that frame's PTS and the previous valid frame's PTS.
+The FPS figures are cumulative averages from preview-widget construction;
+for a focused comparison, start playback from a similar state and collect
+reports after comparable durations.
+
+### Interpretation
+
+- Regular PTS intervals with irregular callback intervals suggest callback
+  delivery/scheduling variability rather than irregular source presentation
+  timestamps.
+- Regular callback intervals with irregular PTS intervals suggest source
+  cadence variability.
+- A high count in the `<20 ms` throttled PTS bucket indicates that the 33 ms
+  gate is discarding frames from a faster source cadence.
+- Compare callback FPS, accepted preview FPS, PTS intervals, and the throttle
+  buckets together. Paint FPS remains a separate QWidget repaint measurement
+  and is not a count of unique video frames.
+
+This phase is profiling-only. It does not change the 33 ms acceptance gate,
+frame conversion, scaling, rendering, native presentation, or export behavior.
+No frame mapping or pixel copying is added. The Phase 6F.5 metadata-only audit
+and Phase 6F.6 PTS profiling remain in place.
+
+### Validation
+
+1. Pull the latest branch and build with the existing Qt 6.12 / MSVC kit.
+2. Play each comparison video for 30–60 seconds.
+3. Copy the complete Preview → Diagnostics report for each video.
+4. Compare callback interval buckets and callback FPS against PTS interval
+   statistics and accepted preview FPS.
+5. Check the throttle-by-PTS counts to see how often the 33 ms gate rejects
+   frames from each source cadence.
+6. Confirm preview pacing and export behavior are unchanged.
+
+The project has not been built or runtime-tested in this environment.
