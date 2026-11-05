@@ -617,11 +617,11 @@ public:
             ? double(videoFramesReceived - 1) / profileSeconds : 0.0;
         const double acceptedFps = double(videoFramesAccepted) / profileSeconds;
         const QString callbackStats = QStringLiteral(
-            "Phase 6F.7 callback arrival & throttle profiling (wall-clock; metadata only)\\n"
-            "Callback interval last/avg/min/max: %1 / %2 / %3 / %4 ms | samples: %5\\n"
-            "Callback intervals: <16 ms %6 | 16–25 ms %7 | 25–33 ms %8 | >33 ms %9\\n"
-            "Approx. callback FPS: %10 | accepted preview FPS: %11 | elapsed: %12 s\\n"
-            "Throttled frames by preceding PTS interval: <20 ms %13 | 20–30 ms %14 | >=30 ms %15 | unknown %16\\n\\n")
+            "Phase 6F.7 callback arrival & throttle profiling (wall-clock; metadata only)\n"
+            "Callback interval last/avg/min/max: %1 / %2 / %3 / %4 ms | samples: %5\n"
+            "Callback intervals: <16 ms %6 | 16–25 ms %7 | 25–33 ms %8 | >33 ms %9\n"
+            "Approx. callback FPS: %10 | accepted preview FPS: %11 | elapsed: %12 s\n"
+            "Throttled frames by preceding PTS interval: <20 ms %13 | 20–30 ms %14 | >=30 ms %15 | unknown %16\n\n")
             .arg(videoCallbackIntervalLastMs, 0, 'f', 3)
             .arg(videoCallbackIntervalAverageMs, 0, 'f', 3)
             .arg(videoCallbackIntervalSamples ? videoCallbackIntervalMinMs : 0.0, 0, 'f', 3)
