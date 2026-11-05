@@ -329,3 +329,82 @@ bounded sample window when the diagnostics report is requested.
 This environment has not built or runtime-tested the project with the user's
 Windows / Qt 6.12 MSVC toolchain. Build and runtime validation remain required.
 
+## Phase 6F.9 — PTS-aware preview frame pacing
+
+Phase 6F.9 replaces the preview's callback-wall-clock 33 ms rejection gate
+with source-PTS pacing. The target interval is 33,333 microseconds (approximately
+30 preview frames per second).
+
+For each valid incoming frame:
+
+1. Read its source presentation timestamp (PTS), as before.
+2. Compare that PTS with the PTS of the last frame actually accepted for preview.
+3. If the positive PTS distance is below 33,333 microseconds, skip conversion
+   and return quickly. The next callback is evaluated against the same last
+   presented PTS, so a burst of 16.666 ms frames can advance to the next eligible
+   frame without requiring 33 ms of wall-clock callback spacing.
+4. Once the PTS distance reaches the target, process the current incoming frame
+   through the existing `QVideoFrame::toImage()`, optional downscale, and preview
+   update path, then advance the last-presented PTS.
+5. Duplicate PTS frames are skipped. A backwards PTS step is treated as a
+   timeline reset (for example, after a seek); that frame is accepted and becomes
+   the new PTS baseline.
+6. If a frame has no valid PTS, use the existing 33 ms elapsed-time gate as a
+   fallback. A fallback-accepted frame clears the last-presented PTS baseline so
+   the next valid PTS starts a fresh baseline.
+
+This is a latest-eligible-frame policy: early callbacks do not incur image
+conversion, and when a burst reaches the 33.333 ms PTS threshold, the current
+(newest received) frame is selected. It does not queue or convert every frame.
+The callback still handles each frame synchronously; no new worker thread,
+frame mapping, or extra image copy is introduced.
+
+### New diagnostics
+
+- PTS-paced accepted frames.
+- No-PTS fallback accepted frames.
+- Frames without PTS.
+- Duplicate PTS frames skipped.
+- PTS timeline resets.
+- Frames skipped by the PTS interval since the last presented frame, bucketed
+  into less than 20 ms, 20–30 ms, 30–33.333 ms, and duplicate/unknown.
+- Target PTS interval (33.333 ms).
+
+The existing callback-arrival/burst measurements remain available. Callback
+processing duration now includes conversion only for frames that pass the PTS
+pacing decision; skipped callbacks should be much cheaper.
+
+### Expected behavior and limitations
+
+- A stable 30 FPS source with approximately 33.333 ms PTS spacing should continue
+  to present nearly every source frame.
+- A 60 FPS source with approximately 16.666 ms PTS spacing should present about
+  every second source frame, targeting 30 FPS.
+- Mixed 30/60 cadence should select the newest frame once the accumulated PTS
+  distance reaches the target, rather than rejecting frames solely because
+  callback delivery happened within 33 ms.
+- The 33.333 ms target is fixed in this phase; it is not dynamically derived
+  from display refresh rate or audio analysis.
+- PTS is a media timeline, not a wall-clock deadline. This change improves
+  selection under callback bursts but does not guarantee that Qt delivers frames
+  at their ideal display times.
+- Export rendering is unchanged and does not use this preview pacing logic.
+
+### Validation
+
+1. Build the latest branch with the existing Qt 6.12 / MSVC 2022 kit.
+2. Play the same old and new videos separately for at least 30–60 seconds.
+3. Confirm the old stable 30 FPS video remains smooth and near its prior preview
+   rate.
+4. Confirm the newer mixed-cadence video has fewer frames skipped solely due to
+   callback burst timing and a higher accepted preview FPS.
+5. Check that PTS accepted, skipped-by-PTS, duplicate, reset, and no-PTS counters
+   are internally plausible.
+6. Test seeking and restarting playback to verify a backwards PTS step does not
+   leave the preview stuck.
+7. Verify Bars, Dancing Particles, Bokeh combinations, native presentation,
+   resize/minimize/restore, and export behavior remain intact.
+
+This environment has not built or runtime-tested the project with the user's
+Windows / Qt 6.12 MSVC toolchain. Build and runtime validation remain required.
+
