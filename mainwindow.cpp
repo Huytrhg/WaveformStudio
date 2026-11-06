@@ -2568,22 +2568,31 @@ MainWindow::MainWindow(QWidget *parent)
     propertiesPanel->setMinimumWidth(230);
     propertiesPanel->setMaximumWidth(340);
 
-    QVBoxLayout *propertiesLayout =
-        new QVBoxLayout(propertiesPanel);
-
-    propertiesLayout->setContentsMargins(12, 12, 12, 12);
-    propertiesLayout->setSpacing(12);
+    QVBoxLayout *propertiesPanelLayout = new QVBoxLayout(propertiesPanel);
+    propertiesPanelLayout->setContentsMargins(12, 12, 12, 12);
+    propertiesPanelLayout->setSpacing(10);
 
     QLabel *propertiesTitle =
         new QLabel("PROPERTIES");
 
     propertiesTitle->setObjectName("sectionTitle");
 
-    propertiesLayout->addWidget(propertiesTitle);
+    propertiesPanelLayout->addWidget(propertiesTitle);
 
-    QLabel *selectedEffectLabel = new QLabel("Spectrum Overlay");
+    QLabel *selectedEffectLabel = new QLabel("Audio Waveform");
     selectedEffectLabel->setStyleSheet("font-size:12pt;font-weight:bold;");
-    propertiesLayout->addWidget(selectedEffectLabel);
+    propertiesPanelLayout->addWidget(selectedEffectLabel);
+
+    QStackedWidget *propertiesStack = new QStackedWidget(propertiesPanel);
+    propertiesPanelLayout->addWidget(propertiesStack, 1);
+
+    QWidget *spectrumPropertiesPage = new QWidget(propertiesStack);
+    QVBoxLayout *spectrumPropertiesLayout = new QVBoxLayout(spectrumPropertiesPage);
+    spectrumPropertiesLayout->setContentsMargins(2, 4, 2, 4);
+    spectrumPropertiesLayout->setSpacing(9);
+    propertiesStack->addWidget(spectrumPropertiesPage);
+
+    QVBoxLayout *propertiesLayout = spectrumPropertiesLayout;
 
     QLabel *styleLabel = new QLabel("Visualization Style");
     propertiesLayout->addWidget(styleLabel);
@@ -2675,7 +2684,7 @@ MainWindow::MainWindow(QWidget *parent)
     waveTitle->setObjectName("sectionTitle");
     propertiesLayout->addWidget(waveTitle);
 
-    auto addWaveSlider = [propertiesLayout](const QString &name, int min, int max,
+    auto addWaveSlider = [&propertiesLayout](const QString &name, int min, int max,
                                             int initial, const QString &suffix,
                                             auto callback) {
         QHBoxLayout *row = new QHBoxLayout;
@@ -2951,11 +2960,16 @@ MainWindow::MainWindow(QWidget *parent)
         opacityValueLabel->setText(QString::number(value) + "%"); overlay->setOpacityPercent(value);
     });
 
-    // Bokeh is composited above the video and below the spectrum.
-    QFrame *bokehDivider = new QFrame;
-    bokehDivider->setFrameShape(QFrame::HLine);
-    propertiesLayout->addWidget(bokehDivider);
-    QLabel *bokehTitle = new QLabel("OVERLAY EFFECTS");
+    // Bokeh has its own page; its controls are not mixed with Spectrum.
+    propertiesLayout->addStretch();
+    QWidget *bokehPropertiesPage = new QWidget(propertiesStack);
+    QVBoxLayout *bokehPropertiesLayout = new QVBoxLayout(bokehPropertiesPage);
+    bokehPropertiesLayout->setContentsMargins(2, 4, 2, 4);
+    bokehPropertiesLayout->setSpacing(9);
+    propertiesStack->addWidget(bokehPropertiesPage);
+    propertiesLayout = bokehPropertiesLayout;
+
+    QLabel *bokehTitle = new QLabel("BOKEH OVERLAY");
     bokehTitle->setObjectName("sectionTitle");
     propertiesLayout->addWidget(bokehTitle);
     QCheckBox *bokehToggle = new QCheckBox("Bokeh Overlay");
@@ -3038,11 +3052,14 @@ MainWindow::MainWindow(QWidget *parent)
         spectrumDisplay->setBokehColor(chosen);
     });
 
-    // Whole-frame effects. These affect the video background before Spectrum is drawn.
-    QFrame *frameEffectsDivider = new QFrame;
-    frameEffectsDivider->setFrameShape(QFrame::HLine);
-    frameEffectsDivider->setStyleSheet("color:#45474C;");
-    propertiesLayout->addWidget(frameEffectsDivider);
+    // Whole-frame effects have a dedicated properties page.
+    propertiesLayout->addStretch();
+    QWidget *frameEffectsPropertiesPage = new QWidget(propertiesStack);
+    QVBoxLayout *frameEffectsPropertiesLayout = new QVBoxLayout(frameEffectsPropertiesPage);
+    frameEffectsPropertiesLayout->setContentsMargins(2, 4, 2, 4);
+    frameEffectsPropertiesLayout->setSpacing(9);
+    propertiesStack->addWidget(frameEffectsPropertiesPage);
+    propertiesLayout = frameEffectsPropertiesLayout;
 
     QLabel *frameEffectsTitle = new QLabel("FRAME EFFECTS");
     frameEffectsTitle->setObjectName("sectionTitle");
@@ -3156,6 +3173,38 @@ MainWindow::MainWindow(QWidget *parent)
     });
 
     propertiesLayout->addStretch();
+
+    QWidget *unavailablePropertiesPage = new QWidget(propertiesStack);
+    QVBoxLayout *unavailablePropertiesLayout = new QVBoxLayout(unavailablePropertiesPage);
+    unavailablePropertiesLayout->setContentsMargins(2, 4, 2, 4);
+    QLabel *unavailablePropertiesMessage = new QLabel(
+        "This effect is listed in the library. Its editable properties will appear here when the effect is implemented.");
+    unavailablePropertiesMessage->setWordWrap(true);
+    unavailablePropertiesMessage->setStyleSheet("color:#9299A3;padding:8px;");
+    unavailablePropertiesLayout->addWidget(unavailablePropertiesMessage);
+    unavailablePropertiesLayout->addStretch();
+    propertiesStack->addWidget(unavailablePropertiesPage);
+
+    connect(effectsList, &QListWidget::currentTextChanged, this,
+            [propertiesStack, selectedEffectLabel, visualModeCombo](const QString &name) {
+        selectedEffectLabel->setText(name);
+        if (name == "Bokeh Overlay") {
+            propertiesStack->setCurrentIndex(1);
+        } else if (name == "Glow") {
+            propertiesStack->setCurrentIndex(2);
+        } else if (name == "Audio Waveform" ||
+                   name == "Spectrum Analyzer" ||
+                   name == "Circular Waveform" ||
+                   name == "Audio Bars") {
+            propertiesStack->setCurrentIndex(0);
+            if (name == "Audio Waveform") visualModeCombo->setCurrentIndex(1);
+            else if (name == "Circular Waveform") visualModeCombo->setCurrentIndex(2);
+            else visualModeCombo->setCurrentIndex(0);
+        } else {
+            propertiesStack->setCurrentIndex(3);
+        }
+    });
+    effectsList->setCurrentRow(0);
 
     QScrollArea *propertiesScroll = new QScrollArea;
     propertiesScroll->setWidgetResizable(true);
