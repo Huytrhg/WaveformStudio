@@ -1224,48 +1224,8 @@ private:
             }
         }
 
-        if (edgeGlowEnabled) {
-            const qreal level = effectLevel(frameGradientEnergy, edgeSensitivity);
-            const qreal strength = (edgeOpacity / 100.0) * level;
-            if (strength > 0.001) {
-                const qreal edgeWidth = qMin(target.width(), target.height()) *
-                                        (edgeSpread / 100.0);
-                const auto withAlpha = [strength](QColor color, qreal factor) {
-                    color.setAlphaF(qBound(0.0, strength * factor, 0.85));
-                    return color;
-                };
-                const QColor clear(0, 0, 0, 0);
-                const QRectF topRect(target.left(), target.top(), target.width(), edgeWidth);
-                const QRectF bottomRect(target.left(), target.bottom() - edgeWidth, target.width(), edgeWidth);
-                const QRectF leftRect(target.left(), target.top(), edgeWidth, target.height());
-                const QRectF rightRect(target.right() - edgeWidth, target.top(), edgeWidth, target.height());
-
-                QLinearGradient topGradient(topRect.topLeft(), topRect.bottomLeft());
-                topGradient.setColorAt(0.0, withAlpha(edgeColors[0], 1.0));
-                topGradient.setColorAt(0.35, withAlpha(edgeColors[0], 0.48));
-                topGradient.setColorAt(1.0, clear);
-                QLinearGradient bottomGradient(bottomRect.bottomLeft(), bottomRect.topLeft());
-                bottomGradient.setColorAt(0.0, withAlpha(edgeColors[2], 1.0));
-                bottomGradient.setColorAt(0.35, withAlpha(edgeColors[2], 0.48));
-                bottomGradient.setColorAt(1.0, clear);
-                QLinearGradient leftGradient(leftRect.topLeft(), leftRect.topRight());
-                leftGradient.setColorAt(0.0, withAlpha(edgeColors[1], 1.0));
-                leftGradient.setColorAt(0.35, withAlpha(edgeColors[1], 0.48));
-                leftGradient.setColorAt(1.0, clear);
-                QLinearGradient rightGradient(rightRect.topRight(), rightRect.topLeft());
-                rightGradient.setColorAt(0.0, withAlpha(edgeColors[3], 1.0));
-                rightGradient.setColorAt(0.35, withAlpha(edgeColors[3], 0.48));
-                rightGradient.setColorAt(1.0, clear);
-
-                painter.save();
-                painter.setClipRect(target);
-                painter.fillRect(topRect, topGradient);
-                painter.fillRect(bottomRect, bottomGradient);
-                painter.fillRect(leftRect, leftGradient);
-                painter.fillRect(rightRect, rightGradient);
-                painter.restore();
-            }
-        }
+        EffectOverlayRenderer::paintGlow(painter, target,
+            overlaySettings, frameGradientEnergy);
     }
 
 protected:
