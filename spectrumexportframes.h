@@ -59,6 +59,7 @@ public:
         m_effectOverlayRenderer.reset();
         m_framePulseEnergy = 0.0;
         m_bokehSmoothedEnergy = 0.0;
+        m_glowSmoothedEnergy = 0.0;
         m_profileFrames = 0;
         m_profileSpectrumNs = m_profileStateNs = m_profilePaintNs = 0;
         m_profileSpectrumMaxNs = m_profileStateMaxNs = m_profilePaintMaxNs = 0;
@@ -143,12 +144,15 @@ public:
                 if (m_bokehSettings.enabled && m_bokehSettings.opacity > 0)
                     paintBokeh(composite, effectArea, target, effectTime);
                 const qreal energy = spectrumEnergy(target);
+                const qreal glowResponse = 1.0 -
+                    (qBound(0, m_effectSettings.glowSmoothing, 100) / 100.0) * 0.90;
+                m_glowSmoothedEnergy += (energy - m_glowSmoothedEnergy) * glowResponse;
                 m_effectOverlayRenderer.paintRainGlass(composite, effectArea,
                     m_effectSettings, effectTime, energy);
                 m_effectOverlayRenderer.paintParticles(composite, effectArea,
                     m_effectSettings, effectTime, energy);
                 EffectOverlayRenderer::paintGlow(composite, effectArea,
-                    m_effectSettings, energy);
+                    m_effectSettings, m_glowSmoothedEnergy);
                 composite.drawImage(QPoint(0, 0), m_spectrumBuffer);
                 composite.end();
             }
@@ -349,6 +353,7 @@ private:
     QImage m_bokehSprite;
     qreal m_framePulseEnergy = 0.0;
     qreal m_bokehSmoothedEnergy = 0.0;
+    qreal m_glowSmoothedEnergy = 0.0;
     qint64 m_profileFrames = 0;
     qint64 m_profileSpectrumNs = 0, m_profileStateNs = 0, m_profilePaintNs = 0;
     qint64 m_profileSpectrumMaxNs = 0, m_profileStateMaxNs = 0, m_profilePaintMaxNs = 0;
