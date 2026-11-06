@@ -3,6 +3,8 @@
 
 #include <QColor>
 #include <QImage>
+#include <QLinearGradient>
+#include <QPen>
 #include <QPainter>
 #include <QPainterPath>
 #include <QRadialGradient>
@@ -130,8 +132,8 @@ public:
     static void paintGlow(QPainter &p, const QRectF &area,
                           const EffectOverlaySettings &s, qreal audioEnergy = 0.0) {
         if (!s.glowEnabled || area.isEmpty() || s.glowOpacity <= 0) return;
-        const qreal level = s.glowSensitivity <= 0 ? 1.0 :
-            qBound(0.0, audioEnergy * (0.25 + s.glowSensitivity / 50.0), 1.0);
+        const qreal level = qBound(0.0,
+            audioEnergy * (0.25 + s.glowSensitivity / 50.0), 1.0);
         const qreal strength = (s.glowOpacity / 100.0) * level;
         if (strength <= 0.001) return;
         const qreal edgeWidth = qMin(area.width(), area.height()) *
