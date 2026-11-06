@@ -4201,8 +4201,11 @@ MainWindow::MainWindow(QWidget *parent)
             // asynchronous staging rings optimize live Preview only; they are
             // not used to generate or reorder FFmpeg rawvideo frames.
             qDebug().noquote() << "[Phase 6D EXPORT PATH]"
-                << "renderer=CPU SpectrumRenderer + QPainter Bokeh"
+                << "renderer=CPU SpectrumRenderer + cached QPainter effect overlays"
                 << "bokeh_enabled=" << spectrumOverlay->exportBokehSettings().enabled
+                << "rain_glass_enabled=" << spectrumOverlay->exportEffectSettings().rainGlassEnabled
+                << "particles_enabled=" << spectrumOverlay->exportEffectSettings().particlesEnabled
+                << "glow_enabled=" << spectrumOverlay->exportEffectSettings().glowEnabled
                 << "preview_d3d11_async_readback=not_used_by_export"
                 << "frame_size=" << overlaySize
                 << "fps=" << exportFps
