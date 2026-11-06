@@ -3220,7 +3220,7 @@ MainWindow::MainWindow(QWidget *parent)
     edgeGlowPropertiesLayout->setSpacing(9);
     propertiesStack->addWidget(edgeGlowPropertiesPage);
     propertiesLayout = edgeGlowPropertiesLayout;
-    QLabel *edgeGlowTitle = new QLabel("GRADIENT EDGE GLOW");
+    QLabel *edgeGlowTitle = new QLabel("GLOW OVERLAY");
     edgeGlowTitle->setObjectName("sectionTitle");
     propertiesLayout->addWidget(edgeGlowTitle);
 
@@ -3282,6 +3282,88 @@ MainWindow::MainWindow(QWidget *parent)
 
     propertiesLayout->addStretch();
 
+    QWidget *rainGlassPropertiesPage = new QWidget(propertiesStack);
+    QVBoxLayout *rainGlassPropertiesLayout = new QVBoxLayout(rainGlassPropertiesPage);
+    rainGlassPropertiesLayout->setContentsMargins(2, 4, 2, 4);
+    rainGlassPropertiesLayout->setSpacing(9);
+    propertiesStack->addWidget(rainGlassPropertiesPage);
+    propertiesLayout = rainGlassPropertiesLayout;
+    QLabel *rainGlassTitle = new QLabel("RAIN GLASS");
+    rainGlassTitle->setObjectName("sectionTitle");
+    propertiesLayout->addWidget(rainGlassTitle);
+    QCheckBox *rainGlassToggle = new QCheckBox("Enable Rain Glass");
+    propertiesLayout->addWidget(rainGlassToggle);
+    connect(rainGlassToggle, &QCheckBox::toggled, this, [this](bool v) {
+        spectrumOverlay->setRainGlassEnabled(v); spectrumDisplay->setRainGlassEnabled(v);
+    });
+    addWaveSlider("Droplet Density", 1, 180, 70, "", [this](int v) {
+        spectrumOverlay->setRainGlassCount(v); spectrumDisplay->setRainGlassCount(v);
+    });
+    addWaveSlider("Droplet Size", 1, 100, 45, "%", [this](int v) {
+        spectrumOverlay->setRainGlassSize(v); spectrumDisplay->setRainGlassSize(v);
+    });
+    addWaveSlider("Fall Speed", 0, 100, 55, "%", [this](int v) {
+        spectrumOverlay->setRainGlassSpeed(v); spectrumDisplay->setRainGlassSpeed(v);
+    });
+    addWaveSlider("Opacity", 0, 100, 55, "%", [this](int v) {
+        spectrumOverlay->setRainGlassOpacity(v); spectrumDisplay->setRainGlassOpacity(v);
+    });
+    addWaveSlider("Streak Length", 0, 100, 35, "%", [this](int v) {
+        spectrumOverlay->setRainGlassStreakLength(v); spectrumDisplay->setRainGlassStreakLength(v);
+    });
+    QCheckBox *rainAudioReactiveToggle = new QCheckBox("Audio Reactive");
+    propertiesLayout->addWidget(rainAudioReactiveToggle);
+    connect(rainAudioReactiveToggle, &QCheckBox::toggled, this, [this](bool v) {
+        spectrumOverlay->setRainGlassAudioReactive(v); spectrumDisplay->setRainGlassAudioReactive(v);
+    });
+    addWaveSlider("Audio Sensitivity", 0, 100, 55, "%", [this](int v) {
+        spectrumOverlay->setRainGlassSensitivity(v); spectrumDisplay->setRainGlassSensitivity(v);
+    });
+
+    propertiesLayout->addStretch();
+    QWidget *particlesPropertiesPage = new QWidget(propertiesStack);
+    QVBoxLayout *particlesPropertiesLayout = new QVBoxLayout(particlesPropertiesPage);
+    particlesPropertiesLayout->setContentsMargins(2, 4, 2, 4);
+    particlesPropertiesLayout->setSpacing(9);
+    propertiesStack->addWidget(particlesPropertiesPage);
+    propertiesLayout = particlesPropertiesLayout;
+    QLabel *particlesTitle = new QLabel("PARTICLES OVERLAY");
+    particlesTitle->setObjectName("sectionTitle");
+    propertiesLayout->addWidget(particlesTitle);
+    QCheckBox *particlesToggle = new QCheckBox("Enable Particles");
+    propertiesLayout->addWidget(particlesToggle);
+    connect(particlesToggle, &QCheckBox::toggled, this, [this](bool v) {
+        spectrumOverlay->setParticlesEnabled(v); spectrumDisplay->setParticlesEnabled(v);
+    });
+    addWaveSlider("Particle Count", 1, 180, 45, "", [this](int v) {
+        spectrumOverlay->setParticleCount(v); spectrumDisplay->setParticleCount(v);
+    });
+    addWaveSlider("Particle Size", 1, 100, 35, "%", [this](int v) {
+        spectrumOverlay->setParticleSize(v); spectrumDisplay->setParticleSize(v);
+    });
+    addWaveSlider("Movement Speed", 0, 100, 35, "%", [this](int v) {
+        spectrumOverlay->setParticleSpeed(v); spectrumDisplay->setParticleSpeed(v);
+    });
+    addWaveSlider("Opacity", 0, 100, 65, "%", [this](int v) {
+        spectrumOverlay->setParticleOpacity(v); spectrumDisplay->setParticleOpacity(v);
+    });
+    addWaveSlider("Glow", 0, 100, 60, "%", [this](int v) {
+        spectrumOverlay->setParticleGlow(v); spectrumDisplay->setParticleGlow(v);
+    });
+    addWaveSlider("Twinkle", 0, 100, 25, "%", [this](int v) {
+        spectrumOverlay->setParticleTwinkle(v); spectrumDisplay->setParticleTwinkle(v);
+    });
+    QCheckBox *particlesAudioReactiveToggle = new QCheckBox("Audio Reactive");
+    propertiesLayout->addWidget(particlesAudioReactiveToggle);
+    connect(particlesAudioReactiveToggle, &QCheckBox::toggled, this, [this](bool v) {
+        spectrumOverlay->setParticlesAudioReactive(v); spectrumDisplay->setParticlesAudioReactive(v);
+    });
+    addWaveSlider("Audio Sensitivity", 0, 100, 55, "%", [this](int v) {
+        spectrumOverlay->setParticleSensitivity(v); spectrumDisplay->setParticleSensitivity(v);
+    });
+
+    propertiesLayout->addStretch();
+
     QWidget *unavailablePropertiesPage = new QWidget(propertiesStack);
     QVBoxLayout *unavailablePropertiesLayout = new QVBoxLayout(unavailablePropertiesPage);
     unavailablePropertiesLayout->setContentsMargins(2, 4, 2, 4);
@@ -3306,6 +3388,10 @@ MainWindow::MainWindow(QWidget *parent)
             propertiesStack->setCurrentIndex(4);
         } else if (name == "Glow") {
             propertiesStack->setCurrentIndex(5);
+        } else if (name == "Rain Glass") {
+            propertiesStack->setCurrentIndex(6);
+        } else if (name == "Particles") {
+            propertiesStack->setCurrentIndex(7);
         } else if (name == "Audio Waveform" ||
                    name == "Spectrum Analyzer" ||
                    name == "Circular Waveform" ||
@@ -3315,7 +3401,7 @@ MainWindow::MainWindow(QWidget *parent)
             else if (name == "Circular Waveform") visualModeCombo->setCurrentIndex(2);
             else visualModeCombo->setCurrentIndex(0);
         } else {
-            propertiesStack->setCurrentIndex(6);
+            propertiesStack->setCurrentIndex(8);
         }
     });
     effectsList->setCurrentRow(0);
@@ -4145,7 +4231,8 @@ MainWindow::MainWindow(QWidget *parent)
             }
             auto frameGenerator = std::make_shared<SpectrumExportFrames>(
                 spectrumAnalyzer, spectrumOverlay->exportSettings(),
-                overlaySize, exportFps, spectrumOverlay->exportBokehSettings());
+                overlaySize, exportFps, spectrumOverlay->exportBokehSettings(),
+                spectrumOverlay->exportEffectSettings());
             frameGenerator->setGradientSpeed(spectrumOverlay->exportGradientSpeed());
             frameGenerator->setDirectRgba(directRgba);
 
@@ -4168,7 +4255,7 @@ MainWindow::MainWindow(QWidget *parent)
                 "[base][spec]overlay=0:0:shortest=1:format=auto,"
                 "format=yuv420p[outv]";
 
-            progress->setLabelText("Rendering Spectrum and Bokeh frames into MP4...");
+            progress->setLabelText("Rendering Spectrum and active Effects into MP4...");
             QStringList arguments = {
                 "-y", "-hide_banner", "-nostats", "-benchmark",
                 "-progress", "pipe:1",
