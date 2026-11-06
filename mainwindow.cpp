@@ -3857,9 +3857,9 @@ MainWindow::MainWindow(QWidget *parent)
                     QMessageBox::information(
                         this,
                         "Export Complete",
-                        "The MP4 video with an audio-reactive Spectrum Bars overlay was exported successfully to:\n" +
+                        "The MP4 video with the configured Spectrum and Bokeh overlays was exported successfully to:\n" +
                             finalOutputPath +
-                            "\n\nPhase 1 uses FFmpeg's Spectrum Bars renderer. Its appearance is an initial preset; matching Preview styles and color controls will be added later."
+                            "\n\nSpectrum and enabled Bokeh settings are rendered into each export frame."
                         );
                 } else {
                     const QString errorText = QString::fromLocal8Bit(
@@ -3989,7 +3989,8 @@ MainWindow::MainWindow(QWidget *parent)
             // asynchronous staging rings optimize live Preview only; they are
             // not used to generate or reorder FFmpeg rawvideo frames.
             qDebug().noquote() << "[Phase 6D EXPORT PATH]"
-                << "renderer=CPU SpectrumRenderer"
+                << "renderer=CPU SpectrumRenderer + QPainter Bokeh"
+                << "bokeh_enabled=" << spectrumOverlay->exportBokehSettings().enabled
                 << "preview_d3d11_async_readback=not_used_by_export"
                 << "frame_size=" << overlaySize
                 << "fps=" << exportFps
