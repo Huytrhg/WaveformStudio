@@ -51,6 +51,10 @@ public:
         m_peaks.clear();
         m_peakTicks.clear();
         m_overlayBuffer = QImage();
+        m_spectrumBuffer = QImage();
+        m_bokehSprite = QImage();
+        m_framePulseEnergy = 0.0;
+        m_bokehSmoothedEnergy = 0.0;
         m_profileFrames = 0;
         m_profileSpectrumNs = m_profileStateNs = m_profilePaintNs = 0;
         m_profileSpectrumMaxNs = m_profileStateMaxNs = m_profilePaintMaxNs = 0;
