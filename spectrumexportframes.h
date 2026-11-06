@@ -3,6 +3,7 @@
 
 #include "spectrumanalyzer.h"
 #include "spectrumrenderer.h"
+#include "effectoverlays.h"
 
 #include <QImage>
 #include <QElapsedTimer>
@@ -41,9 +42,11 @@ public:
                          const SpectrumRenderSettings &settings,
                          const QSize &frameSize,
                          int fps = 30,
-                         const BokehExportSettings &bokehSettings = {})
+                         const BokehExportSettings &bokehSettings = {},
+                         const EffectOverlaySettings &effectSettings = {})
         : m_analyzer(analyzer), m_settings(settings), m_size(frameSize),
-          m_fps(qMax(1, fps)), m_bokehSettings(bokehSettings) {}
+          m_fps(qMax(1, fps)), m_bokehSettings(bokehSettings),
+          m_effectSettings(effectSettings) {}
 
     void reset() {
         m_nextFrame = 0;
@@ -53,6 +56,7 @@ public:
         m_overlayBuffer = QImage();
         m_spectrumBuffer = QImage();
         m_bokehSprite = QImage();
+        m_effectOverlayRenderer.reset();
         m_framePulseEnergy = 0.0;
         m_bokehSmoothedEnergy = 0.0;
         m_profileFrames = 0;
@@ -118,7 +122,9 @@ public:
         const QImage::Format outputFormat = m_directRgba
             ? QImage::Format_RGBA8888 : QImage::Format_ARGB32_Premultiplied;
         bool rendered = false;
-        if (m_bokehSettings.enabled && m_bokehSettings.opacity > 0) {
+        const bool hasAmbientEffects = m_effectSettings.rainGlassEnabled ||
+            m_effectSettings.particlesEnabled || m_effectSettings.glowEnabled;
+        if ((m_bokehSettings.enabled && m_bokehSettings.opacity > 0) || hasAmbientEffects) {
             // Render the Spectrum independently, then composite Bokeh first so
             // the exported layer order matches Preview: video -> Bokeh -> Spectrum.
             rendered = SpectrumRenderer::renderOverlayInto(
@@ -132,8 +138,17 @@ public:
                 m_overlayBuffer.fill(Qt::transparent);
                 QPainter composite(&m_overlayBuffer);
                 composite.setCompositionMode(QPainter::CompositionMode_SourceOver);
-                paintBokeh(composite, QRectF(QPointF(0, 0), QSizeF(m_size)),
-                           target, qreal(index) / m_fps);
+                const QRectF effectArea(QPointF(0, 0), QSizeF(m_size));
+                const qreal effectTime = qreal(index) / m_fps;
+                if (m_bokehSettings.enabled && m_bokehSettings.opacity > 0)
+                    paintBokeh(composite, effectArea, target, effectTime);
+                const qreal energy = spectrumEnergy(target);
+                m_effectOverlayRenderer.paintRainGlass(composite, effectArea,
+                    m_effectSettings, effectTime, energy);
+                m_effectOverlayRenderer.paintParticles(composite, effectArea,
+                    m_effectSettings, effectTime, energy);
+                EffectOverlayRenderer::paintGlow(composite, effectArea,
+                    m_effectSettings, energy);
                 composite.drawImage(QPoint(0, 0), m_spectrumBuffer);
                 composite.end();
             }
@@ -170,6 +185,17 @@ public:
     void setGradientSpeed(int speed) { m_gradientSpeed = qBound(0, speed, 100); }
 
 private:
+    static qreal spectrumEnergy(const QVector<float> &spectrum)
+    {
+        if (spectrum.isEmpty()) return 0.0;
+        qreal sum = 0.0;
+        for (float sample : spectrum) {
+            const qreal v = qBound(0.0, qreal(sample), 1.0);
+            sum += v * v;
+        }
+        return qBound(0.0, qSqrt(sum / spectrum.size()) * 2.4, 1.0);
+    }
+
     static qreal bokehHash(int n)
     {
         const qreal value = qSin(n * 127.1 + 78.233) * 43758.5453;
@@ -308,6 +334,8 @@ private:
     SpectrumAnalyzer *m_analyzer = nullptr; // owned by MainWindow
     SpectrumRenderSettings m_settings;
     BokehExportSettings m_bokehSettings;
+    EffectOverlaySettings m_effectSettings;
+    EffectOverlayRenderer m_effectOverlayRenderer;
     QSize m_size;
     int m_fps = 30;
     int m_gradientSpeed = 0;
