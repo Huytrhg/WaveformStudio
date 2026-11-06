@@ -165,6 +165,7 @@ bool registerWaveformNativeHudClass()
 #include <QColorDialog>
 #include <QComboBox>
 #include <QStackedLayout>
+#include <QStackedWidget>
 #include <QPolygonF>
 #include <QtMath>
 #include <QMouseEvent>
