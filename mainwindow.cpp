@@ -186,71 +186,6 @@ bool registerWaveformNativeHudClass()
 #include <windows.h>
 #endif
 
-// Phase 6F.12: experimental NV12-to-preview conversion. This path is opt-in
-// so the original Qt conversion remains available as an A/B baseline.
-namespace {
-QImage convertNv12DirectToPreview(QVideoFrame frame, bool *supported)
-{
-    if (supported) *supported = false;
-    if (frame.pixelFormat() != QVideoFrameFormat::Format_NV12
-        || frame.planeCount() < 2 || !frame.map(QVideoFrame::ReadOnly))
-        return {};
-
-    const int sourceWidth = frame.width();
-    const int sourceHeight = frame.height();
-    const uchar *yPlane = frame.bits(0);
-    const uchar *uvPlane = frame.bits(1);
-    const int yStride = frame.bytesPerLine(0);
-    const int uvStride = frame.bytesPerLine(1);
-    if (!yPlane || !uvPlane || sourceWidth <= 0 || sourceHeight <= 0
-        || yStride < sourceWidth || uvStride < ((sourceWidth + 1) / 2) * 2) {
-        frame.unmap();
-        return {};
-    }
-
-    const QSize outputSize = QSize(sourceWidth, sourceHeight)
-        .scaled(QSize(960, 540), Qt::KeepAspectRatio);
-    QImage output(outputSize, QImage::Format_RGB32);
-    if (output.isNull()) {
-        frame.unmap();
-        return {};
-    }
-
-    const auto format = frame.surfaceFormat();
-    const bool fullRange = format.colorRange() == QVideoFrameFormat::ColorRange_Full;
-    const bool bt601 = format.colorSpace() == QVideoFrameFormat::ColorSpace_BT601;
-    const double rv = bt601 ? 1.4020 : 1.5748;
-    const double gu = bt601 ? 0.344136 : 0.187324;
-    const double gv = bt601 ? 0.714136 : 0.468124;
-    const double bu = bt601 ? 1.7720 : 1.8556;
-    const double yScale = fullRange ? 1.0 : (255.0 / 219.0);
-    const double cScale = fullRange ? 1.0 : (255.0 / 224.0);
-
-    for (int dy = 0; dy < output.height(); ++dy) {
-        QRgb *dst = reinterpret_cast<QRgb *>(output.scanLine(dy));
-        const int sy = qMin(sourceHeight - 1,
-            int((qint64(dy) * sourceHeight) / output.height()));
-        const uchar *yRow = yPlane + sy * yStride;
-        const uchar *uvRow = uvPlane + (sy / 2) * uvStride;
-        for (int dx = 0; dx < output.width(); ++dx) {
-            const int sx = qMin(sourceWidth - 1,
-                int((qint64(dx) * sourceWidth) / output.width()));
-            const double yy = (double(yRow[sx]) - (fullRange ? 0.0 : 16.0)) * yScale;
-            const int uvOffset = (sx / 2) * 2;
-            const double u = (double(uvRow[uvOffset]) - 128.0) * cScale;
-            const double v = (double(uvRow[uvOffset + 1]) - 128.0) * cScale;
-            const int red = qBound(0, qRound(yy + rv * v), 255);
-            const int green = qBound(0, qRound(yy - gu * u - gv * v), 255);
-            const int blue = qBound(0, qRound(yy + bu * u), 255);
-            dst[dx] = qRgb(red, green, blue);
-        }
-    }
-    frame.unmap();
-    if (supported) *supported = true;
-    return output;
-}
-}
-
 // Interactive Photoshop-inspired gradient bar: click to add, drag stops,
 // double-click a stop to choose its color. Keeps rendering independent of FFT.
 class GradientEditor : public QWidget
@@ -549,43 +484,22 @@ public:
                         break;
                     }
 
-                    QImage image;
-                    bool directNv12Used = false;
-                    const bool requestDirectNv12 = qEnvironmentVariable("WAVEFORM_PREVIEW_NV12_DIRECT") == QStringLiteral("1");
-                    if (requestDirectNv12 && frame.pixelFormat() == QVideoFrameFormat::Format_NV12) {
-                        QElapsedTimer directTimer;
-                        directTimer.start();
-                        bool directSupported = false;
-                        image = convertNv12DirectToPreview(frame, &directSupported);
-                        recordPhase6fTiming(directTimer.nsecsElapsed(),
-                            nv12DirectLastMs, nv12DirectAverageMs,
-                            nv12DirectMaxMs, nv12DirectSamples);
-                        if (directSupported && !image.isNull()) {
-                            directNv12Used = true;
-                            ++nv12DirectFrames;
-                        } else {
-                            ++nv12DirectFallbacks;
-                            image = {};
-                        }
-                    }
-                    if (!directNv12Used) {
-                        QElapsedTimer conversionTimer;
-                        conversionTimer.start();
-                        image = frame.toImage();
-                        recordPhase6fTiming(conversionTimer.nsecsElapsed(),
-                            videoConvertLastMs, videoConvertAverageMs,
-                            videoConvertMaxMs, videoConvertSamples);
-                        if (image.isNull()) { finishCallbackProcessing(2); return; }
-                        // Baseline preview path: cap image size to reduce CPU painting cost.
-                        const QSize limit(960, 540);
-                        if (image.width() > limit.width() || image.height() > limit.height()) {
-                            QElapsedTimer scaleTimer;
-                            scaleTimer.start();
-                            image = image.scaled(limit, Qt::KeepAspectRatio, Qt::FastTransformation);
-                            recordPhase6fTiming(scaleTimer.nsecsElapsed(),
-                                videoScaleLastMs, videoScaleAverageMs,
-                                videoScaleMaxMs, videoScaleSamples);
-                        }
+                    QElapsedTimer conversionTimer;
+                    conversionTimer.start();
+                    QImage image = frame.toImage();
+                    recordPhase6fTiming(conversionTimer.nsecsElapsed(),
+                        videoConvertLastMs, videoConvertAverageMs,
+                        videoConvertMaxMs, videoConvertSamples);
+                    if (image.isNull()) { finishCallbackProcessing(2); return; }
+                    // Preview only: cap image size to reduce CPU painting cost.
+                    const QSize limit(960, 540);
+                    if (image.width() > limit.width() || image.height() > limit.height()) {
+                        QElapsedTimer scaleTimer;
+                        scaleTimer.start();
+                        image = image.scaled(limit, Qt::KeepAspectRatio, Qt::FastTransformation);
+                        recordPhase6fTiming(scaleTimer.nsecsElapsed(),
+                            videoScaleLastMs, videoScaleAverageMs,
+                            videoScaleMaxMs, videoScaleSamples);
                     }
                     // Commit the pacing baseline only after conversion succeeds,
                     // so a failed QImage conversion cannot advance the preview timeline.
@@ -805,15 +719,6 @@ public:
             .arg(qtSpectrumAverageMs, 0, 'f', 3)
             .arg(qtSpectrumMaxMs, 0, 'f', 3)
             .arg(qtSpectrumSamples);
-        const QString nv12Stats = QStringLiteral(
-            "Phase 6F.12 NV12 direct preview conversion (opt-in via WAVEFORM_PREVIEW_NV12_DIRECT=1)\\n"
-            "Direct frames: %1 | direct fallbacks: %2 | direct conversion last/avg/max: %3 / %4 / %5 ms | samples: %6\\n"
-            "Baseline QVideoFrame::toImage samples: %7 | baseline downscale samples: %8\\n")
-            .arg(nv12DirectFrames).arg(nv12DirectFallbacks)
-            .arg(nv12DirectLastMs, 0, 'f', 3)
-            .arg(nv12DirectAverageMs, 0, 'f', 3)
-            .arg(nv12DirectMaxMs, 0, 'f', 3)
-            .arg(nv12DirectSamples).arg(videoConvertSamples).arg(videoScaleSamples);
         const double profileSeconds = videoProfilingClock.isValid()
             ? qMax(0.001, videoProfilingClock.elapsed() / 1000.0) : 0.001;
         const double callbackFps = videoCallbackIntervalSamples > 0
@@ -939,7 +844,7 @@ public:
                                   : QStringLiteral("Hybrid GPU (D3D11; native presentation when supported)"))
             .arg(measuredFps, 0, 'f', 1)
             .arg(cpuStats)
-            .arg(callbackStats + presentationStats + guiWorkloadStats + nv12Stats)
+            .arg(callbackStats + presentationStats + guiWorkloadStats)
             .arg(videoFrameDetails)
             .arg(GpuRenderer::instance().diagnostics());
     }
@@ -1970,9 +1875,6 @@ private:
     qint64 lastPresentedVideoPtsUs = -1;
     double videoConvertLastMs = 0.0, videoConvertAverageMs = 0.0, videoConvertMaxMs = 0.0;
     quint64 videoConvertSamples = 0;
-    // Phase 6F.12: opt-in direct NV12 preview conversion A/B measurements.
-    double nv12DirectLastMs = 0.0, nv12DirectAverageMs = 0.0, nv12DirectMaxMs = 0.0;
-    quint64 nv12DirectSamples = 0, nv12DirectFrames = 0, nv12DirectFallbacks = 0;
     // Phase 6F.8 callback arrival, burst, PTS-correlation and processing profiling.
     QElapsedTimer videoCallbackClock;
     QElapsedTimer videoProfilingClock;
