@@ -10,7 +10,26 @@
 #include <QSize>
 #include <QVector>
 #include <QtGlobal>
+#include <QPolygonF>
+#include <QRadialGradient>
+#include <QtMath>
 #include <cmath>
+
+// Export-side snapshot of the Preview Bokeh controls. Animation is evaluated
+// from output-frame time so the result is deterministic and independent of Preview.
+struct BokehExportSettings {
+    bool enabled = false;
+    bool audioReactive = false;
+    int count = 28, size = 35, speed = 35;
+    int opacity = 55, sensitivity = 60;
+    QColor color = QColor("#A9D9FF");
+    QColor secondaryColor = QColor("#E8A5FF");
+    bool gradientEnabled = false;
+    int shape = 0, blur = 70, glow = 60;
+    int depth = 45, direction = 0;
+    int twinkle = 22, audioSmoothing = 65;
+    int pulseSmoothing = 70;
+};
 
 // B3.2: sequential frame generator for the FFmpeg overlay input.
 // No QWidget or video playback dependency. One call = one video frame.
@@ -21,9 +40,10 @@ public:
     SpectrumExportFrames(SpectrumAnalyzer *analyzer,
                          const SpectrumRenderSettings &settings,
                          const QSize &frameSize,
-                         int fps = 30)
+                         int fps = 30,
+                         const BokehExportSettings &bokehSettings = {})
         : m_analyzer(analyzer), m_settings(settings), m_size(frameSize),
-          m_fps(qMax(1, fps)) {}
+          m_fps(qMax(1, fps)), m_bokehSettings(bokehSettings) {}
 
     void reset() {
         m_nextFrame = 0;
@@ -93,9 +113,31 @@ public:
         profileClock.restart();
         const QImage::Format outputFormat = m_directRgba
             ? QImage::Format_RGBA8888 : QImage::Format_ARGB32_Premultiplied;
-        const bool rendered = SpectrumRenderer::renderOverlayInto(
-            m_overlayBuffer, m_size, m_smoothed, timed,
-            timed.peakHold ? m_peaks : QVector<float>(), outputFormat);
+        bool rendered = false;
+        if (m_bokehSettings.enabled && m_bokehSettings.opacity > 0) {
+            // Render the Spectrum independently, then composite Bokeh first so
+            // the exported layer order matches Preview: video -> Bokeh -> Spectrum.
+            rendered = SpectrumRenderer::renderOverlayInto(
+                m_spectrumBuffer, m_size, m_smoothed, timed,
+                timed.peakHold ? m_peaks : QVector<float>(), outputFormat);
+            if (rendered) {
+                if (m_overlayBuffer.size() != m_size ||
+                    m_overlayBuffer.format() != outputFormat)
+                    m_overlayBuffer = QImage(m_size, outputFormat);
+                if (m_overlayBuffer.isNull()) return {};
+                m_overlayBuffer.fill(Qt::transparent);
+                QPainter composite(&m_overlayBuffer);
+                composite.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                paintBokeh(composite, QRectF(QPointF(0, 0), QSizeF(m_size)),
+                           target, qreal(index) / m_fps);
+                composite.drawImage(QPoint(0, 0), m_spectrumBuffer);
+                composite.end();
+            }
+        } else {
+            rendered = SpectrumRenderer::renderOverlayInto(
+                m_overlayBuffer, m_size, m_smoothed, timed,
+                timed.peakHold ? m_peaks : QVector<float>(), outputFormat);
+        }
         const qint64 paintNs = profileClock.nsecsElapsed();
         if (!rendered) return {};
         ++m_profileFrames;
@@ -124,8 +166,144 @@ public:
     void setGradientSpeed(int speed) { m_gradientSpeed = qBound(0, speed, 100); }
 
 private:
+    static qreal bokehHash(int n)
+    {
+        const qreal value = qSin(n * 127.1 + 78.233) * 43758.5453;
+        return value - qFloor(value);
+    }
+
+    void rebuildBokehSprite()
+    {
+        constexpr int diameter = 128;
+        m_bokehSprite = QImage(diameter, diameter, QImage::Format_ARGB32_Premultiplied);
+        m_bokehSprite.fill(Qt::transparent);
+        QPainter painter(&m_bokehSprite);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QPointF center(diameter / 2.0, diameter / 2.0);
+        const qreal radius = diameter / 2.0;
+        QPainterPath shape;
+        if (m_bokehSettings.shape == 1) {
+            QPolygonF polygon;
+            for (int i = 0; i < 6; ++i) {
+                const qreal angle = qDegreesToRadians(i * 60.0 - 30.0);
+                polygon << QPointF(center.x() + radius * 0.91 * qCos(angle),
+                                   center.y() + radius * 0.91 * qSin(angle));
+            }
+            shape.addPolygon(polygon);
+            shape.closeSubpath();
+        } else if (m_bokehSettings.shape == 2) {
+            shape.moveTo(center.x(), center.y() + radius * 0.72);
+            shape.cubicTo(center.x() - radius * 1.12, center.y() + radius * 0.05,
+                          center.x() - radius * 0.82, center.y() - radius * 0.88,
+                          center.x(), center.y() - radius * 0.38);
+            shape.cubicTo(center.x() + radius * 0.82, center.y() - radius * 0.88,
+                          center.x() + radius * 1.12, center.y() + radius * 0.05,
+                          center.x(), center.y() + radius * 0.72);
+        } else {
+            shape.addEllipse(QRectF(2, 2, diameter - 4, diameter - 4));
+        }
+        QRadialGradient glow(center, radius);
+        const qreal blur = m_bokehSettings.blur / 100.0;
+        const qreal glowAmount = m_bokehSettings.glow / 100.0;
+        QColor inner = m_bokehSettings.color;
+        inner.setAlpha(qBound(0, qRound(225 * (0.65 + glowAmount * 0.35)), 255));
+        QColor outer = m_bokehSettings.gradientEnabled
+            ? m_bokehSettings.secondaryColor : m_bokehSettings.color;
+        outer.setAlpha(qBound(0, qRound(150 * (0.4 + glowAmount * 0.6)), 255));
+        QColor edge = outer;
+        edge.setAlpha(qRound((1.0 - blur) * 65));
+        QColor clear = outer;
+        clear.setAlpha(0);
+        glow.setColorAt(0.0, inner);
+        glow.setColorAt(0.18 + (1.0 - blur) * 0.30, outer);
+        glow.setColorAt(0.78 + (1.0 - blur) * 0.15, edge);
+        glow.setColorAt(1.0, clear);
+        painter.setPen(Qt::NoPen);
+        painter.fillPath(shape, glow);
+    }
+
+    void paintBokeh(QPainter &painter, const QRectF &area,
+                    const QVector<float> &spectrum, qreal timeSeconds)
+    {
+        if (!m_bokehSettings.enabled || area.isEmpty() ||
+            m_bokehSettings.opacity <= 0 || m_bokehSettings.count <= 0)
+            return;
+
+        qreal energy = 0.0;
+        if (m_bokehSettings.audioReactive && !spectrum.isEmpty()) {
+            qreal sum = 0.0;
+            for (float sample : spectrum) {
+                const qreal value = qBound(0.0, qreal(sample), 1.0);
+                sum += value * value;
+            }
+            const qreal rawEnergy = qBound(0.0,
+                qSqrt(sum / spectrum.size()) * 2.4, 1.0);
+            const qreal pulseResponse =
+                1.0 - (qBound(0, m_bokehSettings.pulseSmoothing, 100) / 100.0) * 0.90;
+            m_framePulseEnergy += (rawEnergy - m_framePulseEnergy) * pulseResponse;
+            const qreal gain = 0.25 +
+                qBound(0, m_bokehSettings.sensitivity, 100) / 50.0;
+            const qreal target = qBound(0.0, m_framePulseEnergy * gain, 1.0);
+            const qreal smoothing = m_bokehSettings.audioSmoothing / 100.0;
+            const qreal attack = 0.42 - smoothing * 0.32;
+            const qreal release = 0.18 - smoothing * 0.14;
+            const qreal response = target > m_bokehSmoothedEnergy ? attack : release;
+            m_bokehSmoothedEnergy += (target - m_bokehSmoothedEnergy) * response;
+            energy = m_bokehSmoothedEnergy;
+        }
+
+        if (m_bokehSprite.isNull()) rebuildBokehSprite();
+        const qreal minSide = qMin(area.width(), area.height());
+        const qreal speed = m_bokehSettings.speed / 50.0;
+        painter.save();
+        painter.setClipRect(area);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        for (int i = 0; i < m_bokehSettings.count; ++i) {
+            const qreal seedX = bokehHash(i * 7 + 1);
+            const qreal seedY = bokehHash(i * 7 + 2);
+            const qreal depth = bokehHash(i * 7 + 6);
+            const qreal depthFactor =
+                1.0 + (depth - 0.5) * (m_bokehSettings.depth / 100.0) * 1.7;
+            const qreal sizeVariance =
+                (0.45 + bokehHash(i * 7 + 3) * 1.1) * depthFactor;
+            const qreal velocity =
+                (0.012 + bokehHash(i * 7 + 4) * 0.025) * speed * depthFactor;
+            const qreal cycle = std::fmod(seedY + timeSeconds * velocity, 1.35);
+            const qreal sway = qSin(timeSeconds * (0.22 + depth * 0.12) + i * 2.3);
+            qreal x = seedX, y = seedY;
+            if (m_bokehSettings.direction == 0) y = 1.15 - cycle;
+            else if (m_bokehSettings.direction == 1) y = cycle - 0.15;
+            else if (m_bokehSettings.direction == 2) x = cycle - 0.15;
+            else x = 1.15 - cycle;
+            if (m_bokehSettings.direction < 2)
+                x += sway * 0.022 * depthFactor;
+            else
+                y += sway * 0.022 * depthFactor;
+            const qreal phase = timeSeconds * (1.3 + bokehHash(i * 7 + 8) * 2.8)
+                + bokehHash(i * 7 + 9) * 6.28318530718;
+            const qreal wave = 0.5 + 0.5 * qSin(phase);
+            const qreal twinkle = 1.0 - (m_bokehSettings.twinkle / 100.0) * 0.58
+                + (m_bokehSettings.twinkle / 100.0) * 0.58 * wave;
+            const qreal radius = minSide *
+                (0.008 + m_bokehSettings.size * 0.00035) *
+                sizeVariance * (1.0 + energy * 0.28);
+            const QPointF center(x * area.width(), y * area.height());
+            const qreal layerFade = 0.62 + depth * 0.38;
+            const qreal alpha = qBound(0.0,
+                (m_bokehSettings.opacity / 100.0) * (0.55 + energy * 0.45) *
+                layerFade * twinkle * (0.55 + bokehHash(i * 7 + 5) * 0.45),
+                0.90);
+            painter.setOpacity(alpha);
+            painter.drawImage(QRectF(center.x() - radius + area.left(),
+                                     center.y() - radius + area.top(),
+                                     radius * 2.0, radius * 2.0), m_bokehSprite);
+        }
+        painter.restore();
+    }
+
     SpectrumAnalyzer *m_analyzer = nullptr; // owned by MainWindow
     SpectrumRenderSettings m_settings;
+    BokehExportSettings m_bokehSettings;
     QSize m_size;
     int m_fps = 30;
     int m_gradientSpeed = 0;
@@ -135,6 +313,10 @@ private:
     QVector<float> m_peaks;
     QVector<int> m_peakTicks;
     QImage m_overlayBuffer; // Reused across sequential export frames.
+    QImage m_spectrumBuffer;
+    QImage m_bokehSprite;
+    qreal m_framePulseEnergy = 0.0;
+    qreal m_bokehSmoothedEnergy = 0.0;
     qint64 m_profileFrames = 0;
     qint64 m_profileSpectrumNs = 0, m_profileStateNs = 0, m_profilePaintNs = 0;
     qint64 m_profileSpectrumMaxNs = 0, m_profileStateMaxNs = 0, m_profilePaintMaxNs = 0;
