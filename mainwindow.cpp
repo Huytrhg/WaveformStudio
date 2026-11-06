@@ -999,6 +999,29 @@ public:
     int selectedStopIndex = 0;
     SpectrumRenderSettings exportSettings() const { return currentRenderSettings(); }
     int exportGradientSpeed() const { return gradientSpeed; }
+    BokehExportSettings exportBokehSettings() const
+    {
+        BokehExportSettings settings;
+        settings.enabled = bokehEnabled;
+        settings.audioReactive = bokehAudioReactive;
+        settings.count = bokehCount;
+        settings.size = bokehSize;
+        settings.speed = bokehSpeed;
+        settings.opacity = bokehOpacity;
+        settings.sensitivity = bokehSensitivity;
+        settings.color = bokehColor;
+        settings.secondaryColor = bokehSecondaryColor;
+        settings.gradientEnabled = bokehGradientEnabled;
+        settings.shape = bokehShape;
+        settings.blur = bokehBlur;
+        settings.glow = bokehGlow;
+        settings.depth = bokehDepth;
+        settings.direction = bokehDirection;
+        settings.twinkle = bokehTwinkle;
+        settings.audioSmoothing = bokehAudioSmoothing;
+        settings.pulseSmoothing = pulseSmoothing;
+        return settings;
+    }
 
 private:
     qreal effectLevel(qreal smoothed, int sensitivity) const
@@ -3957,7 +3980,7 @@ MainWindow::MainWindow(QWidget *parent)
             }
             auto frameGenerator = std::make_shared<SpectrumExportFrames>(
                 spectrumAnalyzer, spectrumOverlay->exportSettings(),
-                overlaySize, exportFps);
+                overlaySize, exportFps, spectrumOverlay->exportBokehSettings());
             frameGenerator->setGradientSpeed(spectrumOverlay->exportGradientSpeed());
             frameGenerator->setDirectRgba(directRgba);
 
@@ -3979,7 +4002,7 @@ MainWindow::MainWindow(QWidget *parent)
                 "[base][spec]overlay=0:0:shortest=1:format=auto,"
                 "format=yuv420p[outv]";
 
-            progress->setLabelText("Rendering Spectrum frames into MP4...");
+            progress->setLabelText("Rendering Spectrum and Bokeh frames into MP4...");
             QStringList arguments = {
                 "-y", "-hide_banner", "-nostats", "-benchmark",
                 "-progress", "pipe:1",
