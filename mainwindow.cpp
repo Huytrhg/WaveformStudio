@@ -2402,6 +2402,9 @@ MainWindow::MainWindow(QWidget *parent)
     effectsList->addItem("Bokeh Overlay");
     effectsList->addItem("Rain Glass");
     effectsList->addItem("Glow");
+    effectsList->addItem("Audio Zoom");
+    effectsList->addItem("Audio Shake");
+    effectsList->addItem("Exposure Pulse");
     effectsList->addItem("Particles");
     effectsList->setCurrentRow(0);
     effectsPageLayout->addWidget(effectsList, 1);
@@ -3061,7 +3064,7 @@ MainWindow::MainWindow(QWidget *parent)
     propertiesStack->addWidget(frameEffectsPropertiesPage);
     propertiesLayout = frameEffectsPropertiesLayout;
 
-    QLabel *frameEffectsTitle = new QLabel("FRAME EFFECTS");
+    QLabel *frameEffectsTitle = new QLabel("AUDIO ZOOM");
     frameEffectsTitle->setObjectName("sectionTitle");
     propertiesLayout->addWidget(frameEffectsTitle);
 
@@ -3078,7 +3081,18 @@ MainWindow::MainWindow(QWidget *parent)
         spectrumOverlay->setAudioZoomSmoothing(v); spectrumDisplay->setAudioZoomSmoothing(v);
     });
 
-    QCheckBox *audioShakeToggle = new QCheckBox("2 · Audio Shake");
+    propertiesLayout->addStretch();
+    QWidget *audioShakePropertiesPage = new QWidget(propertiesStack);
+    QVBoxLayout *audioShakePropertiesLayout = new QVBoxLayout(audioShakePropertiesPage);
+    audioShakePropertiesLayout->setContentsMargins(2, 4, 2, 4);
+    audioShakePropertiesLayout->setSpacing(9);
+    propertiesStack->addWidget(audioShakePropertiesPage);
+    propertiesLayout = audioShakePropertiesLayout;
+    QLabel *audioShakeTitle = new QLabel("AUDIO SHAKE");
+    audioShakeTitle->setObjectName("sectionTitle");
+    propertiesLayout->addWidget(audioShakeTitle);
+
+    QCheckBox *audioShakeToggle = new QCheckBox("Audio Shake");
     audioShakeToggle->setToolTip("Shake the entire video frame in response to audio.");
     propertiesLayout->addWidget(audioShakeToggle);
     addWaveSlider("Shake Amount", 0, 100, 20, "%", [this](int v) {
@@ -3100,7 +3114,18 @@ MainWindow::MainWindow(QWidget *parent)
         spectrumOverlay->setAudioShakeSmoothing(v); spectrumDisplay->setAudioShakeSmoothing(v);
     });
 
-    QCheckBox *exposurePulseToggle = new QCheckBox("3 · Zoom + Exposure Pulse");
+    propertiesLayout->addStretch();
+    QWidget *exposurePulsePropertiesPage = new QWidget(propertiesStack);
+    QVBoxLayout *exposurePulsePropertiesLayout = new QVBoxLayout(exposurePulsePropertiesPage);
+    exposurePulsePropertiesLayout->setContentsMargins(2, 4, 2, 4);
+    exposurePulsePropertiesLayout->setSpacing(9);
+    propertiesStack->addWidget(exposurePulsePropertiesPage);
+    propertiesLayout = exposurePulsePropertiesLayout;
+    QLabel *exposurePulseTitle = new QLabel("EXPOSURE PULSE");
+    exposurePulseTitle->setObjectName("sectionTitle");
+    propertiesLayout->addWidget(exposurePulseTitle);
+
+    QCheckBox *exposurePulseToggle = new QCheckBox("Zoom + Exposure Pulse");
     exposurePulseToggle->setToolTip("Combine audio zoom with a soft brightness flash.");
     propertiesLayout->addWidget(exposurePulseToggle);
     addWaveSlider("Pulse Zoom", 0, 100, 20, "%", [this](int v) {
@@ -3116,7 +3141,18 @@ MainWindow::MainWindow(QWidget *parent)
         spectrumOverlay->setExposureSmoothing(v); spectrumDisplay->setExposureSmoothing(v);
     });
 
-    QCheckBox *edgeGlowToggle = new QCheckBox("4 · Gradient Edge Glow");
+    propertiesLayout->addStretch();
+    QWidget *edgeGlowPropertiesPage = new QWidget(propertiesStack);
+    QVBoxLayout *edgeGlowPropertiesLayout = new QVBoxLayout(edgeGlowPropertiesPage);
+    edgeGlowPropertiesLayout->setContentsMargins(2, 4, 2, 4);
+    edgeGlowPropertiesLayout->setSpacing(9);
+    propertiesStack->addWidget(edgeGlowPropertiesPage);
+    propertiesLayout = edgeGlowPropertiesLayout;
+    QLabel *edgeGlowTitle = new QLabel("GRADIENT EDGE GLOW");
+    edgeGlowTitle->setObjectName("sectionTitle");
+    propertiesLayout->addWidget(edgeGlowTitle);
+
+    QCheckBox *edgeGlowToggle = new QCheckBox("Gradient Edge Glow");
     edgeGlowToggle->setToolTip("Soft semi-transparent gradient that fades inward from the video edges.");
     propertiesLayout->addWidget(edgeGlowToggle);
     addWaveSlider("Edge Opacity", 0, 100, 35, "%", [this](int v) {
@@ -3190,8 +3226,14 @@ MainWindow::MainWindow(QWidget *parent)
         selectedEffectLabel->setText(name);
         if (name == "Bokeh Overlay") {
             propertiesStack->setCurrentIndex(1);
-        } else if (name == "Glow") {
+        } else if (name == "Audio Zoom") {
             propertiesStack->setCurrentIndex(2);
+        } else if (name == "Audio Shake") {
+            propertiesStack->setCurrentIndex(3);
+        } else if (name == "Exposure Pulse") {
+            propertiesStack->setCurrentIndex(4);
+        } else if (name == "Glow") {
+            propertiesStack->setCurrentIndex(5);
         } else if (name == "Audio Waveform" ||
                    name == "Spectrum Analyzer" ||
                    name == "Circular Waveform" ||
@@ -3201,10 +3243,12 @@ MainWindow::MainWindow(QWidget *parent)
             else if (name == "Circular Waveform") visualModeCombo->setCurrentIndex(2);
             else visualModeCombo->setCurrentIndex(0);
         } else {
-            propertiesStack->setCurrentIndex(3);
+            propertiesStack->setCurrentIndex(6);
         }
     });
     effectsList->setCurrentRow(0);
+    selectedEffectLabel->setText("Audio Waveform");
+    visualModeCombo->setCurrentIndex(1);
 
     QScrollArea *propertiesScroll = new QScrollArea;
     propertiesScroll->setWidgetResizable(true);
