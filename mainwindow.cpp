@@ -3,6 +3,7 @@
 #include "spectrumanalyzer.h"
 #include "spectrumrenderer.h"
 #include "spectrumexportframes.h" // B3.2: frame generator; encoder wiring pending.
+#include "effectoverlays.h"
 #include "gpurenderer.h"
 #include "nativegpupresenter.h"
 
@@ -571,17 +572,16 @@ public:
         bokehTimer = new QTimer(this);
         bokehTimer->setInterval(33); // ~30 fps, separate from spectrum smoothing.
         connect(bokehTimer, &QTimer::timeout, this, [this]() {
-            if (!bokehEnabled) return;
-            const qreal target = bokehAudioReactive
-                ? effectLevel(framePulseEnergy, bokehSensitivity) : 0.0;
-            const qreal smoothing = bokehAudioSmoothing / 100.0;
-            const qreal attack = 0.42 - smoothing * 0.32;
-            const qreal release = 0.18 - smoothing * 0.14;
-            const qreal response = target > bokehSmoothedEnergy ? attack : release;
-            bokehSmoothedEnergy += (target - bokehSmoothedEnergy) * response;
-            if (bokehSpeed == 0 && bokehTwinkle == 0 && !bokehAudioReactive) return;
-            gpuBackgroundDirty = true;
-            update();
+            if (!bokehEnabled && !rainGlassEnabled && !particlesEnabled) return;
+            if (bokehEnabled && bokehAudioReactive) {
+                const qreal target = effectLevel(framePulseEnergy, bokehSensitivity);
+                const qreal smoothing = bokehAudioSmoothing / 100.0;
+                const qreal attack = 0.42 - smoothing * 0.32;
+                const qreal release = 0.18 - smoothing * 0.14;
+                const qreal response = target > bokehSmoothedEnergy ? attack : release;
+                bokehSmoothedEnergy += (target - bokehSmoothedEnergy) * response;
+            }
+            if (ambientAnimationNeeded()) { gpuBackgroundDirty = true; update(); }
         });
         gradientStops = {
             {0.0, QColor("#00D5FF")},
@@ -904,30 +904,20 @@ public:
     void setExposureSmoothing(int value) { pulseSmoothing = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
 
     void setBokehEnabled(bool enabled) {
-        bokehEnabled = enabled;
-        if (bokehTimer) {
-            if (enabled && (bokehSpeed > 0 || bokehTwinkle > 0 || bokehAudioReactive)) bokehTimer->start();
-            else bokehTimer->stop();
-        }
+        bokehEnabled = enabled; refreshAmbientTimer();
         gpuBackgroundDirty = true; update();
     }
     void setBokehCount(int value) { bokehCount = qBound(4, value, 100); gpuBackgroundDirty = true; update(); }
     void setBokehSize(int value) { bokehSize = qBound(1, value, 100); gpuBackgroundDirty = true; update(); }
     void setBokehSpeed(int value) {
         bokehSpeed = qBound(0, value, 100);
-        if (bokehTimer) {
-            if (bokehEnabled && (bokehSpeed > 0 || bokehTwinkle > 0 || bokehAudioReactive)) bokehTimer->start();
-            else bokehTimer->stop();
-        }
+        refreshAmbientTimer();
         gpuBackgroundDirty = true; update();
     }
     void setBokehOpacity(int value) { bokehOpacity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setBokehAudioReactive(bool enabled) {
         bokehAudioReactive = enabled;
-        if (bokehTimer) {
-            if (bokehEnabled && (bokehSpeed > 0 || bokehTwinkle > 0 || bokehAudioReactive)) bokehTimer->start();
-            else if (bokehEnabled) bokehTimer->stop();
-        }
+        refreshAmbientTimer();
         gpuBackgroundDirty = true; update();
     }
     void setBokehSensitivity(int value) { bokehSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
@@ -937,10 +927,7 @@ public:
     void setBokehDepth(int value) { bokehDepth = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setBokehTwinkle(int value) {
         bokehTwinkle = qBound(0, value, 100);
-        if (bokehTimer) {
-            if (bokehEnabled && (bokehSpeed > 0 || bokehTwinkle > 0 || bokehAudioReactive)) bokehTimer->start();
-            else if (bokehEnabled) bokehTimer->stop();
-        }
+        refreshAmbientTimer();
         gpuBackgroundDirty = true; update();
     }
     void setBokehAudioSmoothing(int value) { bokehAudioSmoothing = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
@@ -952,6 +939,25 @@ public:
     void setBokehColor(const QColor &color) {
         if (color.isValid()) { bokehColor = color; bokehSprite = QImage(); gpuBackgroundDirty = true; update(); }
     }
+
+    void setRainGlassEnabled(bool v) { rainGlassEnabled = v; refreshAmbientTimer(); gpuBackgroundDirty = true; update(); }
+    void setRainGlassCount(int v) { rainCount = qBound(1, v, 180); gpuBackgroundDirty = true; update(); }
+    void setRainGlassSize(int v) { rainSize = qBound(1, v, 100); gpuBackgroundDirty = true; update(); }
+    void setRainGlassSpeed(int v) { rainSpeed = qBound(0, v, 100); refreshAmbientTimer(); gpuBackgroundDirty = true; update(); }
+    void setRainGlassOpacity(int v) { rainOpacity = qBound(0, v, 100); gpuBackgroundDirty = true; update(); }
+    void setRainGlassStreakLength(int v) { rainStreakLength = qBound(0, v, 100); gpuBackgroundDirty = true; update(); }
+    void setRainGlassAudioReactive(bool v) { rainAudioReactive = v; refreshAmbientTimer(); gpuBackgroundDirty = true; update(); }
+    void setRainGlassSensitivity(int v) { rainSensitivity = qBound(0, v, 100); gpuBackgroundDirty = true; update(); }
+    void setParticlesEnabled(bool v) { particlesEnabled = v; refreshAmbientTimer(); gpuBackgroundDirty = true; update(); }
+    void setParticleCount(int v) { particleCount = qBound(1, v, 180); gpuBackgroundDirty = true; update(); }
+    void setParticleSize(int v) { particleSize = qBound(1, v, 100); gpuBackgroundDirty = true; update(); }
+    void setParticleSpeed(int v) { particleSpeed = qBound(0, v, 100); refreshAmbientTimer(); gpuBackgroundDirty = true; update(); }
+    void setParticleOpacity(int v) { particleOpacity = qBound(0, v, 100); gpuBackgroundDirty = true; update(); }
+    void setParticleGlow(int v) { particleGlow = qBound(0, v, 100); effectOverlayRenderer.reset(); gpuBackgroundDirty = true; update(); }
+    void setParticleTwinkle(int v) { particleTwinkle = qBound(0, v, 100); refreshAmbientTimer(); gpuBackgroundDirty = true; update(); }
+    void setParticlesAudioReactive(bool v) { particlesAudioReactive = v; refreshAmbientTimer(); gpuBackgroundDirty = true; update(); }
+    void setParticleSensitivity(int v) { particleSensitivity = qBound(0, v, 100); gpuBackgroundDirty = true; update(); }
+
     void setEdgeGlowEnabled(bool enabled) { edgeGlowEnabled = enabled; gpuBackgroundDirty = true; update(); }
     void setEdgeGlowOpacity(int value) { edgeOpacity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setEdgeGlowSpread(int value) { edgeSpread = qBound(1, value, 50); gpuBackgroundDirty = true; update(); }
@@ -1000,6 +1006,25 @@ public:
     int selectedStopIndex = 0;
     SpectrumRenderSettings exportSettings() const { return currentRenderSettings(); }
     int exportGradientSpeed() const { return gradientSpeed; }
+    EffectOverlaySettings exportEffectSettings() const
+    {
+        EffectOverlaySettings s;
+        s.rainGlassEnabled = rainGlassEnabled; s.rainCount = rainCount;
+        s.rainSize = rainSize; s.rainSpeed = rainSpeed; s.rainOpacity = rainOpacity;
+        s.rainStreakLength = rainStreakLength; s.rainAudioReactive = rainAudioReactive;
+        s.rainAudioSensitivity = rainSensitivity;
+        s.particlesEnabled = particlesEnabled; s.particleCount = particleCount;
+        s.particleSize = particleSize; s.particleSpeed = particleSpeed;
+        s.particleOpacity = particleOpacity; s.particleGlow = particleGlow;
+        s.particleTwinkle = particleTwinkle; s.particlesAudioReactive = particlesAudioReactive;
+        s.particleSensitivity = particleSensitivity;
+        s.glowEnabled = edgeGlowEnabled; s.glowOpacity = edgeOpacity;
+        s.glowSpread = edgeSpread; s.glowSensitivity = edgeSensitivity;
+        s.glowSmoothing = edgeSmoothing;
+        for (int i = 0; i < 4; ++i) s.glowColors[i] = edgeColors[i];
+        return s;
+    }
+
     BokehExportSettings exportBokehSettings() const
     {
         BokehExportSettings settings;
@@ -1182,6 +1207,10 @@ private:
         painter.restore();
 
         paintBokeh(painter, target);
+        const qreal effectTime = effectClock.isValid() ? effectClock.elapsed() / 1000.0 : 0.0;
+        const EffectOverlaySettings overlaySettings = currentEffectOverlaySettings();
+        effectOverlayRenderer.paintRainGlass(painter, target, overlaySettings, effectTime, framePulseEnergy);
+        effectOverlayRenderer.paintParticles(painter, target, overlaySettings, effectTime, framePulseEnergy);
 
         if (exposurePulseEnabled) {
             const qreal level = effectLevel(framePulseEnergy, pulseSensitivity);
@@ -1645,12 +1674,44 @@ protected:
     }
 
 private:
+    bool ambientAnimationNeeded() const
+    {
+        return (bokehEnabled && (bokehSpeed > 0 || bokehTwinkle > 0 || bokehAudioReactive))
+            || (rainGlassEnabled && rainSpeed > 0)
+            || (particlesEnabled && (particleSpeed > 0 || particleTwinkle > 0 || particlesAudioReactive));
+    }
+    void refreshAmbientTimer()
+    {
+        if (!bokehTimer) return;
+        if (ambientAnimationNeeded()) bokehTimer->start();
+        else bokehTimer->stop();
+    }
+    EffectOverlaySettings currentEffectOverlaySettings() const
+    {
+        EffectOverlaySettings s;
+        s.rainGlassEnabled = rainGlassEnabled; s.rainCount = rainCount;
+        s.rainSize = rainSize; s.rainSpeed = rainSpeed; s.rainOpacity = rainOpacity;
+        s.rainStreakLength = rainStreakLength; s.rainAudioReactive = rainAudioReactive;
+        s.rainAudioSensitivity = rainSensitivity;
+        s.particlesEnabled = particlesEnabled; s.particleCount = particleCount;
+        s.particleSize = particleSize; s.particleSpeed = particleSpeed;
+        s.particleOpacity = particleOpacity; s.particleGlow = particleGlow;
+        s.particleTwinkle = particleTwinkle; s.particlesAudioReactive = particlesAudioReactive;
+        s.particleSensitivity = particleSensitivity;
+        s.glowEnabled = edgeGlowEnabled; s.glowOpacity = edgeOpacity;
+        s.glowSpread = edgeSpread; s.glowSensitivity = edgeSensitivity;
+        s.glowSmoothing = edgeSmoothing;
+        for (int i = 0; i < 4; ++i) s.glowColors[i] = edgeColors[i];
+        return s;
+    }
     bool hasAudioReactiveBackgroundEffects() const
     {
         const bool animatedBokeh = bokehEnabled
             && (bokehSpeed > 0 || bokehTwinkle > 0 || bokehAudioReactive);
         return audioZoomEnabled || audioShakeEnabled || exposurePulseEnabled
-            || edgeGlowEnabled || animatedBokeh;
+            || edgeGlowEnabled || animatedBokeh
+            || (rainGlassEnabled && rainAudioReactive)
+            || (particlesEnabled && particlesAudioReactive);
     }
 
     void resetPhase6fRenderStats()
@@ -1970,6 +2031,16 @@ private:
 
     QTimer *bokehTimer = nullptr;
     QImage bokehSprite;
+    EffectOverlayRenderer effectOverlayRenderer;
+    bool rainGlassEnabled = false;
+    int rainCount = 70, rainSize = 45, rainSpeed = 55, rainOpacity = 55;
+    int rainStreakLength = 35, rainSensitivity = 55;
+    bool rainAudioReactive = false;
+    bool particlesEnabled = false;
+    int particleCount = 45, particleSize = 35, particleSpeed = 35;
+    int particleOpacity = 65, particleGlow = 60, particleTwinkle = 25;
+    int particleSensitivity = 55;
+    bool particlesAudioReactive = false;
     bool bokehEnabled = false;
     bool bokehAudioReactive = false;
     int bokehCount = 28, bokehSize = 35, bokehSpeed = 35;
