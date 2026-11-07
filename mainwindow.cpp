@@ -961,7 +961,7 @@ public:
 
     void setEdgeGlowEnabled(bool enabled) { edgeGlowEnabled = enabled; gpuBackgroundDirty = true; update(); }
     void setEdgeGlowOpacity(int value) { edgeOpacity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
-    void setEdgeGlowSpread(int value) { edgeSpread = qBound(1, value, 50); gpuBackgroundDirty = true; update(); }
+    void setEdgeGlowSpread(int value) { edgeSpread = qBound(10, value, 100); gpuBackgroundDirty = true; update(); }
     void setEdgeGlowSensitivity(int value) { edgeSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setEdgeGlowSmoothing(int value) { edgeSmoothing = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setEdgeGlowColors(const QColor &a, const QColor &b, const QColor &c, const QColor &d) {
@@ -1041,7 +1041,7 @@ public:
         s.particleSensitivity = particleSensitivity;
         s.particleRandomMotion = particleRandomMotion;
         s.glowEnabled = edgeGlowEnabled; s.glowOpacity = edgeOpacity;
-        s.glowSpread = edgeSpread; s.glowSensitivity = edgeSensitivity;
+        s.glowRadius = edgeSpread; s.glowSensitivity = edgeSensitivity;
         s.glowSmoothing = edgeSmoothing;
         for (int i = 0; i < 4; ++i) s.glowColors[i] = edgeColors[i];
         s.glowGradientStops = edgeGlowGradientStops;
@@ -2054,7 +2054,7 @@ private:
     int pulseSensitivity = 60, pulseSmoothing = 70;
     qreal framePulseEnergy = 0.0;
     bool edgeGlowEnabled = false;
-    int edgeOpacity = 35, edgeSpread = 18, edgeSensitivity = 60, edgeSmoothing = 75;
+    int edgeOpacity = 35, edgeSpread = 72, edgeSensitivity = 60, edgeSmoothing = 75;
     qreal frameGradientEnergy = 0.0;
     QColor edgeColors[4] = {QColor("#00D5FF"), QColor("#376BFF"),
                             QColor("#D64DFF"), QColor("#00D5FF")};
@@ -3215,13 +3215,13 @@ MainWindow::MainWindow(QWidget *parent)
     edgeGlowTitle->setObjectName("sectionTitle");
     propertiesLayout->addWidget(edgeGlowTitle);
 
-    QCheckBox *edgeGlowToggle = new QCheckBox("Gradient Edge Glow");
-    edgeGlowToggle->setToolTip("Soft semi-transparent gradient that fades inward from the video edges.");
+    QCheckBox *edgeGlowToggle = new QCheckBox("Circular Spectrum Glow");
+    edgeGlowToggle->setToolTip("Circular radial halo with a transparent center and Spectrum-driven Gradient colors.");
     propertiesLayout->addWidget(edgeGlowToggle);
     addWaveSlider("Edge Opacity", 0, 100, 35, "%", [this](int v) {
         spectrumOverlay->setEdgeGlowOpacity(v); spectrumDisplay->setEdgeGlowOpacity(v);
     });
-    addWaveSlider("Edge Spread", 1, 50, 18, "%", [this](int v) {
+    addWaveSlider("Glow Radius", 10, 100, 72, "%", [this](int v) {
         spectrumOverlay->setEdgeGlowSpread(v); spectrumDisplay->setEdgeGlowSpread(v);
     });
     addWaveSlider("Edge Sensitivity", 0, 100, 60, "%", [this](int v) {
