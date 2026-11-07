@@ -1654,7 +1654,7 @@ protected:
                 width(), height(), gpuRects, gpuColors, &gpuComposite, &cachedGpuBackground,
                 &gpuTopColors, gpuGlowPtr);
 #ifdef Q_OS_WIN
-            const bool nativePresented = GpuRenderer::instance().nativePresentationActive();
+            const bool nativePresented = gpuRendered && GpuRenderer::instance().nativePresentationActive();
             if (nativePreviewHwnd) {
                 ShowWindow(nativePreviewHwnd, nativePresented ? SW_SHOWNA : SW_HIDE);
                 if (!nativePresented) updateNativeHud(false, QString());
