@@ -1248,7 +1248,7 @@ private:
         }
 
         EffectOverlayRenderer::paintGlow(painter, target,
-            overlaySettings, frameGradientEnergy);
+            overlaySettings, frameGradientEnergy, effectTime);
     }
 
 protected:
