@@ -169,7 +169,8 @@ public:
     }
 
     static void paintGlow(QPainter &p, const QRectF &area,
-                          const EffectOverlaySettings &s, qreal audioEnergy = 0.0) {
+                          const EffectOverlaySettings &s, qreal audioEnergy = 0.0,
+                          qreal timeSeconds = 0.0) {
         if (!s.glowEnabled || area.isEmpty() || s.glowOpacity <= 0) return;
         const qreal level = qBound(0.0,
             audioEnergy * (0.25 + s.glowSensitivity / 50.0), 1.0);
@@ -181,7 +182,7 @@ public:
                      {0.66, s.glowColors[2]}, {1.0, s.glowColors[3]}};
         std::sort(stops.begin(), stops.end(),
                   [](const auto &a, const auto &b) { return a.first < b.first; });
-        const qreal phase = std::fmod(level * 0.42, 1.0);
+        const qreal phase = std::fmod(timeSeconds * 0.035 + level * 0.22, 1.0);
         const auto gradientColor = [&stops, phase](qreal position) {
             const qreal t = std::fmod(position + phase + 1.0, 1.0);
             for (int i = 0; i + 1 < stops.size(); ++i) {
