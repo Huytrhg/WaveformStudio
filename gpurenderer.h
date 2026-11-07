@@ -130,7 +130,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11PixelShader> glowPixelShader;
     Microsoft::WRL::ComPtr<ID3D11Buffer> glowConstantBuffer;
     double glowGpuLastMs = 0.0, glowGpuAverageMs = 0.0, glowGpuMaxMs = 0.0;
-    double glowCpuSubmitLastMs = 0.0, glowCpuSubmitAverageMs = 0.0;
+    double glowCpuSubmitLastMs = 0.0, glowCpuSubmitAverageMs = 0.0, glowCpuSubmitMaxMs = 0.0;
     quint64 glowGpuSamples = 0, glowCpuSubmitSamples = 0, glowDraws = 0;
     QString glowGpuTimingStatus = QStringLiteral("not initialized");
     struct GlowGpuTimingSlot {
