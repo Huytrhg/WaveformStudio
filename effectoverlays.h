@@ -11,6 +11,7 @@
 #include <QRectF>
 #include <QSize>
 #include <QVector>
+#include <algorithm>
 #include <QtMath>
 #include <cmath>
 
