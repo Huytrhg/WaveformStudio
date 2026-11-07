@@ -49,6 +49,34 @@ float4 PSMain(VSOut input) : SV_TARGET {
     return float4(input.color.rgb, alpha);
 }
 )HLSL";
+const char *glowShaderSource = R"HLSL(
+struct VSOut { float4 pos : SV_POSITION; };
+VSOut VSMain(uint id : SV_VertexID) {
+    VSOut o;
+    float2 p = id == 0 ? float2(-1.0, -1.0) : (id == 1 ? float2(-1.0, 3.0) : float2(3.0, -1.0));
+    o.pos = float4(p, 0.0, 1.0); return o;
+}
+cbuffer GlowParams : register(b0) {
+    float4 colors[4]; float4 stops;
+    float4 params0; // strength, hole radius, outer radius, phase
+    float4 params1; // width, height, padding
+};
+float4 PSMain(VSOut input) : SV_TARGET {
+    float2 center = params1.xy * 0.5;
+    float minHalf = max(min(params1.x, params1.y) * 0.5, 1.0);
+    float2 radial = (input.pos.xy - center) / minHalf;
+    float radius = length(radial);
+    float alpha = smoothstep(params0.y, max(params0.z, params0.y + 0.0001), radius) * params0.x;
+    if (alpha <= 0.0005) discard;
+    float angle = frac(atan2(radial.y, radial.x) * 0.15915494309 + params0.w);
+    float4 color = colors[0];
+    if (angle >= stops.x && angle < stops.y) color = lerp(colors[0], colors[1], saturate((angle-stops.x)/max(stops.y-stops.x,0.0001)));
+    else if (angle >= stops.y && angle < stops.z) color = lerp(colors[1], colors[2], saturate((angle-stops.y)/max(stops.z-stops.y,0.0001)));
+    else if (angle >= stops.z) color = lerp(colors[2], colors[3], saturate((angle-stops.z)/max(1.0-stops.z,0.0001)));
+    else color = lerp(colors[3], colors[0], saturate(angle/max(stops.x,0.0001)));
+    return float4(color.rgb * alpha, alpha);
+}
+)HLSL";
 const char *nativeCopyShaderSource = R"HLSL(
 struct VSIn { float2 pos : POSITION; float2 uv : TEXCOORD0; };
 struct VSOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
@@ -152,6 +180,17 @@ bool GpuRenderer::createPipeline()
     blend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
     hr = device->CreateBlendState(&blend, blendState.GetAddressOf());
     if (FAILED(hr)) { renderError = QStringLiteral("CreateBlendState failed: %1").arg(hexResult(hr)); return false; }
+    D3D11_BLEND_DESC glowBlend{};
+    glowBlend.RenderTarget[0].BlendEnable = TRUE;
+    glowBlend.RenderTarget[0].SrcBlend = D3D11_BLEND_INV_DEST_COLOR;
+    glowBlend.RenderTarget[0].DestBlend = D3D11_BLEND_ONE;
+    glowBlend.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    glowBlend.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    glowBlend.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    glowBlend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    glowBlend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    hr = device->CreateBlendState(&glowBlend, glowBlendState.GetAddressOf());
+    if (FAILED(hr)) { renderError = QStringLiteral("Glow blend state creation failed: %1").arg(hexResult(hr)); return false; }
     pipelineReady = true; renderError.clear(); return true;
 #else
     return false;
@@ -312,7 +351,7 @@ bool GpuRenderer::presentNativeTexture()
 
 bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF> &rects,
                                      const QVector<QColor> &colors, QImage *output, const QImage *background,
-                                     const QVector<QColor> *topColors)
+                                     const QVector<QColor> *topColors, const GpuGlowParams *glow)
 {
 #ifdef Q_OS_WIN
     nativeFramePresented = false;
@@ -425,7 +464,74 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     if (!background || background->isNull()) context->ClearRenderTargetView(cachedRtv.Get(), clear);
     D3D11_VIEWPORT vp{}; vp.Width = float(width); vp.Height = float(height); vp.MinDepth = 0; vp.MaxDepth = 1;
     context->RSSetViewports(1, &vp); ID3D11RenderTargetView *rtvRaw = cachedRtv.Get(); context->OMSetRenderTargets(1, &rtvRaw, nullptr);
-    const float blendFactor[4] = {0,0,0,0}; context->OMSetBlendState(blendState.Get(), blendFactor, 0xffffffff);
+    const float blendFactor[4] = {0,0,0,0};
+    if (glow && glow->strength > 0.001f) {
+        QElapsedTimer submitTimer; submitTimer.start();
+        if (!glowVertexShader || !glowPixelShader || !glowConstantBuffer) {
+            Microsoft::WRL::ComPtr<ID3DBlob> vs, ps, shaderErrors;
+            HRESULT glowHr = D3DCompile(glowShaderSource, std::strlen(glowShaderSource), nullptr, nullptr, nullptr, "VSMain", "vs_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs.GetAddressOf(), shaderErrors.GetAddressOf());
+            if (FAILED(glowHr)) { renderError = QStringLiteral("Glow VS compile failed: %1").arg(hexResult(glowHr)); return false; }
+            glowHr = D3DCompile(glowShaderSource, std::strlen(glowShaderSource), nullptr, nullptr, nullptr, "PSMain", "ps_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, ps.GetAddressOf(), shaderErrors.ReleaseAndGetAddressOf());
+            if (FAILED(glowHr)) { renderError = QStringLiteral("Glow PS compile failed: %1").arg(hexResult(glowHr)); return false; }
+            glowHr = device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, glowVertexShader.GetAddressOf());
+            if (FAILED(glowHr)) { renderError = QStringLiteral("Glow VS creation failed: %1").arg(hexResult(glowHr)); return false; }
+            glowHr = device->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, glowPixelShader.GetAddressOf());
+            if (FAILED(glowHr)) { renderError = QStringLiteral("Glow PS creation failed: %1").arg(hexResult(glowHr)); return false; }
+            D3D11_BUFFER_DESC cbd{}; cbd.ByteWidth = sizeof(GpuGlowParams); cbd.Usage = D3D11_USAGE_DYNAMIC; cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER; cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+            glowHr = device->CreateBuffer(&cbd, nullptr, glowConstantBuffer.GetAddressOf());
+            if (FAILED(glowHr)) { renderError = QStringLiteral("Glow constant buffer creation failed: %1").arg(hexResult(glowHr)); return false; }
+        }
+        if (!glowGpuTimingQueriesReady) {
+            bool created = true;
+            for (auto &slot : glowGpuTimingSlots) {
+                D3D11_QUERY_DESC qd{};
+                if (!slot.disjoint) { qd.Query = D3D11_QUERY_TIMESTAMP_DISJOINT; if (FAILED(device->CreateQuery(&qd, slot.disjoint.GetAddressOf()))) { created = false; break; } }
+                if (!slot.start) { qd.Query = D3D11_QUERY_TIMESTAMP; if (FAILED(device->CreateQuery(&qd, slot.start.GetAddressOf()))) { created = false; break; } }
+                if (!slot.end) { qd.Query = D3D11_QUERY_TIMESTAMP; if (FAILED(device->CreateQuery(&qd, slot.end.GetAddressOf()))) { created = false; break; } }
+            }
+            glowGpuTimingQueriesReady = created;
+            glowGpuTimingStatus = created ? QStringLiteral("active (non-blocking)") : QStringLiteral("query creation failed");
+        }
+        for (auto &slot : glowGpuTimingSlots) {
+            if (!slot.pending) continue;
+            D3D11_QUERY_DATA_TIMESTAMP_DISJOINT data{};
+            HRESULT ready = context->GetData(slot.disjoint.Get(), &data, sizeof(data), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+            if (ready == S_OK) {
+                UINT64 t0 = 0, t1 = 0;
+                HRESULT r0 = context->GetData(slot.start.Get(), &t0, sizeof(t0), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+                HRESULT r1 = context->GetData(slot.end.Get(), &t1, sizeof(t1), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+                if (r0 == S_OK && r1 == S_OK && !data.Disjoint && data.Frequency && t1 >= t0) {
+                    glowGpuLastMs = double(t1-t0)*1000.0/double(data.Frequency);
+                    ++glowGpuSamples; glowGpuAverageMs += (glowGpuLastMs-glowGpuAverageMs)/double(glowGpuSamples);
+                    glowGpuMaxMs = qMax(glowGpuMaxMs, glowGpuLastMs);
+                }
+                slot.pending = false;
+            } else if (ready != S_FALSE) slot.pending = false;
+        }
+        GlowGpuTimingSlot *timing = nullptr;
+        if (glowGpuTimingQueriesReady) for (int n=0;n<4;++n) {
+            int idx=(nextGlowGpuTimingSlot+n)%4;
+            if (!glowGpuTimingSlots[idx].pending) { timing=&glowGpuTimingSlots[idx]; nextGlowGpuTimingSlot=(idx+1)%4; break; }
+        }
+        if (timing) context->Begin(timing->disjoint.Get());
+        if (timing) context->End(timing->start.Get());
+        D3D11_MAPPED_SUBRESOURCE mappedGlow{};
+        HRESULT mapHr=context->Map(glowConstantBuffer.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mappedGlow);
+        if (FAILED(mapHr)) { renderError=QStringLiteral("Glow constant buffer map failed: %1").arg(hexResult(mapHr)); return false; }
+        std::memcpy(mappedGlow.pData,glow,sizeof(GpuGlowParams)); context->Unmap(glowConstantBuffer.Get(),0);
+        context->OMSetBlendState(glowBlendState.Get(),blendFactor,0xffffffff);
+        context->IASetInputLayout(nullptr); context->IASetVertexBuffers(0,0,nullptr,nullptr,nullptr);
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context->VSSetShader(glowVertexShader.Get(),nullptr,0); context->PSSetShader(glowPixelShader.Get(),nullptr,0);
+        ID3D11Buffer *cb=glowConstantBuffer.Get(); context->PSSetConstantBuffers(0,1,&cb);
+        context->Draw(3,0);
+        if (timing) context->End(timing->end.Get());
+        if (timing) { context->End(timing->disjoint.Get()); timing->pending=true; }
+        glowCpuSubmitLastMs=submitTimer.nsecsElapsed()/1000000.0; ++glowCpuSubmitSamples;
+        glowCpuSubmitAverageMs+=(glowCpuSubmitLastMs-glowCpuSubmitAverageMs)/double(glowCpuSubmitSamples);
+        ++glowDraws;
+    }
+    context->OMSetBlendState(blendState.Get(), blendFactor, 0xffffffff);
     UINT stride = sizeof(Vertex), offset = 0; ID3D11Buffer *vb = vertexBuffer.Get();
     context->IASetInputLayout(inputLayout.Get()); context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -840,7 +946,11 @@ QString GpuRenderer::runtimeStats() const
             .arg(nativePresentAttempts).arg(nativePresentFrames).arg(nativePresentFailures)
             .arg(nativePresentCpuMs, 0, 'f', 3)
             .arg(nativePresentCpuAverageMs, 0, 'f', 3)
-            .arg(nativePresentCpuMaxMs, 0, 'f', 3);
+            .arg(nativePresentCpuMaxMs, 0, 'f', 3)
+        + QStringLiteral("\\nGlow D3D11 shader: draws %1 | GPU last/avg/max %2 / %3 / %4 ms (%5 samples; %6) | CPU submit last/avg %7 / %8 ms (%9 samples)")
+            .arg(glowDraws).arg(glowGpuLastMs,0,'f',4).arg(glowGpuAverageMs,0,'f',4)
+            .arg(glowGpuMaxMs,0,'f',4).arg(glowGpuSamples).arg(glowGpuTimingStatus)
+            .arg(glowCpuSubmitLastMs,0,'f',4).arg(glowCpuSubmitAverageMs,0,'f',4).arg(glowCpuSubmitSamples);
 }
 
 QString GpuRenderer::diagnostics() const
