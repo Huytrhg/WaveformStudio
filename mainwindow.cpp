@@ -1661,7 +1661,8 @@ private:
     {
         return (bokehEnabled && (bokehSpeed > 0 || bokehTwinkle > 0 || bokehAudioReactive))
             || (rainGlassEnabled && rainSpeed > 0)
-            || (particlesEnabled && (particleSpeed > 0 || particleTwinkle > 0 || particlesAudioReactive));
+            || (particlesEnabled && (particleSpeed > 0 || particleTwinkle > 0 ||
+                                      particlesAudioReactive || particleRandomMotion));
     }
     void refreshAmbientTimer()
     {
@@ -1681,10 +1682,12 @@ private:
         s.particleOpacity = particleOpacity; s.particleGlow = particleGlow;
         s.particleTwinkle = particleTwinkle; s.particlesAudioReactive = particlesAudioReactive;
         s.particleSensitivity = particleSensitivity;
+        s.particleRandomMotion = particleRandomMotion;
         s.glowEnabled = edgeGlowEnabled; s.glowOpacity = edgeOpacity;
         s.glowSpread = edgeSpread; s.glowSensitivity = edgeSensitivity;
         s.glowSmoothing = edgeSmoothing;
         for (int i = 0; i < 4; ++i) s.glowColors[i] = edgeColors[i];
+        s.glowGradientStops = edgeGlowGradientStops;
         return s;
     }
     bool hasAudioReactiveBackgroundEffects() const
