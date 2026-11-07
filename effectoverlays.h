@@ -34,7 +34,7 @@ struct EffectOverlaySettings {
 
     bool glowEnabled = false;
     int glowOpacity = 35, glowRadius = 72, glowSensitivity = 60;
-    int glowSmoothing = 75;
+    int glowSmoothing = 75, glowGradientSpeed = 25;
     QColor glowColors[4] = {QColor("#00D5FF"), QColor("#376BFF"),
                             QColor("#D64DFF"), QColor("#00D5FF")};
     QVector<QPair<qreal, QColor>> glowGradientStops = {
@@ -181,7 +181,6 @@ public:
 
         const qreal level = qBound(0.0,
             audioEnergy * (0.25 + s.glowSensitivity / 50.0), 1.0);
-        // Keep a subtle ambient rim even during quiet passages; audio adds intensity.
         const qreal strength = (s.glowOpacity / 100.0) * (0.28 + level * 0.72);
         if (strength <= 0.001) return;
 
@@ -192,49 +191,64 @@ public:
         std::sort(stops.begin(), stops.end(),
                   [](const auto &a, const auto &b) { return a.first < b.first; });
 
-        const qreal minSide = qMin(area.width(), area.height());
+        auto colorAt = [&stops](qreal t) {
+            t = std::fmod(t + 1.0, 1.0);
+            int i = 0;
+            while (i + 1 < stops.size() && stops[i + 1].first < t) ++i;
+            const int j = qMin(i + 1, stops.size() - 1);
+            const qreal span = qMax<qreal>(0.0001, stops[j].first - stops[i].first);
+            return QColor::fromRgbF(
+                qBound(0.0, stops[i].second.redF() +
+                    (stops[j].second.redF() - stops[i].second.redF()) *
+                    qBound(0.0, (t - stops[i].first) / span, 1.0), 1.0),
+                qBound(0.0, stops[i].second.greenF() +
+                    (stops[j].second.greenF() - stops[i].second.greenF()) *
+                    qBound(0.0, (t - stops[i].first) / span, 1.0), 1.0),
+                qBound(0.0, stops[i].second.blueF() +
+                    (stops[j].second.blueF() - stops[i].second.blueF()) *
+                    qBound(0.0, (t - stops[i].first) / span, 1.0), 1.0));
+        };
+
         const qreal radiusPercent = qBound(10, s.glowRadius, 100) / 100.0;
-        // Radius controls the inward width of the frame-edge glow, not a center halo.
-        const qreal thickness = minSide * (0.025 + radiusPercent * 0.18);
-        const qreal cornerRadius = minSide * 0.018;
-        const QPointF center = area.center();
-        const qreal phase = std::fmod(timeSeconds * 0.035 + level * 0.22, 1.0);
+        const qreal innerRadius = 0.48 + (1.0 - radiusPercent) * 0.40;
+        const qreal phase = timeSeconds * (qBound(0, s.glowGradientSpeed, 100) / 100.0) * 0.18
+                            + level * 0.12;
 
         p.save();
         p.setClipRect(area);
         p.setRenderHint(QPainter::Antialiasing, true);
         p.setCompositionMode(QPainter::CompositionMode_Screen);
+        p.translate(area.center());
+        p.scale(area.width() * 0.5, area.height() * 0.5);
 
-        // Build a rounded-rectangle frame from thin concentric bands. The bands
-        // are strongest at the video boundary and progressively transparent inward.
-        constexpr int bands = 28;
-        const qreal bandWidth = thickness / bands;
-        for (int i = 0; i < bands; ++i) {
-            const qreal inset = i * bandWidth;
-            const qreal nextInset = (i + 1) * bandWidth;
-            const QRectF outer = area.adjusted(inset, inset, -inset, -inset);
-            const QRectF inner = area.adjusted(nextInset, nextInset,
-                                                -nextInset, -nextInset);
-            if (outer.isEmpty() || inner.isEmpty()) break;
+        // The transparent opening is an oval. The glow occupies the surrounding
+        // frame and feathers smoothly from its outer edge toward that oval.
+        constexpr int wedges = 96;
+        for (int i = 0; i < wedges; ++i) {
+            const qreal a0 = (qreal(i) / wedges) * 2.0 * M_PI;
+            const qreal a1 = (qreal(i + 1) / wedges) * 2.0 * M_PI;
+            const qreal mid = (qreal(i) + 0.5) / wedges;
+            QPainterPath sector;
+            sector.moveTo(0.0, 0.0);
+            sector.lineTo(qCos(a0), qSin(a0));
+            sector.arcTo(QRectF(-1.0, -1.0, 2.0, 2.0),
+                         -qRadiansToDegrees(a0), -qRadiansToDegrees(a1 - a0));
+            sector.closeSubpath();
 
-            QPainterPath ring;
-            ring.setFillRule(Qt::OddEvenFill);
-            const qreal outerRadius = qMax<qreal>(0.0, cornerRadius - inset * 0.45);
-            const qreal innerRadius = qMax<qreal>(0.0, cornerRadius - nextInset * 0.45);
-            ring.addRoundedRect(outer, outerRadius, outerRadius);
-            ring.addRoundedRect(inner, innerRadius, innerRadius);
-
-            const qreal t = (qreal(i) + 0.5) / bands;
-            const qreal falloff = qPow(1.0 - t, 2.0);
-            QConicalGradient gradient(center, -90.0 - phase * 360.0);
-            for (const auto &stop : stops) {
-                QColor color = stop.second;
-                color.setAlphaF(qBound(0.0, strength * 0.52 * falloff, 0.72));
-                gradient.setColorAt(qBound(0.0, stop.first, 1.0), color);
-            }
-            p.setPen(Qt::NoPen);
-            p.setBrush(gradient);
-            p.drawPath(ring);
+            QColor color = colorAt(mid + phase);
+            QRadialGradient radial(QPointF(0.0, 0.0), 1.0);
+            radial.setColorAt(0.0, QColor(color.red(), color.green(), color.blue(), 0));
+            radial.setColorAt(qBound(0.0, innerRadius - 0.025, 0.98),
+                              QColor(color.red(), color.green(), color.blue(), 0));
+            radial.setColorAt(qBound(0.0, innerRadius + 0.20, 1.0),
+                              QColor(color.red(), color.green(), color.blue(),
+                                     qBound(0, qRound(150.0 * strength), 150)));
+            radial.setColorAt(1.0, QColor(color.red(), color.green(), color.blue(),
+                                          qBound(0, qRound(205.0 * strength), 205)));
+            p.save();
+            p.setClipPath(sector, Qt::IntersectClip);
+            p.fillRect(QRectF(-1.25, -1.25, 2.5, 2.5), radial);
+            p.restore();
         }
         p.restore();
     }
