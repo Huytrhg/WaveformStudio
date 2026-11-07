@@ -9,6 +9,7 @@
 #include <cstring>
 
 namespace {
+static_assert(sizeof(GpuGlowParams) == 112, "GpuGlowParams must match the 112-byte HLSL constant buffer.");
 QString featureName(D3D_FEATURE_LEVEL level)
 {
     switch (level) {
