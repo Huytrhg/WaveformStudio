@@ -68,7 +68,7 @@ float4 PSMain(VSOut input) : SV_TARGET {
     float2 radial = (input.pos.xy - center) / minHalf;
     float radius = length(radial);
     float fade = saturate((radius - params0.y) / max(params0.z - params0.y, 0.0001));
-    float alpha = fade * fade * (3.0 - 2.0 * fade) * params0.x;
+    float alpha = fade * fade * (3.0 - 2.0 * fade) * params0.x * 0.8039216;
     if (alpha <= 0.0005) discard;
     float angle = frac(atan2(radial.y, radial.x) * 0.15915494309 + params0.w);
     float4 color = colors[0];
