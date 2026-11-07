@@ -2,6 +2,7 @@
 #define EFFECTOVERLAYS_H
 
 #include <QColor>
+#include <QConicalGradient>
 #include <QImage>
 #include <QLinearGradient>
 #include <QPair>
@@ -177,9 +178,11 @@ public:
                           const EffectOverlaySettings &s, qreal audioEnergy = 0.0,
                           qreal timeSeconds = 0.0) {
         if (!s.glowEnabled || area.isEmpty() || s.glowOpacity <= 0) return;
+
         const qreal level = qBound(0.0,
             audioEnergy * (0.25 + s.glowSensitivity / 50.0), 1.0);
-        const qreal strength = (s.glowOpacity / 100.0) * level;
+        // Keep a subtle ambient rim even during quiet passages; audio adds intensity.
+        const qreal strength = (s.glowOpacity / 100.0) * (0.28 + level * 0.72);
         if (strength <= 0.001) return;
 
         QVector<QPair<qreal, QColor>> stops = s.glowGradientStops;
@@ -188,70 +191,50 @@ public:
                      {0.66, s.glowColors[2]}, {1.0, s.glowColors[3]}};
         std::sort(stops.begin(), stops.end(),
                   [](const auto &a, const auto &b) { return a.first < b.first; });
-        const qreal phase = std::fmod(timeSeconds * 0.035 + level * 0.22, 1.0);
-        const auto gradientColor = [&stops, phase](qreal position) {
-            const qreal t = std::fmod(position + phase + 1.0, 1.0);
-            for (int i = 0; i + 1 < stops.size(); ++i) {
-                if (t <= stops[i + 1].first) {
-                    const qreal span = qMax<qreal>(0.0001, stops[i + 1].first - stops[i].first);
-                    const qreal u = qBound(0.0, (t - stops[i].first) / span, 1.0);
-                    return QColor::fromRgbF(
-                        stops[i].second.redF() * (1-u) + stops[i+1].second.redF() * u,
-                        stops[i].second.greenF() * (1-u) + stops[i+1].second.greenF() * u,
-                        stops[i].second.blueF() * (1-u) + stops[i+1].second.blueF() * u);
-                }
-            }
-            return stops.last().second;
-        };
 
-        // A centered circular annular halo. Its center stays transparent;
-        // the colored ring fades softly on both its inner and outer edges.
         const qreal minSide = qMin(area.width(), area.height());
         const qreal radiusPercent = qBound(10, s.glowRadius, 100) / 100.0;
-        const qreal radius = minSide * 0.5 * (0.15 + radiusPercent * 0.85);
-        const qreal innerRadius = radius * 0.48;
+        // Radius controls the inward width of the frame-edge glow, not a center halo.
+        const qreal thickness = minSide * (0.025 + radiusPercent * 0.18);
+        const qreal cornerRadius = minSide * 0.018;
         const QPointF center = area.center();
-        constexpr int slices = 72;
+        const qreal phase = std::fmod(timeSeconds * 0.035 + level * 0.22, 1.0);
+
         p.save();
         p.setClipRect(area);
         p.setRenderHint(QPainter::Antialiasing, true);
         p.setCompositionMode(QPainter::CompositionMode_Screen);
-        for (int i = 0; i < slices; ++i) {
-            const qreal a0 = (qreal(i) / slices) * 360.0;
-            const qreal a1 = (qreal(i + 1) / slices) * 360.0;
-            const qreal mid = (qreal(i) + 0.5) / slices;
-            QColor color = gradientColor(mid);
-            QColor transparent = color; transparent.setAlpha(0);
-            QColor soft = color;
-            soft.setAlphaF(qBound(0.0, strength * 0.30, 0.38));
-            QColor bright = color;
-            bright.setAlphaF(qBound(0.0, strength * 0.62, 0.68));
 
-            QRadialGradient radial(center, radius);
-            radial.setColorAt(0.0, transparent);
-            radial.setColorAt(0.47, transparent);
-            radial.setColorAt(0.62, soft);
-            radial.setColorAt(0.82, bright);
-            radial.setColorAt(0.94, soft);
-            radial.setColorAt(1.0, transparent);
+        // Build a rounded-rectangle frame from thin concentric bands. The bands
+        // are strongest at the video boundary and progressively transparent inward.
+        constexpr int bands = 28;
+        const qreal bandWidth = thickness / bands;
+        for (int i = 0; i < bands; ++i) {
+            const qreal inset = i * bandWidth;
+            const qreal nextInset = (i + 1) * bandWidth;
+            const QRectF outer = area.adjusted(inset, inset, -inset, -inset);
+            const QRectF inner = area.adjusted(nextInset, nextInset,
+                                                -nextInset, -nextInset);
+            if (outer.isEmpty() || inner.isEmpty()) break;
 
-            QPainterPath sector;
-            const QRectF outer(center.x() - radius, center.y() - radius,
-                               radius * 2.0, radius * 2.0);
-            const QRectF inner(center.x() - innerRadius, center.y() - innerRadius,
-                               innerRadius * 2.0, innerRadius * 2.0);
-            const QPointF endInner(center.x() + innerRadius * qCos(qDegreesToRadians(a1)),
-                                   center.y() - innerRadius * qSin(qDegreesToRadians(a1)));
-            const QPointF startOuter(center.x() + radius * qCos(qDegreesToRadians(a0)),
-                                     center.y() - radius * qSin(qDegreesToRadians(a0)));
-            sector.moveTo(startOuter);
-            sector.arcTo(outer, a0, a1 - a0);
-            sector.lineTo(endInner);
-            sector.arcTo(inner, a1, a0 - a1);
-            sector.closeSubpath();
+            QPainterPath ring;
+            ring.setFillRule(Qt::OddEvenFill);
+            const qreal outerRadius = qMax<qreal>(0.0, cornerRadius - inset * 0.45);
+            const qreal innerRadius = qMax<qreal>(0.0, cornerRadius - nextInset * 0.45);
+            ring.addRoundedRect(outer, outerRadius, outerRadius);
+            ring.addRoundedRect(inner, innerRadius, innerRadius);
+
+            const qreal t = (qreal(i) + 0.5) / bands;
+            const qreal falloff = qPow(1.0 - t, 2.0);
+            QConicalGradient gradient(center, -90.0 - phase * 360.0);
+            for (const auto &stop : stops) {
+                QColor color = stop.second;
+                color.setAlphaF(qBound(0.0, strength * 0.52 * falloff, 0.72));
+                gradient.setColorAt(qBound(0.0, stop.first, 1.0), color);
+            }
             p.setPen(Qt::NoPen);
-            p.setBrush(radial);
-            p.drawPath(sector);
+            p.setBrush(gradient);
+            p.drawPath(ring);
         }
         p.restore();
     }
