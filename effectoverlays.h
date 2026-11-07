@@ -179,15 +179,14 @@ public:
                           qreal timeSeconds = 0.0) {
         if (!s.glowEnabled || area.isEmpty() || s.glowOpacity <= 0) return;
 
-        // A true audio gate: silence produces no overlay at all.
+        // Audio controls only the final opacity; silence means no Glow draw at all.
         const qreal sensitivity = 0.25 + qBound(0, s.glowSensitivity, 100) / 50.0;
         const qreal rawLevel = qBound(0.0, audioEnergy * sensitivity, 1.0);
         constexpr qreal silenceThreshold = 0.008;
         if (rawLevel <= silenceThreshold) return;
         const qreal audioLevel = qBound(0.0,
             (rawLevel - silenceThreshold) / (1.0 - silenceThreshold), 1.0);
-        const qreal strength = (s.glowOpacity / 100.0) *
-                               qPow(audioLevel, 0.72);
+        const qreal strength = (s.glowOpacity / 100.0) * qPow(audioLevel, 0.72);
         if (strength <= 0.001) return;
 
         QVector<QPair<qreal, QColor>> stops = s.glowGradientStops;
@@ -203,51 +202,64 @@ public:
         const qreal outerHoleRadius = qMin(0.985, holeRadius + featherWidth);
         const qreal phase = timeSeconds *
             (qBound(0, s.glowGradientSpeed, 100) / 100.0) * 0.18;
+        // Quantize animation phase: the small texture is rebuilt only when its
+        // visible color phase changes, then reused and scaled for every frame.
+        const int phaseBucket = qBound(0, qRound(std::fmod(phase + 1000.0, 1.0) * 180.0), 179);
+
+        QString cacheKey = QString::number(qBound(10, s.glowRadius, 100)) + QLatin1Char('|')
+            + QString::number(phaseBucket);
+        for (const auto &stop : stops) {
+            cacheKey += QLatin1Char('|') + QString::number(stop.first, 'f', 4)
+                + QLatin1Char(':') + stop.second.name(QColor::HexArgb);
+        }
+
+        // Thread-local cache avoids cross-thread access between Preview and Export.
+        static thread_local QImage cachedGlowTexture;
+        static thread_local QString cachedGlowKey;
+        constexpr int textureSize = 256;
+        if (cachedGlowTexture.isNull() || cachedGlowKey != cacheKey) {
+            QImage texture(textureSize, textureSize, QImage::Format_ARGB32_Premultiplied);
+            texture.fill(Qt::transparent);
+            {
+                QPainter texturePainter(&texture);
+                texturePainter.setRenderHint(QPainter::Antialiasing, false);
+                QConicalGradient colorGradient(QPointF(textureSize * 0.5,
+                                                        textureSize * 0.5),
+                                               -90.0 - (phaseBucket / 180.0) * 360.0);
+                for (const auto &stop : stops) {
+                    QColor color = stop.second;
+                    color.setAlpha(205);
+                    colorGradient.setColorAt(qBound(0.0, stop.first, 1.0), color);
+                }
+                texturePainter.fillRect(texture.rect(), colorGradient);
+
+                // DestinationIn applies one smooth oval alpha mask. The color
+                // field stays continuous across the entire frame, corners included.
+                texturePainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+                QRadialGradient mask(QPointF(textureSize * 0.5, textureSize * 0.5),
+                                     outerHoleRadius * (textureSize * 0.5));
+                mask.setColorAt(0.0, QColor(255, 255, 255, 0));
+                const qreal startFade = qBound(0.0, holeRadius / outerHoleRadius, 0.98);
+                mask.setColorAt(startFade, QColor(255, 255, 255, 0));
+                for (int i = 1; i <= 16; ++i) {
+                    const qreal t = qreal(i) / 16.0;
+                    const qreal smooth = t * t * (3.0 - 2.0 * t);
+                    const qreal position = startFade + (1.0 - startFade) * t;
+                    mask.setColorAt(position,
+                        QColor(255, 255, 255, qBound(0, qRound(255.0 * smooth), 255)));
+                }
+                texturePainter.fillRect(texture.rect(), mask);
+            }
+            cachedGlowTexture = texture;
+            cachedGlowKey = cacheKey;
+        }
 
         p.save();
         p.setClipRect(area);
-        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
         p.setCompositionMode(QPainter::CompositionMode_Screen);
-        p.translate(area.center());
-        p.scale(area.width() * 0.5, area.height() * 0.5);
-
-        auto makeGradient = [&](qreal alphaScale) {
-            QConicalGradient gradient(QPointF(0.0, 0.0), -90.0 - phase * 360.0);
-            for (const auto &stop : stops) {
-                QColor color = stop.second;
-                color.setAlpha(qBound(0, qRound(205.0 * strength * alphaScale), 205));
-                gradient.setColorAt(qBound(0.0, stop.first, 1.0), color);
-            }
-            return gradient;
-        };
-
-        // The outer field is a full-frame rectangle, so all four corners glow.
-        // The oval is only a transparent opening; its edge is feathered with
-        // matching conical-color rings, avoiding a visible oval boundary.
-        QPainterPath frame;
-        frame.setFillRule(Qt::OddEvenFill);
-        frame.addRect(QRectF(-1.0, -1.0, 2.0, 2.0));
-        frame.addEllipse(QRectF(-outerHoleRadius, -outerHoleRadius,
-                                outerHoleRadius * 2.0, outerHoleRadius * 2.0));
-        p.setPen(Qt::NoPen);
-        p.setBrush(makeGradient(1.0));
-        p.drawPath(frame);
-
-        constexpr int featherBands = 24;
-        const qreal bandWidth = (outerHoleRadius - holeRadius) / featherBands;
-        for (int i = 0; i < featherBands; ++i) {
-            const qreal outerR = outerHoleRadius - i * bandWidth;
-            const qreal innerR = outerHoleRadius - (i + 1) * bandWidth;
-            const qreal t = (qreal(i) + 0.5) / featherBands;
-            // Smoothstep gives a soft, continuous fade from the outer glow to zero.
-            const qreal fade = 1.0 - (t * t * (3.0 - 2.0 * t));
-            QPainterPath ring;
-            ring.setFillRule(Qt::OddEvenFill);
-            ring.addEllipse(QRectF(-outerR, -outerR, outerR * 2.0, outerR * 2.0));
-            ring.addEllipse(QRectF(-innerR, -innerR, innerR * 2.0, innerR * 2.0));
-            p.setBrush(makeGradient(fade));
-            p.drawPath(ring);
-        }
+        p.setOpacity(strength);
+        p.drawImage(area, cachedGlowTexture);
         p.restore();
     }
 
