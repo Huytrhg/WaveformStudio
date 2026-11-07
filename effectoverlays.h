@@ -2,6 +2,7 @@
 #define EFFECTOVERLAYS_H
 
 #include <QColor>
+#include <QElapsedTimer>
 #include <QConicalGradient>
 #include <QImage>
 #include <QLinearGradient>
@@ -47,6 +48,11 @@ struct EffectOverlaySettings {
 // calculated from absolute time, so Preview and Export do not share timer state.
 class EffectOverlayRenderer {
 public:
+    struct GlowProfile {
+        double lastMs = 0.0, averageMs = 0.0, maxMs = 0.0;
+        quint64 samples = 0, textureBuilds = 0, cacheHits = 0;
+    };
+    static GlowProfile glowProfile() { return glowProfileData(); }
     void reset() {
         m_rainSprite = QImage();
         m_particleSprite = QImage();
@@ -178,6 +184,8 @@ public:
                           const EffectOverlaySettings &s, qreal audioEnergy = 0.0,
                           qreal timeSeconds = 0.0) {
         if (!s.glowEnabled || area.isEmpty() || s.glowOpacity <= 0) return;
+        QElapsedTimer glowTimer;
+        glowTimer.start();
 
         // Audio controls only the final opacity; silence means no Glow draw at all.
         const qreal sensitivity = 0.25 + qBound(0, s.glowSensitivity, 100) / 50.0;
@@ -230,6 +238,7 @@ public:
         static thread_local QImage cachedGlowTexture;
         static thread_local QString cachedGlowKey;
         if (cachedGlowTexture.isNull() || cachedGlowKey != cacheKey) {
+            ++glowProfileData().textureBuilds;
             QImage texture(textureSize, textureSize, QImage::Format_ARGB32_Premultiplied);
             texture.fill(Qt::transparent);
             {
@@ -260,6 +269,8 @@ public:
             }
             cachedGlowTexture = texture;
             cachedGlowKey = cacheKey;
+        } else {
+            ++glowProfileData().cacheHits;
         }
 
         p.save();
@@ -275,9 +286,19 @@ public:
                                    diagonal, diagonal);
         p.drawImage(textureTarget, cachedGlowTexture);
         p.restore();
+        GlowProfile &profile = glowProfileData();
+        profile.lastMs = glowTimer.nsecsElapsed() / 1000000.0;
+        profile.maxMs = qMax(profile.maxMs, profile.lastMs);
+        ++profile.samples;
+        profile.averageMs += (profile.lastMs - profile.averageMs) / double(profile.samples);
     }
 
 private:
+    static GlowProfile &glowProfileData() {
+        static thread_local GlowProfile profile;
+        return profile;
+    }
+
     QImage m_rainSprite;
     QImage m_particleSprite;
     QColor m_rainSpriteColor;
