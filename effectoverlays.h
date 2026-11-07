@@ -32,7 +32,7 @@ struct EffectOverlaySettings {
     QColor particleColor = QColor("#A9D9FF");
 
     bool glowEnabled = false;
-    int glowOpacity = 35, glowSpread = 18, glowSensitivity = 60;
+    int glowOpacity = 35, glowRadius = 72, glowSensitivity = 60;
     int glowSmoothing = 75;
     QColor glowColors[4] = {QColor("#00D5FF"), QColor("#376BFF"),
                             QColor("#D64DFF"), QColor("#00D5FF")};
@@ -80,9 +80,14 @@ public:
                                        (s.rainSpeed / 50.0) * depth;
             const qreal rhythm = 0.55 + hash(i * 11 + 7) * 1.25;
             const qreal phase = hash(i * 11 + 8) * 6.28318530718;
-            const qreal travel = time * baseVelocity *
-                (0.82 + 0.20 * qSin(time * rhythm + phase) +
-                 0.10 * qSin(time * rhythm * 0.37 + phase * 1.7));
+            // Analytic integral of a strictly positive varying velocity.
+            // This prevents the droplet from reversing direction at any time.
+            const qreal travel = baseVelocity * (
+                0.82 * time
+                + 0.20 * (qCos(phase) - qCos(time * rhythm + phase)) / rhythm
+                + 0.10 * (qCos(phase * 1.7) -
+                          qCos(time * rhythm * 0.37 + phase * 1.7)) /
+                          (rhythm * 0.37));
             qreal y = std::fmod(seedY + travel, 1.18) - 0.09;
             qreal x = seedX + qSin(time * (0.25 + rhythm * 0.18) + phase) *
                       (0.003 + sizeFactor * 0.0018) * depth;
@@ -176,6 +181,7 @@ public:
             audioEnergy * (0.25 + s.glowSensitivity / 50.0), 1.0);
         const qreal strength = (s.glowOpacity / 100.0) * level;
         if (strength <= 0.001) return;
+
         QVector<QPair<qreal, QColor>> stops = s.glowGradientStops;
         if (stops.size() < 2)
             stops = {{0.0, s.glowColors[0]}, {0.33, s.glowColors[1]},
@@ -197,40 +203,55 @@ public:
             }
             return stops.last().second;
         };
+
+        // A centered circular annular halo. Its center stays transparent;
+        // the colored ring fades softly on both its inner and outer edges.
         const qreal minSide = qMin(area.width(), area.height());
-        const qreal radiusBase = minSide * (0.025 + qBound(1, s.glowSpread, 50) * 0.006);
-        const int bloomCount = 14;
+        const qreal radiusPercent = qBound(10, s.glowRadius, 100) / 100.0;
+        const qreal radius = minSide * 0.5 * (0.15 + radiusPercent * 0.85);
+        const qreal innerRadius = radius * 0.48;
+        const QPointF center = area.center();
+        constexpr int slices = 72;
         p.save();
         p.setClipRect(area);
+        p.setRenderHint(QPainter::Antialiasing, true);
         p.setCompositionMode(QPainter::CompositionMode_Screen);
-        for (int i = 0; i < bloomCount; ++i) {
-            const qreal u = (qreal(i) + 0.5) / bloomCount;
-            const qreal edge = std::fmod(i * 0.61803398875, 4.0);
-            QPointF center;
-            if (edge < 1.0) center = QPointF(area.left() + u * area.width(), area.top());
-            else if (edge < 2.0) center = QPointF(area.right(), area.top() + u * area.height());
-            else if (edge < 3.0) center = QPointF(area.right() - u * area.width(), area.bottom());
-            else center = QPointF(area.left(), area.bottom() - u * area.height());
-            const qreal variance = 0.62 + hash(i * 19 + 4) * 0.92;
-            const qreal radius = radiusBase * variance;
-            const qreal colorPosition = u + edge * 0.13;
-            QColor core = gradientColor(colorPosition - 0.10);
-            QColor middle = gradientColor(colorPosition);
-            QColor outer = gradientColor(colorPosition + 0.12);
-            core.setAlphaF(qBound(0.0, strength * 0.46, 0.58));
-            middle.setAlphaF(qBound(0.0, strength * 0.30, 0.40));
-            outer.setAlphaF(qBound(0.0, strength * 0.12, 0.20));
-            QColor clear = outer; clear.setAlpha(0);
-            QRadialGradient bloom(center, radius);
-            bloom.setColorAt(0.0, core);
-            bloom.setColorAt(0.34, middle);
-            bloom.setColorAt(0.72, outer);
-            bloom.setColorAt(1.0, clear);
-            const qreal aspect = 0.58 + hash(i * 19 + 5) * 0.88;
+        for (int i = 0; i < slices; ++i) {
+            const qreal a0 = (qreal(i) / slices) * 360.0;
+            const qreal a1 = (qreal(i + 1) / slices) * 360.0;
+            const qreal mid = (qreal(i) + 0.5) / slices;
+            QColor color = gradientColor(mid);
+            QColor transparent = color; transparent.setAlpha(0);
+            QColor soft = color;
+            soft.setAlphaF(qBound(0.0, strength * 0.30, 0.38));
+            QColor bright = color;
+            bright.setAlphaF(qBound(0.0, strength * 0.62, 0.68));
+
+            QRadialGradient radial(center, radius);
+            radial.setColorAt(0.0, transparent);
+            radial.setColorAt(0.47, transparent);
+            radial.setColorAt(0.62, soft);
+            radial.setColorAt(0.82, bright);
+            radial.setColorAt(0.94, soft);
+            radial.setColorAt(1.0, transparent);
+
+            QPainterPath sector;
+            const QRectF outer(center.x() - radius, center.y() - radius,
+                               radius * 2.0, radius * 2.0);
+            const QRectF inner(center.x() - innerRadius, center.y() - innerRadius,
+                               innerRadius * 2.0, innerRadius * 2.0);
+            const QPointF endInner(center.x() + innerRadius * qCos(qDegreesToRadians(a1)),
+                                   center.y() - innerRadius * qSin(qDegreesToRadians(a1)));
+            const QPointF startOuter(center.x() + radius * qCos(qDegreesToRadians(a0)),
+                                     center.y() - radius * qSin(qDegreesToRadians(a0)));
+            sector.moveTo(startOuter);
+            sector.arcTo(outer, a0, a1 - a0);
+            sector.lineTo(endInner);
+            sector.arcTo(inner, a1, a0 - a1);
+            sector.closeSubpath();
             p.setPen(Qt::NoPen);
-            p.setBrush(bloom);
-            p.drawEllipse(QRectF(center.x() - radius * aspect, center.y() - radius,
-                                 radius * 2.0 * aspect, radius * 2.0));
+            p.setBrush(radial);
+            p.drawPath(sector);
         }
         p.restore();
     }
