@@ -202,20 +202,25 @@ public:
         // A higher value scales it down so color reaches farther toward center.
         const qreal radiusPercent = qBound(5, s.glowRadius, 20) / 100.0;
         // At the minimum setting, enlarge the transparent center substantially
-        // so Glow is restricted to the outer edge band (as in the reference).
-        // At 20%, return to the base scale so the color can extend farther inward.
+        // so Glow is restricted to the outer edge band. Higher values scale
+        // the gradient inward, matching the Photoshop-style Radius control.
         const qreal scale = 1.0 + (20.0 - radiusPercent * 100.0) / 15.0 * 1.35;
         const qreal holeRadius = 0.42 * scale;
         const qreal featherWidth = 0.20 * scale;
         const qreal outerHoleRadius = qMin(1.50, holeRadius + featherWidth);
         const qreal phase = timeSeconds *
             (qBound(0, s.glowGradientSpeed, 100) / 100.0) * 0.18;
-        // Quantize animation phase: the small texture is rebuilt only when its
-        // visible color phase changes, then reused and scaled for every frame.
-        const int phaseBucket = qBound(0, qRound(std::fmod(phase + 1000.0, 1.0) * 180.0), 179);
 
+        // Rasterize the gradient only when its settings change. During animation
+        // rotate the cached square texture; the diagonal destination covers the
+        // viewport at every angle without exposing empty corners.
+        constexpr int textureSize = 512;
+        const qreal diagonal = qSqrt(area.width() * area.width() +
+                                     area.height() * area.height());
+        const qreal radialUnit = (qMin(area.width(), area.height()) / diagonal) *
+                                 (textureSize * 0.5);
         QString cacheKey = QString::number(qBound(5, s.glowRadius, 20)) + QLatin1Char('|')
-            + QString::number(phaseBucket);
+            + QString::number(qRound(radialUnit * 1000.0));
         for (const auto &stop : stops) {
             cacheKey += QLatin1Char('|') + QString::number(stop.first, 'f', 4)
                 + QLatin1Char(':') + stop.second.name(QColor::HexArgb);
@@ -224,22 +229,14 @@ public:
         // Thread-local cache avoids cross-thread access between Preview and Export.
         static thread_local QImage cachedGlowTexture;
         static thread_local QString cachedGlowKey;
-        constexpr int textureWidth = 512;
-        // Match the render target aspect ratio so the radial gradient remains
-        // a true circle in video pixels rather than stretching into an oval.
-        const int textureHeight = qMax(1, qRound(textureWidth *
-            area.height() / area.width()));
-        cacheKey += QLatin1Char('|') + QString::number(textureHeight);
         if (cachedGlowTexture.isNull() || cachedGlowKey != cacheKey) {
-            QImage texture(textureWidth, textureHeight, QImage::Format_ARGB32_Premultiplied);
+            QImage texture(textureSize, textureSize, QImage::Format_ARGB32_Premultiplied);
             texture.fill(Qt::transparent);
             {
                 QPainter texturePainter(&texture);
                 texturePainter.setRenderHint(QPainter::Antialiasing, false);
-                const QPointF textureCenter(textureWidth * 0.5, textureHeight * 0.5);
-                const qreal radialUnit = qMin(textureWidth, textureHeight) * 0.5;
-                QConicalGradient colorGradient(textureCenter,
-                                               -90.0 - (phaseBucket / 180.0) * 360.0);
+                const QPointF textureCenter(textureSize * 0.5, textureSize * 0.5);
+                QConicalGradient colorGradient(textureCenter, -90.0);
                 for (const auto &stop : stops) {
                     QColor color = stop.second;
                     color.setAlpha(205);
@@ -247,9 +244,6 @@ public:
                 }
                 texturePainter.fillRect(texture.rect(), colorGradient);
 
-                // DestinationIn applies a circular radial mask. Its radius is
-                // measured against the shorter image dimension to preserve a
-                // perfectly round gradient on landscape and portrait video.
                 texturePainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
                 QRadialGradient mask(textureCenter, outerHoleRadius * radialUnit);
                 mask.setColorAt(0.0, QColor(255, 255, 255, 0));
@@ -273,7 +267,13 @@ public:
         p.setRenderHint(QPainter::SmoothPixmapTransform, true);
         p.setCompositionMode(QPainter::CompositionMode_Screen);
         p.setOpacity(strength);
-        p.drawImage(area, cachedGlowTexture);
+        p.translate(area.center());
+        p.rotate(std::fmod(phase, 1.0) * 360.0);
+        p.translate(-area.center());
+        const QRectF textureTarget(area.center().x() - diagonal * 0.5,
+                                   area.center().y() - diagonal * 0.5,
+                                   diagonal, diagonal);
+        p.drawImage(textureTarget, cachedGlowTexture);
         p.restore();
     }
 
