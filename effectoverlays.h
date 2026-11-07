@@ -201,10 +201,13 @@ public:
         // and its feather both move outward, producing a broader, softer edge.
         // A higher value scales it down so color reaches farther toward center.
         const qreal radiusPercent = qBound(5, s.glowRadius, 20) / 100.0;
-        const qreal scale = 1.0 + (20.0 - radiusPercent * 100.0) / 15.0 * 0.50;
+        // At the minimum setting, enlarge the transparent center substantially
+        // so Glow is restricted to the outer edge band (as in the reference).
+        // At 20%, return to the base scale so the color can extend farther inward.
+        const qreal scale = 1.0 + (20.0 - radiusPercent * 100.0) / 15.0 * 1.35;
         const qreal holeRadius = 0.42 * scale;
         const qreal featherWidth = 0.20 * scale;
-        const qreal outerHoleRadius = qMin(1.35, holeRadius + featherWidth);
+        const qreal outerHoleRadius = qMin(1.50, holeRadius + featherWidth);
         const qreal phase = timeSeconds *
             (qBound(0, s.glowGradientSpeed, 100) / 100.0) * 0.18;
         // Quantize animation phase: the small texture is rebuilt only when its
