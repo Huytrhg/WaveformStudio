@@ -19,9 +19,11 @@
 
 // GPU Glow parameters are sampled from UI settings once per preview frame.
 struct GpuGlowParams {
-    float strength = 0.0f, holeRadius = 0.0f, outerRadius = 0.0f, phase = 0.0f;
-    float width = 0.0f, height = 0.0f;
+    float colors[4][4] = {};
     float stops[4] = {0.0f, 0.33f, 0.66f, 1.0f};
+    float strength = 0.0f, holeRadius = 0.0f, outerRadius = 0.0f, phase = 0.0f;
+    float width = 0.0f, height = 0.0f, padding[2] = {};
+};
     float colors[4][4] = {};
 };
 
