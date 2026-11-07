@@ -3215,8 +3215,8 @@ MainWindow::MainWindow(QWidget *parent)
     edgeGlowTitle->setObjectName("sectionTitle");
     propertiesLayout->addWidget(edgeGlowTitle);
 
-    QCheckBox *edgeGlowToggle = new QCheckBox("Circular Spectrum Glow");
-    edgeGlowToggle->setToolTip("Circular radial halo with a transparent center and Spectrum-driven Gradient colors.");
+    QCheckBox *edgeGlowToggle = new QCheckBox("Rounded Frame Edge Glow");
+    edgeGlowToggle->setToolTip("Soft rounded-rectangle glow around the video edges, fading inward with Spectrum-style Gradient colors.");
     propertiesLayout->addWidget(edgeGlowToggle);
     addWaveSlider("Edge Opacity", 0, 100, 35, "%", [this](int v) {
         spectrumOverlay->setEdgeGlowOpacity(v); spectrumDisplay->setEdgeGlowOpacity(v);
