@@ -24,8 +24,6 @@ struct GpuGlowParams {
     float strength = 0.0f, holeRadius = 0.0f, outerRadius = 0.0f, phase = 0.0f;
     float width = 0.0f, height = 0.0f, padding[2] = {};
 };
-    float colors[4][4] = {};
-};
 
 // Phase 2: D3D11 off-screen renderer for colored Spectrum bar rectangles.
 // QPainter remains the fallback and continues to render waveform/circular modes.
