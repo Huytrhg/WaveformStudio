@@ -1684,7 +1684,7 @@ private:
         s.particleSensitivity = particleSensitivity;
         s.particleRandomMotion = particleRandomMotion;
         s.glowEnabled = edgeGlowEnabled; s.glowOpacity = edgeOpacity;
-        s.glowSpread = edgeSpread; s.glowSensitivity = edgeSensitivity;
+        s.glowRadius = edgeSpread; s.glowSensitivity = edgeSensitivity;
         s.glowSmoothing = edgeSmoothing;
         for (int i = 0; i < 4; ++i) s.glowColors[i] = edgeColors[i];
         s.glowGradientStops = edgeGlowGradientStops;
