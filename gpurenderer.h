@@ -17,6 +17,14 @@
 #include <wrl/client.h>
 #endif
 
+// GPU Glow parameters are sampled from UI settings once per preview frame.
+struct GpuGlowParams {
+    float strength = 0.0f, holeRadius = 0.0f, outerRadius = 0.0f, phase = 0.0f;
+    float width = 0.0f, height = 0.0f;
+    float stops[4] = {0.0f, 0.33f, 0.66f, 1.0f};
+    float colors[4][4] = {};
+};
+
 // Phase 2: D3D11 off-screen renderer for colored Spectrum bar rectangles.
 // QPainter remains the fallback and continues to render waveform/circular modes.
 class GpuRenderer final
@@ -31,7 +39,8 @@ public:
                             const QVector<QRectF> &rects,
                             const QVector<QColor> &colors,
                             QImage *output, const QImage *background = nullptr,
-                            const QVector<QColor> *topColors = nullptr);
+                            const QVector<QColor> *topColors = nullptr,
+                            const GpuGlowParams *glow = nullptr);
     bool renderBokehCircles(int width, int height,
                             const QVector<QRectF> &bounds,
                             const QVector<QColor> &colors,
@@ -116,6 +125,21 @@ private:
     Microsoft::WRL::ComPtr<ID3D11InputLayout> inputLayout;
     Microsoft::WRL::ComPtr<ID3D11Buffer> vertexBuffer;
     Microsoft::WRL::ComPtr<ID3D11BlendState> blendState;
+    Microsoft::WRL::ComPtr<ID3D11BlendState> glowBlendState;
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> glowVertexShader;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> glowPixelShader;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> glowConstantBuffer;
+    double glowGpuLastMs = 0.0, glowGpuAverageMs = 0.0, glowGpuMaxMs = 0.0;
+    double glowCpuSubmitLastMs = 0.0, glowCpuSubmitAverageMs = 0.0;
+    quint64 glowGpuSamples = 0, glowCpuSubmitSamples = 0, glowDraws = 0;
+    QString glowGpuTimingStatus = QStringLiteral("not initialized");
+    struct GlowGpuTimingSlot {
+        Microsoft::WRL::ComPtr<ID3D11Query> disjoint, start, end;
+        bool pending = false;
+    };
+    GlowGpuTimingSlot glowGpuTimingSlots[4];
+    int nextGlowGpuTimingSlot = 0;
+    bool glowGpuTimingQueriesReady = false;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> cachedTexture;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> cachedRtv;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> cachedTextureSrv;
