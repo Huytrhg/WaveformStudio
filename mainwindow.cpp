@@ -1381,7 +1381,7 @@ protected:
         p.fillRect(rect(), QColor("#101114"));
         // Paint the video frame and the audio visualization in the SAME widget.
         // This avoids QVideoWidget's native surface covering the overlay.
-        paintVideoBackground(p, QRectF(rect()), visualMode != 0 || forceCpuFallback);
+        paintVideoBackground(p, QRectF(rect()), !((visualMode == 0 || visualMode == 4) && !forceCpuFallback));
         if (!message.isEmpty()) {
             p.setPen(QColor(235, 238, 242, 210));
             p.drawText(rect().adjusted(10, 10, -10, -10), Qt::AlignCenter, message);
@@ -1667,10 +1667,12 @@ protected:
                 p.drawImage(QPoint(0, 0), gpuComposite);
             } else if (!gpuRendered) {
                 // Keep the established CPU Glow path only when D3D11 cannot render it.
-                const EffectOverlaySettings fallbackGlowSettings = currentEffectOverlaySettings();
-                const qreal fallbackGlowTime = effectClock.isValid() ? effectClock.elapsed() / 1000.0 : 0.0;
-                EffectOverlayRenderer::paintGlow(p, QRectF(rect()), fallbackGlowSettings,
-                                                  frameGradientEnergy, fallbackGlowTime);
+                if (!forceCpuFallback) {
+                    const EffectOverlaySettings fallbackGlowSettings = currentEffectOverlaySettings();
+                    const qreal fallbackGlowTime = effectClock.isValid() ? effectClock.elapsed() / 1000.0 : 0.0;
+                    EffectOverlayRenderer::paintGlow(p, QRectF(rect()), fallbackGlowSettings,
+                                                      frameGradientEnergy, fallbackGlowTime);
+                }
                 // B2: CPU Bars fallback shares the same drawing engine as export.
                 // Reset opacity: SpectrumRenderer applies its own opacity once.
                 p.setOpacity(1.0);
