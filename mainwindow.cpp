@@ -975,12 +975,12 @@ public:
     void setParticleSensitivity(int v) { particleSensitivity = qBound(0, v, 100); gpuBackgroundDirty = true; update(); }
     void setParticleRandomMotion(bool v) { particleRandomMotion = v; gpuBackgroundDirty = true; update(); }
 
-    void setEdgeGlowEnabled(bool enabled) { edgeGlowEnabled = enabled; gpuBackgroundDirty = true; update(); }
-    void setEdgeGlowOpacity(int value) { edgeOpacity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
-    void setEdgeGlowSpread(int value) { edgeSpread = qBound(5, value, 20); gpuBackgroundDirty = true; update(); }
-    void setEdgeGlowGradientSpeed(int value) { edgeGradientSpeed = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
-    void setEdgeGlowSensitivity(int value) { edgeSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
-    void setEdgeGlowSmoothing(int value) { edgeSmoothing = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
+    void setEdgeGlowEnabled(bool enabled) { edgeGlowEnabled = enabled; update(); }
+    void setEdgeGlowOpacity(int value) { edgeOpacity = qBound(0, value, 100); update(); }
+    void setEdgeGlowSpread(int value) { edgeSpread = qBound(5, value, 20); update(); }
+    void setEdgeGlowGradientSpeed(int value) { edgeGradientSpeed = qBound(0, value, 100); update(); }
+    void setEdgeGlowSensitivity(int value) { edgeSensitivity = qBound(0, value, 100); update(); }
+    void setEdgeGlowSmoothing(int value) { edgeSmoothing = qBound(0, value, 100); update(); }
     void setEdgeGlowColors(const QColor &a, const QColor &b, const QColor &c, const QColor &d) {
         if (a.isValid()) edgeColors[0] = a;
         if (b.isValid()) edgeColors[1] = b;
@@ -1203,7 +1203,7 @@ private:
         painter.restore();
     }
 
-    void paintVideoBackground(QPainter &painter, const QRectF &canvas)
+    void paintVideoBackground(QPainter &painter, const QRectF &canvas, bool includeGlow = true)
     {
         painter.fillRect(canvas, QColor("#101114"));
         if (videoImage.isNull() || canvas.width() < 2 || canvas.height() < 2)
@@ -1265,8 +1265,10 @@ private:
             }
         }
 
-        EffectOverlayRenderer::paintGlow(painter, target,
-            overlaySettings, frameGradientEnergy, effectTime);
+        if (includeGlow) {
+            EffectOverlayRenderer::paintGlow(painter, target,
+                overlaySettings, frameGradientEnergy, effectTime);
+        }
     }
 
 protected:
@@ -1574,7 +1576,7 @@ protected:
                 {
                     QPainter bgPainter(&cachedGpuBackground);
                     bgPainter.setRenderHint(QPainter::Antialiasing, true);
-                    paintVideoBackground(bgPainter, QRectF(cachedGpuBackground.rect()));
+                    paintVideoBackground(bgPainter, QRectF(cachedGpuBackground.rect()), false);
                 }
                 gpuBackgroundDirty = false;
                 ++gpuBackgroundBuilds;
@@ -1602,9 +1604,53 @@ protected:
                 GpuRenderer::instance().configureNativePresentation(nativePreviewHwnd, width(), height());
 #endif
             if (forceCpuFallback) GpuRenderer::instance().disableNativePresentation();
+            GpuGlowParams gpuGlow;
+            const GpuGlowParams *gpuGlowPtr = nullptr;
+            if (overlaySettings.glowEnabled && overlaySettings.glowOpacity > 0) {
+                const qreal sensitivity = 0.25 + qBound(0, overlaySettings.glowSensitivity, 100) / 50.0;
+                const qreal rawLevel = qBound(0.0, frameGradientEnergy * sensitivity, 1.0);
+                constexpr qreal silenceThreshold = 0.008;
+                if (rawLevel > silenceThreshold) {
+                    const qreal audioLevel = qBound(0.0, (rawLevel - silenceThreshold) / (1.0 - silenceThreshold), 1.0);
+                    gpuGlow.strength = float((overlaySettings.glowOpacity / 100.0) * qPow(audioLevel, 0.72));
+                    const qreal radiusPercent = qBound(5, overlaySettings.glowRadius, 20);
+                    const qreal scale = 1.0 + (20.0 - radiusPercent) / 15.0 * 1.35;
+                    gpuGlow.holeRadius = float(0.42 * scale);
+                    gpuGlow.outerRadius = float(0.62 * scale);
+                    gpuGlow.phase = float(effectTime * (qBound(0, overlaySettings.glowGradientSpeed, 100) / 100.0) * 0.18);
+                    gpuGlow.width = float(width()); gpuGlow.height = float(height());
+                    QVector<QPair<qreal, QColor>> stops = overlaySettings.glowGradientStops;
+                    std::sort(stops.begin(), stops.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+                    if (stops.size() < 2) stops = {{0.0, overlaySettings.glowColors[0]}, {0.33, overlaySettings.glowColors[1]},
+                                                  {0.66, overlaySettings.glowColors[2]}, {1.0, overlaySettings.glowColors[3]}};
+                    auto sampleGlowColor = [&stops](qreal position) {
+                        if (position <= stops.first().first) return stops.first().second;
+                        for (int i = 1; i < stops.size(); ++i) {
+                            if (position <= stops[i].first) {
+                                const qreal span = qMax<qreal>(0.0001, stops[i].first - stops[i-1].first);
+                                return QColor::fromRgbF(
+                                    stops[i-1].second.redF() + (stops[i].second.redF()-stops[i-1].second.redF()) * ((position-stops[i-1].first)/span),
+                                    stops[i-1].second.greenF() + (stops[i].second.greenF()-stops[i-1].second.greenF()) * ((position-stops[i-1].first)/span),
+                                    stops[i-1].second.blueF() + (stops[i].second.blueF()-stops[i-1].second.blueF()) * ((position-stops[i-1].first)/span));
+                            }
+                        }
+                        return stops.last().second;
+                    };
+                    for (int i = 0; i < 4; ++i) {
+                        const qreal position = qreal(i) / 3.0;
+                        const QColor color = sampleGlowColor(position);
+                        gpuGlow.stops[i] = float(position);
+                        gpuGlow.colors[i][0] = float(color.redF());
+                        gpuGlow.colors[i][1] = float(color.greenF());
+                        gpuGlow.colors[i][2] = float(color.blueF());
+                        gpuGlow.colors[i][3] = 1.0f;
+                    }
+                    if (gpuGlow.strength > 0.001f) gpuGlowPtr = &gpuGlow;
+                }
+            }
             const bool gpuRendered = !forceCpuFallback && GpuRenderer::instance().renderColoredRects(
                 width(), height(), gpuRects, gpuColors, &gpuComposite, &cachedGpuBackground,
-                &gpuTopColors);
+                &gpuTopColors, gpuGlowPtr);
 #ifdef Q_OS_WIN
             const bool nativePresented = GpuRenderer::instance().nativePresentationActive();
             if (nativePreviewHwnd) {
@@ -1714,7 +1760,7 @@ private:
         const bool animatedBokeh = bokehEnabled
             && (bokehSpeed > 0 || bokehTwinkle > 0 || bokehAudioReactive);
         return audioZoomEnabled || audioShakeEnabled || exposurePulseEnabled
-            || edgeGlowEnabled || animatedBokeh
+            || animatedBokeh
             || (rainGlassEnabled && rainAudioReactive)
             || (particlesEnabled && particlesAudioReactive);
     }
