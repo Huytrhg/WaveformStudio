@@ -610,6 +610,10 @@ public:
             bands.clear();
             peakLevels.clear();
             peakTicks.clear();
+            // Clear the Glow envelope immediately when the audio stream stops.
+            frameGradientEnergy = 0.0;
+            frameEnergyBaseline = 0.0;
+            previousFullEnergy = 0.0;
             update();
             return;
         }
