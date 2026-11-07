@@ -962,6 +962,7 @@ public:
     void setEdgeGlowEnabled(bool enabled) { edgeGlowEnabled = enabled; gpuBackgroundDirty = true; update(); }
     void setEdgeGlowOpacity(int value) { edgeOpacity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setEdgeGlowSpread(int value) { edgeSpread = qBound(10, value, 100); gpuBackgroundDirty = true; update(); }
+    void setEdgeGlowGradientSpeed(int value) { edgeGradientSpeed = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setEdgeGlowSensitivity(int value) { edgeSensitivity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setEdgeGlowSmoothing(int value) { edgeSmoothing = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
     void setEdgeGlowColors(const QColor &a, const QColor &b, const QColor &c, const QColor &d) {
@@ -1042,6 +1043,7 @@ public:
         s.particleRandomMotion = particleRandomMotion;
         s.glowEnabled = edgeGlowEnabled; s.glowOpacity = edgeOpacity;
         s.glowRadius = edgeSpread; s.glowSensitivity = edgeSensitivity;
+        s.glowGradientSpeed = edgeGradientSpeed;
         s.glowSmoothing = edgeSmoothing;
         for (int i = 0; i < 4; ++i) s.glowColors[i] = edgeColors[i];
         s.glowGradientStops = edgeGlowGradientStops;
@@ -2055,6 +2057,7 @@ private:
     qreal framePulseEnergy = 0.0;
     bool edgeGlowEnabled = false;
     int edgeOpacity = 35, edgeSpread = 72, edgeSensitivity = 60, edgeSmoothing = 75;
+    int edgeGradientSpeed = 25;
     qreal frameGradientEnergy = 0.0;
     QColor edgeColors[4] = {QColor("#00D5FF"), QColor("#376BFF"),
                             QColor("#D64DFF"), QColor("#00D5FF")};
@@ -3223,6 +3226,10 @@ MainWindow::MainWindow(QWidget *parent)
     });
     addWaveSlider("Glow Radius", 10, 100, 72, "%", [this](int v) {
         spectrumOverlay->setEdgeGlowSpread(v); spectrumDisplay->setEdgeGlowSpread(v);
+    });
+    addWaveSlider("Gradient Speed", 0, 100, 25, "%", [this](int v) {
+        spectrumOverlay->setEdgeGlowGradientSpeed(v);
+        spectrumDisplay->setEdgeGlowGradientSpeed(v);
     });
     addWaveSlider("Edge Sensitivity", 0, 100, 60, "%", [this](int v) {
         spectrumOverlay->setEdgeGlowSensitivity(v); spectrumDisplay->setEdgeGlowSensitivity(v);
