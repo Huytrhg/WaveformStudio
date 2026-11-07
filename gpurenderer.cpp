@@ -529,7 +529,7 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
         context->Draw(3,0);
         if (timing) context->End(timing->end.Get());
         if (timing) { context->End(timing->disjoint.Get()); timing->pending=true; }
-        glowCpuSubmitLastMs=submitTimer.nsecsElapsed()/1000000.0; ++glowCpuSubmitSamples;
+        glowCpuSubmitLastMs=submitTimer.nsecsElapsed()/1000000.0; glowCpuSubmitMaxMs=qMax(glowCpuSubmitMaxMs,glowCpuSubmitLastMs); ++glowCpuSubmitSamples;
         glowCpuSubmitAverageMs+=(glowCpuSubmitLastMs-glowCpuSubmitAverageMs)/double(glowCpuSubmitSamples);
         ++glowDraws;
     }
@@ -949,10 +949,10 @@ QString GpuRenderer::runtimeStats() const
             .arg(nativePresentCpuMs, 0, 'f', 3)
             .arg(nativePresentCpuAverageMs, 0, 'f', 3)
             .arg(nativePresentCpuMaxMs, 0, 'f', 3)
-        + QStringLiteral("\nGlow D3D11 shader: draws %1 | GPU last/avg/max %2 / %3 / %4 ms (%5 samples; %6) | CPU submit last/avg %7 / %8 ms (%9 samples)")
+        + QStringLiteral("\nGlow D3D11 shader: draws %1 | GPU last/avg/max %2 / %3 / %4 ms (%5 samples; %6) | CPU submit last/avg/max %7 / %8 / %10 ms (%9 samples)")
             .arg(glowDraws).arg(glowGpuLastMs,0,'f',4).arg(glowGpuAverageMs,0,'f',4)
             .arg(glowGpuMaxMs,0,'f',4).arg(glowGpuSamples).arg(glowGpuTimingStatus)
-            .arg(glowCpuSubmitLastMs,0,'f',4).arg(glowCpuSubmitAverageMs,0,'f',4).arg(glowCpuSubmitSamples);
+            .arg(glowCpuSubmitLastMs,0,'f',4).arg(glowCpuSubmitAverageMs,0,'f',4).arg(glowCpuSubmitSamples).arg(glowCpuSubmitMaxMs,0,'f',4);
 }
 
 QString GpuRenderer::diagnostics() const
