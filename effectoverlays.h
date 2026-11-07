@@ -191,29 +191,16 @@ public:
         std::sort(stops.begin(), stops.end(),
                   [](const auto &a, const auto &b) { return a.first < b.first; });
 
-        auto colorAt = [&stops](qreal t) {
-            t = std::fmod(t + 1.0, 1.0);
-            int i = 0;
-            while (i + 1 < stops.size() && stops[i + 1].first < t) ++i;
-            const int j = qMin(i + 1, stops.size() - 1);
-            const qreal span = qMax<qreal>(0.0001, stops[j].first - stops[i].first);
-            return QColor::fromRgbF(
-                qBound(0.0, stops[i].second.redF() +
-                    (stops[j].second.redF() - stops[i].second.redF()) *
-                    qBound(0.0, (t - stops[i].first) / span, 1.0), 1.0),
-                qBound(0.0, stops[i].second.greenF() +
-                    (stops[j].second.greenF() - stops[i].second.greenF()) *
-                    qBound(0.0, (t - stops[i].first) / span, 1.0), 1.0),
-                qBound(0.0, stops[i].second.blueF() +
-                    (stops[j].second.blueF() - stops[i].second.blueF()) *
-                    qBound(0.0, (t - stops[i].first) / span, 1.0), 1.0));
-        };
-
         const qreal radiusPercent = qBound(10, s.glowRadius, 100) / 100.0;
-        const qreal innerRadius = 0.48 + (1.0 - radiusPercent) * 0.40;
-        const qreal phase = timeSeconds * (qBound(0, s.glowGradientSpeed, 100) / 100.0) * 0.18
-                            + level * 0.12;
+        const qreal holeRadius = 0.42 + (1.0 - radiusPercent) * 0.43;
+        const qreal featherRadius = qMin(0.20, 0.055 + radiusPercent * 0.10);
+        const qreal outerHoleRadius = qMin(0.97, holeRadius + featherRadius);
+        const qreal phase = timeSeconds *
+            (qBound(0, s.glowGradientSpeed, 100) / 100.0) * 0.18 + level * 0.12;
 
+        // One conical-gradient fill covers the entire rectangular video area,
+        // including all four corners. An oval is then softly filled from
+        // transparent at its center to full glow at its boundary.
         p.save();
         p.setClipRect(area);
         p.setRenderHint(QPainter::Antialiasing, true);
@@ -221,35 +208,45 @@ public:
         p.translate(area.center());
         p.scale(area.width() * 0.5, area.height() * 0.5);
 
-        // The transparent opening is an oval. The glow occupies the surrounding
-        // frame and feathers smoothly from its outer edge toward that oval.
-        constexpr int wedges = 96;
-        for (int i = 0; i < wedges; ++i) {
-            const qreal a0 = (qreal(i) / wedges) * 2.0 * 3.14159265358979323846;
-            const qreal a1 = (qreal(i + 1) / wedges) * 2.0 * M_PI;
-            const qreal mid = (qreal(i) + 0.5) / wedges;
-            QPainterPath sector;
-            sector.moveTo(0.0, 0.0);
-            sector.lineTo(qCos(a0), qSin(a0));
-            sector.arcTo(QRectF(-1.0, -1.0, 2.0, 2.0),
-                         -qRadiansToDegrees(a0), -qRadiansToDegrees(a1 - a0));
-            sector.closeSubpath();
-
-            QColor color = colorAt(mid + phase);
-            QRadialGradient radial(QPointF(0.0, 0.0), 1.0);
-            radial.setColorAt(0.0, QColor(color.red(), color.green(), color.blue(), 0));
-            radial.setColorAt(qBound(0.0, innerRadius - 0.025, 0.98),
-                              QColor(color.red(), color.green(), color.blue(), 0));
-            radial.setColorAt(qBound(0.0, innerRadius + 0.20, 1.0),
-                              QColor(color.red(), color.green(), color.blue(),
-                                     qBound(0, qRound(150.0 * strength), 150)));
-            radial.setColorAt(1.0, QColor(color.red(), color.green(), color.blue(),
-                                          qBound(0, qRound(205.0 * strength), 205)));
-            p.save();
-            p.setClipPath(sector, Qt::IntersectClip);
-            p.fillRect(QRectF(-1.25, -1.25, 2.5, 2.5), radial);
-            p.restore();
+        QConicalGradient frameGradient(QPointF(0.0, 0.0), -90.0 - phase * 360.0);
+        for (const auto &stop : stops) {
+            QColor color = stop.second;
+            color.setAlpha(qBound(0, qRound(205.0 * strength), 205));
+            frameGradient.setColorAt(qBound(0.0, stop.first, 1.0), color);
         }
+
+        QPainterPath frame;
+        frame.setFillRule(Qt::OddEvenFill);
+        frame.addRect(QRectF(-1.0, -1.0, 2.0, 2.0));
+        frame.addEllipse(QRectF(-outerHoleRadius, -outerHoleRadius,
+                                outerHoleRadius * 2.0, outerHoleRadius * 2.0));
+        p.setPen(Qt::NoPen);
+        p.setBrush(frameGradient);
+        p.drawPath(frame);
+
+        // Feather the inner edge: fully transparent in the oval center,
+        // gradually reaching the frame glow at the oval boundary.
+        QColor innerColor = stops.first().second;
+        qreal red = 0.0, green = 0.0, blue = 0.0;
+        for (const auto &stop : stops) {
+            red += stop.second.redF();
+            green += stop.second.greenF();
+            blue += stop.second.blueF();
+        }
+        const qreal count = qMax(1, stops.size());
+        innerColor.setRgbF(red / count, green / count, blue / count);
+        const int innerAlpha = qBound(0, qRound(205.0 * strength), 205);
+        QRadialGradient innerGradient(QPointF(0.0, 0.0), outerHoleRadius);
+        innerGradient.setColorAt(0.0, QColor(innerColor.red(), innerColor.green(),
+                                             innerColor.blue(), 0));
+        innerGradient.setColorAt(qBound(0.0, holeRadius / outerHoleRadius, 0.98),
+                                 QColor(innerColor.red(), innerColor.green(),
+                                        innerColor.blue(), 0));
+        innerGradient.setColorAt(1.0, QColor(innerColor.red(), innerColor.green(),
+                                             innerColor.blue(), innerAlpha));
+        p.setBrush(innerGradient);
+        p.drawEllipse(QRectF(-outerHoleRadius, -outerHoleRadius,
+                             outerHoleRadius * 2.0, outerHoleRadius * 2.0));
         p.restore();
     }
 
