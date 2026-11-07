@@ -152,7 +152,7 @@ public:
                 m_effectOverlayRenderer.paintParticles(composite, effectArea,
                     m_effectSettings, effectTime, energy);
                 EffectOverlayRenderer::paintGlow(composite, effectArea,
-                    m_effectSettings, m_glowSmoothedEnergy);
+                    m_effectSettings, m_glowSmoothedEnergy, effectTime);
                 composite.drawImage(QPoint(0, 0), m_spectrumBuffer);
                 composite.end();
             }
