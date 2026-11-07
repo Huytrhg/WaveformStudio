@@ -225,7 +225,7 @@ public:
         // frame and feathers smoothly from its outer edge toward that oval.
         constexpr int wedges = 96;
         for (int i = 0; i < wedges; ++i) {
-            const qreal a0 = (qreal(i) / wedges) * 2.0 * M_PI;
+            const qreal a0 = (qreal(i) / wedges) * 2.0 * 3.14159265358979323846;
             const qreal a1 = (qreal(i + 1) / wedges) * 2.0 * M_PI;
             const qreal mid = (qreal(i) + 0.5) / wedges;
             QPainterPath sector;
