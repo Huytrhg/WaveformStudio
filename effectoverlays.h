@@ -4,6 +4,7 @@
 #include <QColor>
 #include <QImage>
 #include <QLinearGradient>
+#include <QPair>
 #include <QPen>
 #include <QPainter>
 #include <QPainterPath>
