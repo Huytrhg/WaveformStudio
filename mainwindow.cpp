@@ -957,6 +957,7 @@ public:
     void setParticleTwinkle(int v) { particleTwinkle = qBound(0, v, 100); refreshAmbientTimer(); gpuBackgroundDirty = true; update(); }
     void setParticlesAudioReactive(bool v) { particlesAudioReactive = v; refreshAmbientTimer(); gpuBackgroundDirty = true; update(); }
     void setParticleSensitivity(int v) { particleSensitivity = qBound(0, v, 100); gpuBackgroundDirty = true; update(); }
+    void setParticleRandomMotion(bool v) { particleRandomMotion = v; gpuBackgroundDirty = true; update(); }
 
     void setEdgeGlowEnabled(bool enabled) { edgeGlowEnabled = enabled; gpuBackgroundDirty = true; update(); }
     void setEdgeGlowOpacity(int value) { edgeOpacity = qBound(0, value, 100); gpuBackgroundDirty = true; update(); }
@@ -968,6 +969,26 @@ public:
         if (b.isValid()) edgeColors[1] = b;
         if (c.isValid()) edgeColors[2] = c;
         if (d.isValid()) edgeColors[3] = d;
+        edgeGlowGradientStops = {{0.0, edgeColors[0]}, {0.33, edgeColors[1]},
+                                 {0.66, edgeColors[2]}, {1.0, edgeColors[3]}};
+        gpuBackgroundDirty = true;
+        update();
+    }
+    void setEdgeGlowGradientStops(const QVector<QPair<qreal, QColor>> &stops) {
+        if (stops.size() < 2) return;
+        edgeGlowGradientStops = stops;
+        for (int i = 0; i < 4; ++i) {
+            const qreal t = i / 3.0;
+            int j = 0;
+            while (j + 1 < stops.size() && stops[j + 1].first < t) ++j;
+            const int k = qMin(j + 1, stops.size() - 1);
+            const qreal span = qMax<qreal>(0.0001, stops[k].first - stops[j].first);
+            const qreal u = qBound(0.0, (t - stops[j].first) / span, 1.0);
+            edgeColors[i] = QColor::fromRgbF(
+                stops[j].second.redF() * (1-u) + stops[k].second.redF() * u,
+                stops[j].second.greenF() * (1-u) + stops[k].second.greenF() * u,
+                stops[j].second.blueF() * (1-u) + stops[k].second.blueF() * u);
+        }
         gpuBackgroundDirty = true;
         update();
     }
@@ -1018,10 +1039,12 @@ public:
         s.particleOpacity = particleOpacity; s.particleGlow = particleGlow;
         s.particleTwinkle = particleTwinkle; s.particlesAudioReactive = particlesAudioReactive;
         s.particleSensitivity = particleSensitivity;
+        s.particleRandomMotion = particleRandomMotion;
         s.glowEnabled = edgeGlowEnabled; s.glowOpacity = edgeOpacity;
         s.glowSpread = edgeSpread; s.glowSensitivity = edgeSensitivity;
         s.glowSmoothing = edgeSmoothing;
         for (int i = 0; i < 4; ++i) s.glowColors[i] = edgeColors[i];
+        s.glowGradientStops = edgeGlowGradientStops;
         return s;
     }
 
@@ -2001,6 +2024,7 @@ private:
     int particleOpacity = 65, particleGlow = 60, particleTwinkle = 25;
     int particleSensitivity = 55;
     bool particlesAudioReactive = false;
+    bool particleRandomMotion = false;
     bool bokehEnabled = false;
     bool bokehAudioReactive = false;
     int bokehCount = 28, bokehSize = 35, bokehSpeed = 35;
@@ -2031,6 +2055,10 @@ private:
     qreal frameGradientEnergy = 0.0;
     QColor edgeColors[4] = {QColor("#00D5FF"), QColor("#376BFF"),
                             QColor("#D64DFF"), QColor("#00D5FF")};
+    QVector<QPair<qreal, QColor>> edgeGlowGradientStops = {
+        {0.0, QColor("#00D5FF")}, {0.33, QColor("#376BFF")},
+        {0.66, QColor("#D64DFF")}, {1.0, QColor("#00D5FF")}
+    };
     QElapsedTimer effectClock;
 
     QColor colorAt(qreal t) const
@@ -3200,32 +3228,27 @@ MainWindow::MainWindow(QWidget *parent)
         spectrumOverlay->setEdgeGlowSmoothing(v); spectrumDisplay->setEdgeGlowSmoothing(v);
     });
 
-    QHBoxLayout *edgeColorRow = new QHBoxLayout;
-    edgeColorRow->addWidget(new QLabel("Gradient Colors"));
-    const QStringList edgeColorNames = {"Top", "Left", "Bottom", "Right"};
-    const QColor edgeDefaults[] = {QColor("#00D5FF"), QColor("#376BFF"),
-                                   QColor("#D64DFF"), QColor("#00D5FF")};
-    for (int colorIndex = 0; colorIndex < 4; ++colorIndex) {
-        QPushButton *colorPick = new QPushButton(edgeColorNames[colorIndex]);
-        colorPick->setMaximumWidth(64);
-        colorPick->setStyleSheet(QString("background:%1;color:#101114;")
-                                 .arg(edgeDefaults[colorIndex].name()));
-        edgeColorRow->addWidget(colorPick);
-        connect(colorPick, &QPushButton::clicked, this,
-                [this, colorPick, colorIndex]() {
-            static QColor stored[4] = {QColor("#00D5FF"), QColor("#376BFF"),
-                                       QColor("#D64DFF"), QColor("#00D5FF")};
-            const QColor color = QColorDialog::getColor(stored[colorIndex], this,
-                                                         "Choose Edge Gradient Color");
-            if (!color.isValid()) return;
-            stored[colorIndex] = color;
-            colorPick->setStyleSheet(QString("background:%1;color:#101114;")
-                                     .arg(color.name()));
-            spectrumOverlay->setEdgeGlowColors(stored[0], stored[1], stored[2], stored[3]);
-            spectrumDisplay->setEdgeGlowColors(stored[0], stored[1], stored[2], stored[3]);
-        });
-    }
-    propertiesLayout->addLayout(edgeColorRow);
+    propertiesLayout->addWidget(new QLabel("Glow Gradient"));
+    GradientEditor *glowGradientEditor = new GradientEditor;
+    glowGradientEditor->setStops({
+        {0.0, QColor("#00D5FF")}, {0.33, QColor("#376BFF")},
+        {0.66, QColor("#D64DFF")}, {1.0, QColor("#00D5FF")}
+    });
+    propertiesLayout->addWidget(glowGradientEditor);
+    glowGradientEditor->changed = [this, glowGradientEditor]() {
+        spectrumOverlay->setEdgeGlowGradientStops(glowGradientEditor->stops);
+        spectrumDisplay->setEdgeGlowGradientStops(glowGradientEditor->stops);
+    };
+    glowGradientEditor->editColor = [this, glowGradientEditor](int index) {
+        if (index < 0 || index >= glowGradientEditor->stops.size()) return;
+        const QColor selected = QColorDialog::getColor(
+            glowGradientEditor->stops[index].second, this, "Edit Glow Gradient Stop");
+        if (!selected.isValid()) return;
+        glowGradientEditor->stops[index].second = selected;
+        glowGradientEditor->refresh();
+        if (glowGradientEditor->changed) glowGradientEditor->changed();
+    };
+    glowGradientEditor->changed();
 
     connect(audioZoomToggle, &QCheckBox::toggled, this, [this](bool v) {
         spectrumOverlay->setAudioZoomEnabled(v); spectrumDisplay->setAudioZoomEnabled(v);
@@ -3312,6 +3335,12 @@ MainWindow::MainWindow(QWidget *parent)
     });
     addWaveSlider("Twinkle", 0, 100, 25, "%", [this](int v) {
         spectrumOverlay->setParticleTwinkle(v); spectrumDisplay->setParticleTwinkle(v);
+    });
+    QCheckBox *particlesRandomMotionToggle = new QCheckBox("Random Motion");
+    particlesRandomMotionToggle->setToolTip("Give each particle an independent drifting path instead of a shared upward flow.");
+    propertiesLayout->addWidget(particlesRandomMotionToggle);
+    connect(particlesRandomMotionToggle, &QCheckBox::toggled, this, [this](bool v) {
+        spectrumOverlay->setParticleRandomMotion(v); spectrumDisplay->setParticleRandomMotion(v);
     });
     QCheckBox *particlesAudioReactiveToggle = new QCheckBox("Audio Reactive");
     propertiesLayout->addWidget(particlesAudioReactiveToggle);
