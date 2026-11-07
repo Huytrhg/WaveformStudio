@@ -844,11 +844,23 @@ public:
             .arg(videoFrameWidth).arg(videoFrameHeight).arg(videoPlaneCount)
             .arg(videoHandleType)
             .arg(videoNoHandleFrames).arg(videoRhiTextureFrames).arg(videoOtherHandleFrames);
+        const EffectOverlayRenderer::GlowProfile glowStats =
+            EffectOverlayRenderer::glowProfile();
+        const QString glowProfileStats = QStringLiteral(
+            "Glow profiling (Preview thread; Glow painter only)\\n"
+            "Paint last/avg/max: %1 / %2 / %3 ms | samples: %4\\n"
+            "Cached texture builds: %5 | cache hits: %6\\n")
+            .arg(glowStats.lastMs, 0, 'f', 4)
+            .arg(glowStats.averageMs, 0, 'f', 4)
+            .arg(glowStats.maxMs, 0, 'f', 4)
+            .arg(glowStats.samples)
+            .arg(glowStats.textureBuilds)
+            .arg(glowStats.cacheHits);
         return QStringLiteral("Preview mode: %1\nMeasured paint rate: %2 FPS\n\n%3%4\n%5")
             .arg(forceCpuFallback ? QStringLiteral("CPU fallback (QPainter)")
                                   : QStringLiteral("Hybrid GPU (D3D11; native presentation when supported)"))
             .arg(measuredFps, 0, 'f', 1)
-            .arg(cpuStats)
+            .arg(cpuStats + glowProfileStats)
             .arg(callbackStats + presentationStats + guiWorkloadStats)
             .arg(videoFrameDetails)
             .arg(GpuRenderer::instance().diagnostics());
