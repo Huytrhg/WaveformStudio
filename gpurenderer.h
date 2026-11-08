@@ -79,6 +79,9 @@ private:
     quint64 resourceReuses = 0;
     quint64 compositedFrames = 0;
     double lastUploadMs = 0.0;
+    double lastUploadConvertMs = 0.0, lastUploadSubmitMs = 0.0;
+    QVector<double> uploadConvertTimingWindow, uploadSubmitTimingWindow;
+    QVector<double> drawSubmitTimingWindow, nativeCopySubmitTimingWindow, nativePresentTimingWindow;
     // Phase 6D: asynchronous Phase 3 preview readback diagnostics.
     double phase3AsyncPollMs = 0.0;
     double phase3AsyncFlushMs = 0.0;
@@ -112,6 +115,7 @@ private:
     double nativePresentCpuMs = 0.0;
     double nativePresentCpuAverageMs = 0.0;
     double nativePresentCpuMaxMs = 0.0;
+    double nativeCopySubmitMs = 0.0, nativeDxgiPresentMs = 0.0;
     QString nativePresentError;
 
 #ifdef Q_OS_WIN
