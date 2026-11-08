@@ -492,6 +492,7 @@ public:
                     recordPhase6fTiming(conversionTimer.nsecsElapsed(),
                         videoConvertLastMs, videoConvertAverageMs,
                         videoConvertMaxMs, videoConvertSamples);
+                    appendPhase6fSample(videoConvertLastMs, videoConvertTimingWindow);
                     if (image.isNull()) { finishCallbackProcessing(2); return; }
                     // Preview only: cap image size to reduce CPU painting cost.
                     const QSize limit(960, 540);
@@ -502,6 +503,7 @@ public:
                         recordPhase6fTiming(scaleTimer.nsecsElapsed(),
                             videoScaleLastMs, videoScaleAverageMs,
                             videoScaleMaxMs, videoScaleSamples);
+                        appendPhase6fSample(videoScaleLastMs, videoScaleTimingWindow);
                     }
                     // Commit the pacing baseline only after conversion succeeds,
                     // so a failed QImage conversion cannot advance the preview timeline.
@@ -732,10 +734,10 @@ public:
         const double actualPaintFps = double(previewPaintEvents) / profileSeconds;
         const double updateRequestFps = double(previewVideoUpdateRequests) / profileSeconds;
         const QString pipelineHandoffStats = QStringLiteral(
-            "Phase 6F.12 preview pipeline handoff (cumulative samples)\n"
-            "QVideoFrame::toImage last/avg/max: %1 / %2 / %3 ms | samples: %4\n"
-            "QImage scale last/avg/max: %5 / %6 / %7 ms | samples: %8\n"
-            "D3D11 render call (CPU wall) last/avg/max: %9 / %10 / %11 ms | samples: %12\n"
+            "Phase 6F.13 preview pipeline handoff (cumulative; rolling P95/P99 window max 4096)\n"
+            "QVideoFrame::toImage last/avg/max: %1 / %2 / %3 ms | P95/P99: %21 / %22 ms | samples: %4\n"
+            "QImage scale last/avg/max: %5 / %6 / %7 ms | P95/P99: %23 / %24 ms | samples: %8\n"
+            "D3D11 render call CPU wall last/avg/max: %9 / %10 / %11 ms | samples: %12\n"
             "QPainter GPU composite blit last/avg/max: %13 / %14 / %15 ms | samples: %16\n"
             "QWidget paintEvent total last/avg/max: %17 / %18 / %19 ms | samples: %20\n")
             .arg(videoConvertLastMs, 0, 'f', 3).arg(videoConvertAverageMs, 0, 'f', 3)
@@ -747,7 +749,11 @@ public:
             .arg(gpuCompositeBlitLastMs, 0, 'f', 3).arg(gpuCompositeBlitAverageMs, 0, 'f', 3)
             .arg(gpuCompositeBlitMaxMs, 0, 'f', 3).arg(gpuCompositeBlitSamples)
             .arg(paintLastMs, 0, 'f', 3).arg(paintAverageMs, 0, 'f', 3)
-            .arg(paintMaxMs, 0, 'f', 3).arg(paintSamples);
+            .arg(paintMaxMs, 0, 'f', 3).arg(paintSamples)
+            .arg(phase6fPercentile(videoConvertTimingWindow, 95), 0, 'f', 3)
+            .arg(phase6fPercentile(videoConvertTimingWindow, 99), 0, 'f', 3)
+            .arg(phase6fPercentile(videoScaleTimingWindow, 95), 0, 'f', 3)
+            .arg(phase6fPercentile(videoScaleTimingWindow, 99), 0, 'f', 3);
         const QString presentationStats = QStringLiteral(
             "Phase 6F.10 actual preview presentation (same window: %1 s)\n"
             "Video update() requests: %2 (%3 FPS) | QWidget paintEvent calls: %4 (%5 FPS)\n"
@@ -1817,6 +1823,23 @@ private:
         diagnosticsClock.restart();
     }
 
+    static void appendPhase6fSample(double value, QVector<double> &window)
+    {
+        constexpr int maxSamples = 4096;
+        if (window.size() == maxSamples) window.remove(0);
+        window.append(value);
+    }
+
+    static double phase6fPercentile(const QVector<double> &window, double percentile)
+    {
+        if (window.isEmpty()) return 0.0;
+        QVector<double> sorted = window;
+        std::sort(sorted.begin(), sorted.end());
+        const int index = qBound(0, int(std::ceil((percentile / 100.0) * sorted.size())) - 1,
+                                 sorted.size() - 1);
+        return sorted[index];
+    }
+
     static void recordPhase6fTiming(qint64 elapsedNs, double &lastMs,
                                     double &averageMs, double &maxMs,
                                     quint64 &samples)
@@ -2047,6 +2070,7 @@ private:
     qint64 lastPresentedVideoPtsUs = -1;
     double videoConvertLastMs = 0.0, videoConvertAverageMs = 0.0, videoConvertMaxMs = 0.0;
     quint64 videoConvertSamples = 0;
+    QVector<double> videoConvertTimingWindow;
     // Phase 6F.8 callback arrival, burst, PTS-correlation and processing profiling.
     QElapsedTimer videoCallbackClock;
     QElapsedTimer videoProfilingClock;
@@ -2084,6 +2108,7 @@ private:
     int videoFrameWidth = 0, videoFrameHeight = 0, videoPlaneCount = 0;
     double videoScaleLastMs = 0.0, videoScaleAverageMs = 0.0, videoScaleMaxMs = 0.0;
     quint64 videoScaleSamples = 0;
+    QVector<double> videoScaleTimingWindow;
     double paintLastMs = 0.0, paintAverageMs = 0.0, paintMaxMs = 0.0;
     quint64 paintSamples = 0;
     double gpuRenderCallLastMs = 0.0, gpuRenderCallAverageMs = 0.0, gpuRenderCallMaxMs = 0.0;
