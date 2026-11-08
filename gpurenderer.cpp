@@ -1016,8 +1016,8 @@ QString GpuRenderer::runtimeStats() const
             .arg(gpuTimingPercentile(drawSubmitTimingWindow,99),0,'f',4)
             .arg(drawSubmitTimingWindow.size())
         + QStringLiteral("\nPhase 6F.14 isolated draw submission (rolling window max 4096)\n"
-                          "Glow CPU submit last/P95/P99: %1 / %2 / %3 ms | samples %4 | >1ms %5 | >5ms %6\n"
-                          "Spectrum CPU submit last/P95/P99: %7 / %8 / %9 ms | samples %10 | >1ms %11 | >5ms %12")
+                          "Glow CPU submit last/P95/P99: %1 / %2 / %3 ms | samples %4 | lifetime >1ms %5 | >5ms %6\n"
+                          "Spectrum CPU submit last/P95/P99: %7 / %8 / %9 ms | samples %10 | lifetime >1ms %11 | >5ms %12")
             .arg(glowCpuSubmitLastMs,0,'f',4)
             .arg(gpuTimingPercentile(glowCpuSubmitTimingWindow,95),0,'f',4)
             .arg(gpuTimingPercentile(glowCpuSubmitTimingWindow,99),0,'f',4)
