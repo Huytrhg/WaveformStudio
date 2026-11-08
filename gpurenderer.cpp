@@ -24,6 +24,28 @@ QString hexResult(HRESULT hr)
 {
     return QStringLiteral("0x%1").arg(static_cast<quint32>(hr), 8, 16, QLatin1Char('0')).toUpper();
 }
+void appendGpuTimingSample(QVector<double> &window, double value)
+{
+    constexpr int maxSamples = 4096;
+    if (window.size() == maxSamples) window.remove(0);
+    window.append(value);
+}
+double gpuTimingPercentile(const QVector<double> &window, double percentile)
+{
+    if (window.isEmpty()) return 0.0;
+    QVector<double> sorted = window;
+    std::sort(sorted.begin(), sorted.end());
+    const int index = qBound(0, int(std::ceil((percentile / 100.0) * sorted.size())) - 1,
+                             sorted.size() - 1);
+    return sorted[index];
+}
+double gpuTimingAverage(const QVector<double> &window)
+{
+    if (window.isEmpty()) return 0.0;
+    double total = 0.0;
+    for (double value : window) total += value;
+    return total / double(window.size());
+}
 const char *shaderSource = R"HLSL(
 struct VSIn { float2 pos : POSITION; float4 color : COLOR; };
 struct VSOut { float4 pos : SV_POSITION; float4 color : COLOR; };
@@ -307,6 +329,8 @@ bool GpuRenderer::presentNativeTexture()
     if(!nativePreviewReady||!nativeSwapChain||!nativeBackBufferRtv||!cachedTextureSrv)return false;
     ++nativePresentAttempts;
     QElapsedTimer timer;timer.start();
+    nativeCopySubmitMs = 0.0;
+    nativeDxgiPresentMs = 0.0;
     ID3D11RenderTargetView *rtv=nativeBackBufferRtv.Get();context->OMSetRenderTargets(1,&rtv,nullptr);
     D3D11_VIEWPORT vp{};vp.Width=float(nativePreviewWidth);vp.Height=float(nativePreviewHeight);
     vp.MinDepth=0;vp.MaxDepth=1;context->RSSetViewports(1,&vp);
@@ -336,7 +360,12 @@ bool GpuRenderer::presentNativeTexture()
     context->PSSetShaderResources(0,1,&srv);context->PSSetSamplers(0,1,&sampler);context->Draw(6,0);
     ID3D11ShaderResourceView *nullSrv=nullptr;context->PSSetShaderResources(0,1,&nullSrv);
     context->OMSetRenderTargets(0,nullptr,nullptr);
+    nativeCopySubmitMs = timer.nsecsElapsed() / 1000000.0;
+    appendGpuTimingSample(nativeCopySubmitTimingWindow, nativeCopySubmitMs);
+    QElapsedTimer dxgiPresentTimer; dxgiPresentTimer.start();
     hr=nativeSwapChain->Present(0,0);
+    nativeDxgiPresentMs = dxgiPresentTimer.nsecsElapsed() / 1000000.0;
+    appendGpuTimingSample(nativePresentTimingWindow, nativeDxgiPresentMs);
     nativePresentCpuMs=timer.nsecsElapsed()/1000000.0;
     nativePresentCpuMaxMs=qMax(nativePresentCpuMaxMs,nativePresentCpuMs);
     const quint64 completedAttempts = nativePresentAttempts - nativePresentFailures;
@@ -449,16 +478,24 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     // This is GPU compositing, but NOT zero-copy presentation: Qt video conversion,
     // upload and final readback still exist. See README for Phase 4B.
     lastUploadMs = 0.0;
+    lastUploadConvertMs = 0.0;
+    lastUploadSubmitMs = 0.0;
     if (background && !background->isNull()) {
         QElapsedTimer uploadTimer; uploadTimer.start();
+        QElapsedTimer uploadConvertTimer; uploadConvertTimer.start();
         QImage bg = background->convertToFormat(QImage::Format_ARGB32);
+        lastUploadConvertMs = uploadConvertTimer.nsecsElapsed() / 1000000.0;
+        appendGpuTimingSample(uploadConvertTimingWindow, lastUploadConvertMs);
         if (bg.size() != QSize(width, height)) {
             ++failedFrames;
             renderError = QStringLiteral("Background size does not match render target.");
             return false;
         }
+        QElapsedTimer uploadSubmitTimer; uploadSubmitTimer.start();
         context->UpdateSubresource(cachedTexture.Get(), 0, nullptr,
                                    bg.constBits(), UINT(bg.bytesPerLine()), 0);
+        lastUploadSubmitMs = uploadSubmitTimer.nsecsElapsed() / 1000000.0;
+        appendGpuTimingSample(uploadSubmitTimingWindow, lastUploadSubmitMs);
         lastUploadMs = uploadTimer.nsecsElapsed() / 1000000.0;
     }
     QElapsedTimer drawTimer; drawTimer.start();
@@ -541,6 +578,7 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     context->Draw(UINT(cachedVertices.size()), 0);
     context->OMSetRenderTargets(0, nullptr, nullptr);
     lastDrawSubmitMs = drawTimer.nsecsElapsed() / 1000000.0;
+    appendGpuTimingSample(drawSubmitTimingWindow, lastDrawSubmitMs);
     // Phase 6E.1: same-device swap-chain presentation bypasses staging readback.
     if (nativePreviewReady && presentNativeTexture()) {
         lastCopyMapMs = 0.0; phase3AsyncPollMs = 0.0; phase3CpuCopyMs = 0.0;
@@ -944,11 +982,38 @@ QString GpuRenderer::runtimeStats() const
         .arg(nativePresentFrames)
         .arg(nativePresentCpuMs, 0, 'f', 3)
         .arg(nativePresentError.isEmpty() ? QStringLiteral("none") : nativePresentError)
-        + QStringLiteral("\nPhase 6F.10 native present calls: attempts %1 | success %2 | failures %3 | CPU last/avg/max %4 / %5 / %6 ms (render submission + DXGI Present)")
-            .arg(nativePresentAttempts).arg(nativePresentFrames).arg(nativePresentFailures)
-            .arg(nativePresentCpuMs, 0, 'f', 3)
-            .arg(nativePresentCpuAverageMs, 0, 'f', 3)
-            .arg(nativePresentCpuMaxMs, 0, 'f', 3)
+        + QStringLiteral("\nPhase 6F.13 D3D11 CPU stages (rolling window max 4096)\\n"
+                          "Background QImage format conversion last/P95/P99: %1 / %2 / %3 ms | samples %4\\n"
+                          "UpdateSubresource CPU submit last/P95/P99: %5 / %6 / %7 ms | samples %8\\n"
+                          "Glow + Spectrum command submission last/P95/P99: %9 / %10 / %11 ms | samples %12")
+            .arg(lastUploadConvertMs,0,'f',4)
+            .arg(gpuTimingPercentile(uploadConvertTimingWindow,95),0,'f',4)
+            .arg(gpuTimingPercentile(uploadConvertTimingWindow,99),0,'f',4)
+            .arg(uploadConvertTimingWindow.size())
+            .arg(lastUploadSubmitMs,0,'f',4)
+            .arg(gpuTimingPercentile(uploadSubmitTimingWindow,95),0,'f',4)
+            .arg(gpuTimingPercentile(uploadSubmitTimingWindow,99),0,'f',4)
+            .arg(uploadSubmitTimingWindow.size())
+            .arg(lastDrawSubmitMs,0,'f',4)
+            .arg(gpuTimingPercentile(drawSubmitTimingWindow,95),0,'f',4)
+            .arg(gpuTimingPercentile(drawSubmitTimingWindow,99),0,'f',4)
+            .arg(drawSubmitTimingWindow.size())
+        + QStringLiteral("\\nPhase 6F.13 native present split (rolling window max 4096)\\n"
+                          "Native copy command submit last/P95/P99: %1 / %2 / %3 ms | samples %4\\n"
+                          "DXGI Present call last/avg/P95/P99: %5 / %6 / %7 / %8 ms | samples %9\\n"
+                          "Native combined CPU path last/avg/max: %10 / %11 / %12 ms")
+            .arg(nativeCopySubmitMs,0,'f',4)
+            .arg(gpuTimingPercentile(nativeCopySubmitTimingWindow,95),0,'f',4)
+            .arg(gpuTimingPercentile(nativeCopySubmitTimingWindow,99),0,'f',4)
+            .arg(nativeCopySubmitTimingWindow.size())
+            .arg(nativeDxgiPresentMs,0,'f',4)
+            .arg(gpuTimingAverage(nativePresentTimingWindow),0,'f',4)
+            .arg(gpuTimingPercentile(nativePresentTimingWindow,95),0,'f',4)
+            .arg(gpuTimingPercentile(nativePresentTimingWindow,99),0,'f',4)
+            .arg(nativePresentTimingWindow.size())
+            .arg(nativePresentCpuMs,0,'f',3)
+            .arg(nativePresentCpuAverageMs,0,'f',3)
+            .arg(nativePresentCpuMaxMs,0,'f',3)
         + QStringLiteral("\nGlow D3D11 shader: draws %1 | GPU last/avg/max %2 / %3 / %4 ms (%5 samples; %6) | CPU submit last/avg/max %7 / %8 / %10 ms (%9 samples)")
             .arg(glowDraws).arg(glowGpuLastMs,0,'f',4).arg(glowGpuAverageMs,0,'f',4)
             .arg(glowGpuMaxMs,0,'f',4).arg(glowGpuSamples).arg(glowGpuTimingStatus)
