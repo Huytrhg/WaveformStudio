@@ -82,9 +82,11 @@ private:
     double lastUploadConvertMs = 0.0, lastUploadSubmitMs = 0.0;
     QVector<double> uploadConvertTimingWindow, uploadSubmitTimingWindow;
     QVector<double> drawSubmitTimingWindow, nativeCopySubmitTimingWindow, nativePresentTimingWindow;
+    QVector<double> glowCpuSubmitTimingWindow, spectrumCpuSubmitTimingWindow;
     int uploadConvertTimingWriteIndex = 0, uploadSubmitTimingWriteIndex = 0;
     int drawSubmitTimingWriteIndex = 0, nativeCopySubmitTimingWriteIndex = 0;
     int nativePresentTimingWriteIndex = 0;
+    int glowCpuSubmitTimingWriteIndex = 0, spectrumCpuSubmitTimingWriteIndex = 0;
     // Phase 6D: asynchronous Phase 3 preview readback diagnostics.
     double phase3AsyncPollMs = 0.0;
     double phase3AsyncFlushMs = 0.0;
@@ -139,6 +141,10 @@ private:
     double glowGpuLastMs = 0.0, glowGpuAverageMs = 0.0, glowGpuMaxMs = 0.0;
     double glowCpuSubmitLastMs = 0.0, glowCpuSubmitAverageMs = 0.0, glowCpuSubmitMaxMs = 0.0;
     quint64 glowGpuSamples = 0, glowCpuSubmitSamples = 0, glowDraws = 0;
+    double spectrumCpuSubmitLastMs = 0.0, spectrumCpuSubmitAverageMs = 0.0, spectrumCpuSubmitMaxMs = 0.0;
+    quint64 spectrumCpuSubmitSamples = 0;
+    quint64 glowCpuSubmitOver1Ms = 0, glowCpuSubmitOver5Ms = 0;
+    quint64 spectrumCpuSubmitOver1Ms = 0, spectrumCpuSubmitOver5Ms = 0;
     QString glowGpuTimingStatus = QStringLiteral("not initialized");
     struct GlowGpuTimingSlot {
         Microsoft::WRL::ComPtr<ID3D11Query> disjoint, start, end;
