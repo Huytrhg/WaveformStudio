@@ -492,7 +492,7 @@ public:
                     recordPhase6fTiming(conversionTimer.nsecsElapsed(),
                         videoConvertLastMs, videoConvertAverageMs,
                         videoConvertMaxMs, videoConvertSamples);
-                    appendPhase6fSample(videoConvertLastMs, videoConvertTimingWindow);
+                    appendPhase6fSample(videoConvertLastMs, videoConvertTimingWindow, videoConvertTimingWindowWriteIndex);
                     if (image.isNull()) { finishCallbackProcessing(2); return; }
                     // Preview only: cap image size to reduce CPU painting cost.
                     const QSize limit(960, 540);
@@ -503,7 +503,7 @@ public:
                         recordPhase6fTiming(scaleTimer.nsecsElapsed(),
                             videoScaleLastMs, videoScaleAverageMs,
                             videoScaleMaxMs, videoScaleSamples);
-                        appendPhase6fSample(videoScaleLastMs, videoScaleTimingWindow);
+                        appendPhase6fSample(videoScaleLastMs, videoScaleTimingWindow, videoScaleTimingWindowWriteIndex);
                     }
                     // Commit the pacing baseline only after conversion succeeds,
                     // so a failed QImage conversion cannot advance the preview timeline.
@@ -1823,11 +1823,14 @@ private:
         diagnosticsClock.restart();
     }
 
-    static void appendPhase6fSample(double value, QVector<double> &window)
+    static void appendPhase6fSample(double value, QVector<double> &window, int &writeIndex)
     {
         constexpr int maxSamples = 4096;
-        if (window.size() == maxSamples) window.remove(0);
-        window.append(value);
+        if (window.size() < maxSamples) window.append(value);
+        else {
+            window[writeIndex] = value;
+            writeIndex = (writeIndex + 1) % maxSamples;
+        }
     }
 
     static double phase6fPercentile(const QVector<double> &window, double percentile)
@@ -2071,6 +2074,7 @@ private:
     double videoConvertLastMs = 0.0, videoConvertAverageMs = 0.0, videoConvertMaxMs = 0.0;
     quint64 videoConvertSamples = 0;
     QVector<double> videoConvertTimingWindow;
+    int videoConvertTimingWindowWriteIndex = 0;
     // Phase 6F.8 callback arrival, burst, PTS-correlation and processing profiling.
     QElapsedTimer videoCallbackClock;
     QElapsedTimer videoProfilingClock;
@@ -2109,6 +2113,7 @@ private:
     double videoScaleLastMs = 0.0, videoScaleAverageMs = 0.0, videoScaleMaxMs = 0.0;
     quint64 videoScaleSamples = 0;
     QVector<double> videoScaleTimingWindow;
+    int videoScaleTimingWindowWriteIndex = 0;
     double paintLastMs = 0.0, paintAverageMs = 0.0, paintMaxMs = 0.0;
     quint64 paintSamples = 0;
     double gpuRenderCallLastMs = 0.0, gpuRenderCallAverageMs = 0.0, gpuRenderCallMaxMs = 0.0;
