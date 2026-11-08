@@ -509,7 +509,6 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     context->RSSetViewports(1, &vp); ID3D11RenderTargetView *rtvRaw = cachedRtv.Get(); context->OMSetRenderTargets(1, &rtvRaw, nullptr);
     const float blendFactor[4] = {0,0,0,0};
     if (glow && glow->strength > 0.001f) {
-        QElapsedTimer submitTimer; submitTimer.start();
         if (!glowVertexShader || !glowPixelShader || !glowConstantBuffer) {
             Microsoft::WRL::ComPtr<ID3DBlob> vs, ps, shaderErrors;
             HRESULT glowHr = D3DCompile(glowShaderSource, std::strlen(glowShaderSource), nullptr, nullptr, nullptr, "VSMain", "vs_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs.GetAddressOf(), shaderErrors.GetAddressOf());
@@ -558,6 +557,7 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
         }
         if (timing) context->Begin(timing->disjoint.Get());
         if (timing) context->End(timing->start.Get());
+        QElapsedTimer glowSubmitTimer; glowSubmitTimer.start();
         D3D11_MAPPED_SUBRESOURCE mappedGlow{};
         HRESULT mapHr=context->Map(glowConstantBuffer.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mappedGlow);
         if (FAILED(mapHr)) { renderError=QStringLiteral("Glow constant buffer map failed: %1").arg(hexResult(mapHr)); return false; }
@@ -570,16 +570,29 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
         context->Draw(3,0);
         if (timing) context->End(timing->end.Get());
         if (timing) { context->End(timing->disjoint.Get()); timing->pending=true; }
-        glowCpuSubmitLastMs=submitTimer.nsecsElapsed()/1000000.0; glowCpuSubmitMaxMs=qMax(glowCpuSubmitMaxMs,glowCpuSubmitLastMs); ++glowCpuSubmitSamples;
+        glowCpuSubmitLastMs=glowSubmitTimer.nsecsElapsed()/1000000.0;
+        glowCpuSubmitMaxMs=qMax(glowCpuSubmitMaxMs,glowCpuSubmitLastMs);
+        ++glowCpuSubmitSamples;
         glowCpuSubmitAverageMs+=(glowCpuSubmitLastMs-glowCpuSubmitAverageMs)/double(glowCpuSubmitSamples);
+        appendGpuTimingSample(glowCpuSubmitTimingWindow,glowCpuSubmitLastMs,glowCpuSubmitTimingWriteIndex);
+        if(glowCpuSubmitLastMs>1.0) ++glowCpuSubmitOver1Ms;
+        if(glowCpuSubmitLastMs>5.0) ++glowCpuSubmitOver5Ms;
         ++glowDraws;
     }
+    QElapsedTimer spectrumSubmitTimer; spectrumSubmitTimer.start();
     context->OMSetBlendState(blendState.Get(), blendFactor, 0xffffffff);
     UINT stride = sizeof(Vertex), offset = 0; ID3D11Buffer *vb = vertexBuffer.Get();
     context->IASetInputLayout(inputLayout.Get()); context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context->VSSetShader(vertexShader.Get(), nullptr, 0); context->PSSetShader(pixelShader.Get(), nullptr, 0);
     context->Draw(UINT(cachedVertices.size()), 0);
+    spectrumCpuSubmitLastMs=spectrumSubmitTimer.nsecsElapsed()/1000000.0;
+    spectrumCpuSubmitMaxMs=qMax(spectrumCpuSubmitMaxMs,spectrumCpuSubmitLastMs);
+    ++spectrumCpuSubmitSamples;
+    spectrumCpuSubmitAverageMs+=(spectrumCpuSubmitLastMs-spectrumCpuSubmitAverageMs)/double(spectrumCpuSubmitSamples);
+    appendGpuTimingSample(spectrumCpuSubmitTimingWindow,spectrumCpuSubmitLastMs,spectrumCpuSubmitTimingWriteIndex);
+    if(spectrumCpuSubmitLastMs>1.0) ++spectrumCpuSubmitOver1Ms;
+    if(spectrumCpuSubmitLastMs>5.0) ++spectrumCpuSubmitOver5Ms;
     context->OMSetRenderTargets(0, nullptr, nullptr);
     lastDrawSubmitMs = drawTimer.nsecsElapsed() / 1000000.0;
     appendGpuTimingSample(drawSubmitTimingWindow, lastDrawSubmitMs, drawSubmitTimingWriteIndex);
@@ -1002,6 +1015,19 @@ QString GpuRenderer::runtimeStats() const
             .arg(gpuTimingPercentile(drawSubmitTimingWindow,95),0,'f',4)
             .arg(gpuTimingPercentile(drawSubmitTimingWindow,99),0,'f',4)
             .arg(drawSubmitTimingWindow.size())
+        + QStringLiteral("\nPhase 6F.14 isolated draw submission (rolling window max 4096)\n"
+                          "Glow CPU submit last/P95/P99: %1 / %2 / %3 ms | samples %4 | >1ms %5 | >5ms %6\n"
+                          "Spectrum CPU submit last/P95/P99: %7 / %8 / %9 ms | samples %10 | >1ms %11 | >5ms %12")
+            .arg(glowCpuSubmitLastMs,0,'f',4)
+            .arg(gpuTimingPercentile(glowCpuSubmitTimingWindow,95),0,'f',4)
+            .arg(gpuTimingPercentile(glowCpuSubmitTimingWindow,99),0,'f',4)
+            .arg(glowCpuSubmitTimingWindow.size())
+            .arg(glowCpuSubmitOver1Ms).arg(glowCpuSubmitOver5Ms)
+            .arg(spectrumCpuSubmitLastMs,0,'f',4)
+            .arg(gpuTimingPercentile(spectrumCpuSubmitTimingWindow,95),0,'f',4)
+            .arg(gpuTimingPercentile(spectrumCpuSubmitTimingWindow,99),0,'f',4)
+            .arg(spectrumCpuSubmitTimingWindow.size())
+            .arg(spectrumCpuSubmitOver1Ms).arg(spectrumCpuSubmitOver5Ms)
         + QStringLiteral("\nPhase 6F.13 native present split (rolling window max 4096)\n"
                           "Native copy command submit last/P95/P99: %1 / %2 / %3 ms | samples %4\\n"
                           "DXGI Present call last/avg/P95/P99: %5 / %6 / %7 / %8 ms | samples %9\\n"
