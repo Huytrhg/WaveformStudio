@@ -731,6 +731,23 @@ public:
         const double acceptedFps = double(videoFramesAccepted) / profileSeconds;
         const double actualPaintFps = double(previewPaintEvents) / profileSeconds;
         const double updateRequestFps = double(previewVideoUpdateRequests) / profileSeconds;
+        const QString pipelineHandoffStats = QStringLiteral(
+            "Phase 6F.12 preview pipeline handoff (cumulative samples)\n"
+            "QVideoFrame::toImage last/avg/max: %1 / %2 / %3 ms | samples: %4\n"
+            "QImage scale last/avg/max: %5 / %6 / %7 ms | samples: %8\n"
+            "D3D11 render call (CPU wall) last/avg/max: %9 / %10 / %11 ms | samples: %12\n"
+            "QPainter GPU composite blit last/avg/max: %13 / %14 / %15 ms | samples: %16\n"
+            "QWidget paintEvent total last/avg/max: %17 / %18 / %19 ms | samples: %20\n")
+            .arg(videoConvertLastMs, 0, 'f', 3).arg(videoConvertAverageMs, 0, 'f', 3)
+            .arg(videoConvertMaxMs, 0, 'f', 3).arg(videoConvertSamples)
+            .arg(videoScaleLastMs, 0, 'f', 3).arg(videoScaleAverageMs, 0, 'f', 3)
+            .arg(videoScaleMaxMs, 0, 'f', 3).arg(videoScaleSamples)
+            .arg(gpuRenderCallLastMs, 0, 'f', 3).arg(gpuRenderCallAverageMs, 0, 'f', 3)
+            .arg(gpuRenderCallMaxMs, 0, 'f', 3).arg(gpuRenderCallSamples)
+            .arg(gpuCompositeBlitLastMs, 0, 'f', 3).arg(gpuCompositeBlitAverageMs, 0, 'f', 3)
+            .arg(gpuCompositeBlitMaxMs, 0, 'f', 3).arg(gpuCompositeBlitSamples)
+            .arg(paintLastMs, 0, 'f', 3).arg(paintAverageMs, 0, 'f', 3)
+            .arg(paintMaxMs, 0, 'f', 3).arg(paintSamples);
         const QString presentationStats = QStringLiteral(
             "Phase 6F.10 actual preview presentation (same window: %1 s)\n"
             "Video update() requests: %2 (%3 FPS) | QWidget paintEvent calls: %4 (%5 FPS)\n"
@@ -861,7 +878,7 @@ public:
                                   : QStringLiteral("Hybrid GPU (D3D11; native presentation when supported)"))
             .arg(measuredFps, 0, 'f', 1)
             .arg(cpuStats + glowProfileStats)
-            .arg(callbackStats + presentationStats + guiWorkloadStats)
+            .arg(pipelineHandoffStats + callbackStats + presentationStats + guiWorkloadStats)
             .arg(videoFrameDetails)
             .arg(GpuRenderer::instance().diagnostics());
     }
@@ -1650,9 +1667,14 @@ protected:
                     if (gpuGlow.strength > 0.001f) gpuGlowPtr = &gpuGlow;
                 }
             }
+            QElapsedTimer gpuRenderCallTimer;
+            gpuRenderCallTimer.start();
             const bool gpuRendered = !forceCpuFallback && GpuRenderer::instance().renderColoredRects(
                 width(), height(), gpuRects, gpuColors, &gpuComposite, &cachedGpuBackground,
                 &gpuTopColors, gpuGlowPtr);
+            recordPhase6fTiming(gpuRenderCallTimer.nsecsElapsed(),
+                gpuRenderCallLastMs, gpuRenderCallAverageMs,
+                gpuRenderCallMaxMs, gpuRenderCallSamples);
 #ifdef Q_OS_WIN
             const bool nativePresented = gpuRendered && GpuRenderer::instance().nativePresentationActive();
             if (nativePreviewHwnd) {
@@ -1664,7 +1686,12 @@ protected:
 #endif
             if (gpuRendered && !nativePresented) {
                 p.setOpacity(1.0);
+                QElapsedTimer gpuCompositeBlitTimer;
+                gpuCompositeBlitTimer.start();
                 p.drawImage(QPoint(0, 0), gpuComposite);
+                recordPhase6fTiming(gpuCompositeBlitTimer.nsecsElapsed(),
+                    gpuCompositeBlitLastMs, gpuCompositeBlitAverageMs,
+                    gpuCompositeBlitMaxMs, gpuCompositeBlitSamples);
             } else if (!gpuRendered) {
                 // Keep the established CPU Glow path only when D3D11 cannot render it.
                 if (!forceCpuFallback) {
@@ -2059,6 +2086,10 @@ private:
     quint64 videoScaleSamples = 0;
     double paintLastMs = 0.0, paintAverageMs = 0.0, paintMaxMs = 0.0;
     quint64 paintSamples = 0;
+    double gpuRenderCallLastMs = 0.0, gpuRenderCallAverageMs = 0.0, gpuRenderCallMaxMs = 0.0;
+    quint64 gpuRenderCallSamples = 0;
+    double gpuCompositeBlitLastMs = 0.0, gpuCompositeBlitAverageMs = 0.0, gpuCompositeBlitMaxMs = 0.0;
+    quint64 gpuCompositeBlitSamples = 0;
     double scenePrepLastMs = 0.0, scenePrepAverageMs = 0.0, scenePrepMaxMs = 0.0;
     quint64 scenePrepSamples = 0;
     double backgroundBuildLastMs = 0.0, backgroundBuildAverageMs = 0.0, backgroundBuildMaxMs = 0.0;
