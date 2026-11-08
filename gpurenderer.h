@@ -82,6 +82,9 @@ private:
     double lastUploadConvertMs = 0.0, lastUploadSubmitMs = 0.0;
     QVector<double> uploadConvertTimingWindow, uploadSubmitTimingWindow;
     QVector<double> drawSubmitTimingWindow, nativeCopySubmitTimingWindow, nativePresentTimingWindow;
+    int uploadConvertTimingWriteIndex = 0, uploadSubmitTimingWriteIndex = 0;
+    int drawSubmitTimingWriteIndex = 0, nativeCopySubmitTimingWriteIndex = 0;
+    int nativePresentTimingWriteIndex = 0;
     // Phase 6D: asynchronous Phase 3 preview readback diagnostics.
     double phase3AsyncPollMs = 0.0;
     double phase3AsyncFlushMs = 0.0;
