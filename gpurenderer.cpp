@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <algorithm>
 #include <cstring>
+#include <cmath>
 
 namespace {
 static_assert(sizeof(GpuGlowParams) == 112, "GpuGlowParams must match the 112-byte HLSL constant buffer.");
@@ -24,11 +25,14 @@ QString hexResult(HRESULT hr)
 {
     return QStringLiteral("0x%1").arg(static_cast<quint32>(hr), 8, 16, QLatin1Char('0')).toUpper();
 }
-void appendGpuTimingSample(QVector<double> &window, double value)
+void appendGpuTimingSample(QVector<double> &window, double value, int &writeIndex)
 {
     constexpr int maxSamples = 4096;
-    if (window.size() == maxSamples) window.remove(0);
-    window.append(value);
+    if (window.size() < maxSamples) window.append(value);
+    else {
+        window[writeIndex] = value;
+        writeIndex = (writeIndex + 1) % maxSamples;
+    }
 }
 double gpuTimingPercentile(const QVector<double> &window, double percentile)
 {
@@ -361,11 +365,11 @@ bool GpuRenderer::presentNativeTexture()
     ID3D11ShaderResourceView *nullSrv=nullptr;context->PSSetShaderResources(0,1,&nullSrv);
     context->OMSetRenderTargets(0,nullptr,nullptr);
     nativeCopySubmitMs = timer.nsecsElapsed() / 1000000.0;
-    appendGpuTimingSample(nativeCopySubmitTimingWindow, nativeCopySubmitMs);
+    appendGpuTimingSample(nativeCopySubmitTimingWindow, nativeCopySubmitMs, nativeCopySubmitTimingWriteIndex);
     QElapsedTimer dxgiPresentTimer; dxgiPresentTimer.start();
     hr=nativeSwapChain->Present(0,0);
     nativeDxgiPresentMs = dxgiPresentTimer.nsecsElapsed() / 1000000.0;
-    appendGpuTimingSample(nativePresentTimingWindow, nativeDxgiPresentMs);
+    appendGpuTimingSample(nativePresentTimingWindow, nativeDxgiPresentMs, nativePresentTimingWriteIndex);
     nativePresentCpuMs=timer.nsecsElapsed()/1000000.0;
     nativePresentCpuMaxMs=qMax(nativePresentCpuMaxMs,nativePresentCpuMs);
     const quint64 completedAttempts = nativePresentAttempts - nativePresentFailures;
@@ -485,7 +489,7 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
         QElapsedTimer uploadConvertTimer; uploadConvertTimer.start();
         QImage bg = background->convertToFormat(QImage::Format_ARGB32);
         lastUploadConvertMs = uploadConvertTimer.nsecsElapsed() / 1000000.0;
-        appendGpuTimingSample(uploadConvertTimingWindow, lastUploadConvertMs);
+        appendGpuTimingSample(uploadConvertTimingWindow, lastUploadConvertMs, uploadConvertTimingWriteIndex);
         if (bg.size() != QSize(width, height)) {
             ++failedFrames;
             renderError = QStringLiteral("Background size does not match render target.");
@@ -495,7 +499,7 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
         context->UpdateSubresource(cachedTexture.Get(), 0, nullptr,
                                    bg.constBits(), UINT(bg.bytesPerLine()), 0);
         lastUploadSubmitMs = uploadSubmitTimer.nsecsElapsed() / 1000000.0;
-        appendGpuTimingSample(uploadSubmitTimingWindow, lastUploadSubmitMs);
+        appendGpuTimingSample(uploadSubmitTimingWindow, lastUploadSubmitMs, uploadSubmitTimingWriteIndex);
         lastUploadMs = uploadTimer.nsecsElapsed() / 1000000.0;
     }
     QElapsedTimer drawTimer; drawTimer.start();
@@ -578,7 +582,7 @@ bool GpuRenderer::renderColoredRects(int width, int height, const QVector<QRectF
     context->Draw(UINT(cachedVertices.size()), 0);
     context->OMSetRenderTargets(0, nullptr, nullptr);
     lastDrawSubmitMs = drawTimer.nsecsElapsed() / 1000000.0;
-    appendGpuTimingSample(drawSubmitTimingWindow, lastDrawSubmitMs);
+    appendGpuTimingSample(drawSubmitTimingWindow, lastDrawSubmitMs, drawSubmitTimingWriteIndex);
     // Phase 6E.1: same-device swap-chain presentation bypasses staging readback.
     if (nativePreviewReady && presentNativeTexture()) {
         lastCopyMapMs = 0.0; phase3AsyncPollMs = 0.0; phase3CpuCopyMs = 0.0;
