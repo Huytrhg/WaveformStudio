@@ -278,6 +278,7 @@ public:
                 particleLevels[order[i]] = sortedLevels[i];
             for (int i = 0; i < count; ++i) {
                 const qreal level = particleLevels[i];
+                const QColor color = bandColor(i, count, s);
                 const qreal dotRadius = minDotRadius * particleSizeScale *
                     (1.0 + 0.85 * level);
                 QColor particleColor = color.lighter(qRound(100.0 + 55.0 * level));
@@ -285,7 +286,6 @@ public:
                 const qreal height = qMax<qreal>(1.0, level * maxH);
                 const qreal x = startX + (i + 0.5) * cell;
                 const qreal y = cy - height;
-                const QColor color = bandColor(i, count, s);
                 if (strength > 0) {
                     QColor halo = particleColor;
                     halo.setAlphaF(qBound(0.0, strength * (0.10 + 0.10 * level), 1.0));
