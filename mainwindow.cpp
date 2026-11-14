@@ -912,6 +912,7 @@ public:
     }
     void setCurveTravelSpeed(int value) { curveTravelSpeed = qBound(0, value, 100); update(); }
     void setCurveReleaseSpeed(int value) { curveReleaseSpeed = qBound(0, value, 100); update(); }
+    void setSpectrumParticleSize(int value) { spectrumParticleSize = qBound(1, value, 100); update(); }
     void setSolidColor(const QColor &color) { if (color.isValid()) solidColor = color; update(); }
     void setUseGradient(bool enabled) { useGradient = enabled; update(); }
     bool isGradientEnabled() const { return useGradient; }
@@ -1450,6 +1451,8 @@ protected:
                 : qMax(0.6, cellW * thicknessPercent / 100.0);
             const qreal startX = cx - maxW / 2.0;
             const qreal baseline = cy;
+            const qreal particleSizeScale = 0.35 + 1.65 *
+                (spectrumParticleSize / 100.0);
             QVector<QRectF> gpuRects;
             QVector<QColor> gpuColors;
             QVector<QColor> gpuTopColors;
@@ -1507,6 +1510,11 @@ protected:
                 const QRectF bar(startX + i * cellW + (cellW - barW) / 2.0,
                                  baseline - h, barW, h);
                 const QColor color = colorForBand(i, count);
+                QColor particleColor = color;
+                if (visualMode == 4) {
+                    particleColor = color.lighter(qRound(100.0 + 55.0 * v));
+                    particleColor.setAlphaF(color.alphaF() * (0.55 + 0.45 * v));
+                }
                 // Phase 4C.2: top and bottom colors are interpolated by the
                 // existing D3D11 vertex-color shader across each bar.
                 const qreal bandT = count <= 1 ? 0.0 : qreal(i) / (count - 1);
@@ -1540,7 +1548,7 @@ protected:
                         glowPercent / 100.0 * glowIntensity / 100.0 * 0.14, 1.0));
                     const qreal spread = 1.0 + 5.0 * glowRadius / 100.0;
                     const qreal minDotR = qMax<qreal>(1.8, qMin<qreal>(5.0, barW * 1.55));
-                    const qreal dotR = minDotR * 1.2 * (1.0 + 0.85 * v);
+                    const qreal dotR = minDotR * particleSizeScale * (1.0 + 0.85 * v);
                     // Glow is rendered around the particle cap only, never the stem.
                     gpuRects.push_back(QRectF(bar.center().x() - dotR - spread,
                         bar.top() - dotR - spread, 2 * (dotR + spread), 2 * (dotR + spread)));
@@ -1548,13 +1556,13 @@ protected:
                     gpuTopColors.push_back(halo);
                 }
                 gpuRects.push_back(bar);
-                gpuColors.push_back(color);
-                gpuTopColors.push_back(visualMode == 4 ? color : topColor);
+                gpuColors.push_back(visualMode == 4 ? particleColor : color);
+                gpuTopColors.push_back(visualMode == 4 ? particleColor : topColor);
                 if (visualMode == 4) {
                     // GPU-friendly circle silhouette: three stacked rectangles.
                     // Four primitives per particle (stem + 3 cap strips).
                     const qreal minDotR = qMax<qreal>(1.8, qMin<qreal>(5.0, barW * 1.55));
-                    const qreal dotR = minDotR * 1.2 * (1.0 + 0.85 * v);
+                    const qreal dotR = minDotR * particleSizeScale * (1.0 + 0.85 * v);
                     const qreal dotX = bar.center().x();
                     const qreal dotY = bar.top();
                     const qreal widths[] = {1.45, 2.0, 1.45};
@@ -1563,8 +1571,8 @@ protected:
                         const qreal stripW = dotR * widths[row];
                         gpuRects.push_back(QRectF(dotX - stripW / 2.0,
                             dotY - dotR + row * stripH, stripW, stripH));
-                        gpuColors.push_back(color);
-                        gpuTopColors.push_back(color);
+                        gpuColors.push_back(particleColor);
+                        gpuTopColors.push_back(particleColor);
                     }
                 }
                 if (visualMode == 0 && peakHoldEnabled && !peakLevels.isEmpty()) {
@@ -1874,6 +1882,7 @@ private:
         s.curveTravelSpeed = curveTravelSpeed;
         s.curveReleaseSpeed = curveReleaseSpeed;
         s.curvePhase = curvePhase;
+        s.particleSize = spectrumParticleSize;
         s.solidColor = solidColor;
         s.stops = gradientStops;
         return s;
@@ -2148,6 +2157,7 @@ private:
     int curveTravelSpeed;
     int curveReleaseSpeed;
     qreal curvePhase;
+    int spectrumParticleSize = 35;
     QVector<QPair<qreal, QColor>> gradientStops;
 
     QTimer *bokehTimer = nullptr;
@@ -2921,6 +2931,10 @@ MainWindow::MainWindow(QWidget *parent)
     addWaveSlider("Bar Thickness", 10, 100, 75, "%", [this](int v) {
         spectrumOverlay->setThicknessPercent(v);
         spectrumDisplay->setThicknessPercent(v);
+    });
+    addWaveSlider("Dancing Particle Size", 1, 100, 35, "%", [this](int v) {
+        spectrumOverlay->setSpectrumParticleSize(v);
+        spectrumDisplay->setSpectrumParticleSize(v);
     });
     addWaveSlider("Glow", 0, 100, 0, "%", [this](int v) {
         spectrumOverlay->setGlowPercent(v);
