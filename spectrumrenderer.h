@@ -24,6 +24,7 @@ struct SpectrumRenderSettings {
     int positionX = 50, positionY = 78;
     int opacity = 92, scale = 72, columns = 64;
     int height = 100, thickness = 75;
+    int particleSize = 35; // Dancing Particles base dot size (1..100).
     int glow = 0, glowRadius = 50, glowIntensity = 100;
     bool peakHold = false;
     bool gradient = true;
@@ -242,6 +243,8 @@ public:
             // drawing style is adapted to the HTML reference.
             const qreal minDotRadius = qMax<qreal>(1.8,
                 qMin<qreal>(5.0, stemWidth * 1.55));
+            const qreal particleSizeScale = 0.35 + 1.65 *
+                (qBound(1, s.particleSize, 100) / 100.0);
             const qreal strength = s.glow / 100.0 * s.glowIntensity / 100.0;
             const qreal spread = 1.0 + 8.0 * s.glowRadius / 100.0;
             // Random-looking but deterministic spatial distribution: keep the sampled
@@ -275,85 +278,104 @@ public:
                 particleLevels[order[i]] = sortedLevels[i];
             for (int i = 0; i < count; ++i) {
                 const qreal level = particleLevels[i];
-                const qreal dotRadius = minDotRadius * 1.2 * (1.0 + 0.85 * level);
+                const qreal dotRadius = minDotRadius * particleSizeScale *
+                    (1.0 + 0.85 * level);
+                QColor particleColor = color.lighter(qRound(100.0 + 55.0 * level));
+                particleColor.setAlphaF(color.alphaF() * (0.55 + 0.45 * level));
                 const qreal height = qMax<qreal>(1.0, level * maxH);
                 const qreal x = startX + (i + 0.5) * cell;
                 const qreal y = cy - height;
                 const QColor color = bandColor(i, count, s);
                 if (strength > 0) {
-                    QColor halo = color;
-                    halo.setAlphaF(qBound(0.0, strength * 0.16, 1.0));
+                    QColor halo = particleColor;
+                    halo.setAlphaF(qBound(0.0, strength * (0.10 + 0.10 * level), 1.0));
                     // Glow belongs to the particle only; keep the stem crisp.
                     p.setPen(Qt::NoPen);
                     p.setBrush(halo);
                     p.drawEllipse(QPointF(x, y), dotRadius + spread * 0.65,
                                   dotRadius + spread * 0.65);
                 }
-                p.setPen(QPen(color, stemWidth, Qt::SolidLine, Qt::RoundCap));
+                p.setPen(QPen(particleColor, stemWidth, Qt::SolidLine, Qt::RoundCap));
                 p.drawLine(QPointF(x, cy), QPointF(x, y));
                 p.setPen(Qt::NoPen);
-                p.setBrush(color);
+                p.setBrush(particleColor);
                 p.drawEllipse(QPointF(x, y), dotRadius, dotRadius);
             }
         } else if (s.mode == 1) {
-            // Four coincident straight lines at silence. During music, every
-            // line has TWO localized bends: a full-strength bend and another
-            // at precisely one third of that strength.
-            qreal audioPeak = 0.0;
-            for (float band : bands)
-                audioPeak = qMax(audioPeak, qBound(0.0, qreal(band), 1.0));
-
-            // No peak-hold or temporal smoothing here: each frame's current
-            // audio energy determines the curve height, so it straightens
-            // immediately when the signal falls.
-            const qreal amplitude = maxH * 1.74 * audioPeak * audioPeak;
-            const qreal travel = 2.0 * reflected(s.curvePhase) - 1.0;
-            // Both bend locations travel TOGETHER; the endpoints never move.
-            const qreal travelOffset = 0.095 * travel;
-            const qreal bendCenters[2] = {0.32 + travelOffset,
-                                           0.68 + travelOffset};
-            const qreal bendStrengths[2] = {1.0, 1.0 / 3.0};
-            // Offsetting two equally energetic paths causes them to cross
-            // naturally on the slopes of each localized bend.
-            const qreal lineOffsets[2] = {-0.018, 0.018};
-            const qreal bendHalfWidth = 0.105;
-            const qreal lineWidth = qMax<qreal>(1.25,
-                stage.width() * 0.0018 * s.thickness / 75.0);
-            const QLinearGradient gradient = horizontalGradient();
-
-            auto makeLine = [&](int lineIndex, qreal verticalSign) {
-                QPainterPath path;
-                constexpr int segments = 256;
-                for (int i = 0; i <= segments; ++i) {
-                    const qreal t = qreal(i) / segments;
-                    qreal bend = 0.0;
-                    for (int k = 0; k < 2; ++k) {
-                        const qreal u = (t - bendCenters[k] -
-                            lineOffsets[lineIndex]) / bendHalfWidth;
-                        if (qAbs(u) < 1.0) {
-                            const qreal falloff = 1.0 - u * u;
-                            bend += bendStrengths[k] * falloff * falloff;
-                        }
-                    }
-                    const qreal x = startX + maxW * t;
-                    const qreal y = cy + verticalSign * amplitude * bend;
-                    if (i == 0) path.moveTo(x, y);
-                    else path.lineTo(x, y);
+            // B4.3.5: mirrored, smooth audio contours around a stable center axis.
+            // A short spatial low-pass removes jagged FFT-bin transitions while
+            // preserving broad musical swells. The travel phase moves the contour
+            // gently without moving either endpoint or the center reference line.
+            const int segments = 192;
+            const qreal travel = (2.0 * reflected(s.curvePhase) - 1.0) * 0.10;
+            const qreal lineWidth = qMax<qreal>(1.1,
+                stage.width() * 0.00155 * s.thickness / 75.0);
+            QVector<QPointF> upperPoints, lowerPoints;
+            upperPoints.reserve(segments + 1);
+            lowerPoints.reserve(segments + 1);
+            qreal maxEnvelope = 0.0;
+            for (int i = 0; i <= segments; ++i) {
+                const qreal t = qreal(i) / segments;
+                const qreal shifted = qBound(0.0, t + travel, 1.0);
+                const qreal index = shifted * (bands.size() - 1);
+                qreal filtered = 0.0;
+                const qreal weights[] = {1.0, 2.0, 3.0, 2.0, 1.0};
+                qreal weightSum = 0.0;
+                for (int k = -2; k <= 2; ++k) {
+                    const qreal weight = weights[k + 2];
+                    filtered += sample(bands, index + k) * weight;
+                    weightSum += weight;
                 }
+                filtered = qBound(0.0, filtered / weightSum, 1.0);
+                // Square-root response gives quieter details a visible, soft swell.
+                const qreal edgeFade = qMin(qBound(0.0, t / 0.075, 1.0),
+                                             qBound(0.0, (1.0 - t) / 0.075, 1.0));
+                const qreal amplitude = maxH * 0.58 * qSqrt(filtered) * edgeFade;
+                maxEnvelope = qMax(maxEnvelope, amplitude);
+                const qreal x = startX + maxW * t;
+                upperPoints.push_back(QPointF(x, cy - amplitude));
+                lowerPoints.push_back(QPointF(x, cy + amplitude));
+            }
+            auto makeSmoothPath = [](const QVector<QPointF> &points) {
+                QPainterPath path;
+                if (points.isEmpty()) return path;
+                path.moveTo(points.first());
+                for (int i = 1; i < points.size(); ++i) {
+                    const QPointF midpoint((points[i - 1].x() + points[i].x()) * 0.5,
+                                           (points[i - 1].y() + points[i].y()) * 0.5);
+                    path.quadTo(points[i - 1], midpoint);
+                }
+                path.lineTo(points.last());
                 return path;
             };
+            const QPainterPath upper = makeSmoothPath(upperPoints);
+            const QPainterPath lower = makeSmoothPath(lowerPoints);
+            const QLinearGradient gradient = horizontalGradient();
 
-            const QPainterPath line1 = makeLine(0, -1.0);
-            const QPainterPath line2 = makeLine(1, -1.0);
-            const QPainterPath line3 = makeLine(0,  1.0);
-            const QPainterPath line4 = makeLine(1,  1.0);
+            // Fine center axis remains visible even when the music is silent.
+            QColor axisColor = bandColor(bands.size() / 2, bands.size(), s);
+            axisColor.setAlpha(qBound(70, qRound(axisColor.alpha() * 0.58), 180));
             p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(gradient, lineWidth, Qt::SolidLine,
-                          Qt::RoundCap, Qt::RoundJoin));
-            p.drawPath(line1);
-            p.drawPath(line2);
-            p.drawPath(line3);
-            p.drawPath(line4);
+            p.setPen(QPen(axisColor, qMax<qreal>(0.8, lineWidth * 0.62),
+                          Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(QPointF(startX, cy), QPointF(startX + maxW, cy));
+
+            if (maxEnvelope > 0.15) {
+                if (s.glow > 0 && s.glowIntensity > 0) {
+                    QColor halo = bandColor(bands.size() / 2, bands.size(), s);
+                    halo.setAlpha(qBound(0, qRound(18.0 * s.glow *
+                        s.glowIntensity / 10000.0), 18));
+                    p.setPen(QPen(halo, lineWidth + 2.0 +
+                        5.0 * s.glowRadius / 100.0, Qt::SolidLine,
+                        Qt::RoundCap, Qt::RoundJoin));
+                    p.drawPath(upper);
+                    p.drawPath(lower);
+                }
+                p.setPen(QPen(gradient, lineWidth, Qt::SolidLine,
+                              Qt::RoundCap, Qt::RoundJoin));
+                p.drawPath(upper);
+                p.drawPath(lower);
+            }
         } else if (s.mode == 2) {
             const qreal radius = qMin(stage.width(), stage.height()) * 0.17 * s.scale / 72.0;
             const qreal barMax = qMin(stage.width(), stage.height()) * 0.12 *
