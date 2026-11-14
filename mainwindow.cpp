@@ -1543,9 +1543,10 @@ protected:
                 if (visualMode == 4 && glowPercent > 0) {
                     // Two restrained translucent rectangles keep the fine stems
                     // visible without the broad bar-style halo.
-                    QColor halo = color;
+                    QColor halo = particleColor;
                     halo.setAlphaF(qBound(0.0,
-                        glowPercent / 100.0 * glowIntensity / 100.0 * 0.14, 1.0));
+                        glowPercent / 100.0 * glowIntensity / 100.0 *
+                        (0.10 + 0.10 * v), 1.0));
                     const qreal spread = 1.0 + 5.0 * glowRadius / 100.0;
                     const qreal minDotR = qMax<qreal>(1.8, qMin<qreal>(5.0, barW * 1.55));
                     const qreal dotR = minDotR * particleSizeScale * (1.0 + 0.85 * v);
