@@ -17,6 +17,8 @@ qt_add_executable(WaveformStudio
     main.cpp
     mainwindow.cpp
     mainwindow.h
+    timelinewidget.cpp
+    timelinewidget.h
     mainwindow.ui
     spectrumanalyzer.cpp
     spectrumanalyzer.h
