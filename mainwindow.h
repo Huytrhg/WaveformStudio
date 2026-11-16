@@ -13,6 +13,8 @@ class QSlider;
 class QCloseEvent;
 class QTimer;
 class SpectrumAnalyzer;
+class TimelineWidget;
+class QScrollArea;
 class SpectrumDisplay;
 
 QT_BEGIN_NAMESPACE
@@ -46,6 +48,8 @@ private:
     SpectrumDisplay *spectrumOverlay;
     QTimer *spectrumTimer;
     QLabel *analyzerStatusLabel;
+    TimelineWidget *timelineWidget = nullptr;
+    QScrollArea *timelineScrollArea = nullptr;
 
     bool isSeeking;
 
