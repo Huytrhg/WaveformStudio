@@ -302,41 +302,67 @@ public:
                 p.drawEllipse(QPointF(x, y), dotRadius, dotRadius);
             }
         } else if (s.mode == 1) {
-            // B4.3.5: mirrored, smooth audio contours around a stable center axis.
-            // A short spatial low-pass removes jagged FFT-bin transitions while
-            // preserving broad musical swells. The travel phase moves the contour
-            // gently without moving either endpoint or the center reference line.
+            // B4.3.6: a single localized pulse travels left-to-right once per
+            // phase cycle. Its two mirrored contours meet at both line ends;
+            // there is deliberately no center-axis stroke.
             const int segments = 192;
-            const qreal travel = (2.0 * reflected(s.curvePhase) - 1.0) * 0.10;
+            qreal phase = std::fmod(s.curvePhase, 1.0);
+            if (phase < 0.0) phase += 1.0;
             const qreal lineWidth = qMax<qreal>(1.1,
                 stage.width() * 0.00155 * s.thickness / 75.0);
+
+            // Favor the upper 40% of FFT bands. Squared weighting emphasizes
+            // stronger high-frequency energy without letting bass dominate.
+            const int firstHighBand = qBound(0, int(bands.size() * 0.60),
+                                             bands.size() - 1);
+            qreal energySum = 0.0;
+            qreal weightSum = 0.0;
+            for (int i = firstHighBand; i < bands.size(); ++i) {
+                const qreal position = qreal(i - firstHighBand) /
+                    qMax(1, bands.size() - 1 - firstHighBand);
+                const qreal weight = 0.65 + 0.70 * position;
+                const qreal value = qBound(0.0, qreal(bands[i]), 1.0);
+                energySum += value * value * weight;
+                weightSum += weight;
+            }
+            const qreal highEnergy = weightSum > 0.0
+                ? qBound(0.0, qSqrt(energySum / weightSum), 1.0) : 0.0;
+
+            // One full-width travel is one pulse. The visible curved footprint
+            // spans half the line; it fades/straightens as it advances.
+            const qreal pulseCenter = startX + maxW * phase;
+            const qreal pulseHalfWidth = maxW * 0.25;
+            const qreal releaseExponent = 0.65 +
+                3.35 * qBound(0, s.curveReleaseSpeed, 100) / 100.0;
+            const qreal release = qPow(qMax<qreal>(0.0, 1.0 - phase),
+                                       releaseExponent);
+            const qreal pulseAmplitude = maxH * 0.46 * highEnergy * release;
+
             QVector<QPointF> upperPoints, lowerPoints;
             upperPoints.reserve(segments + 1);
             lowerPoints.reserve(segments + 1);
-            qreal maxEnvelope = 0.0;
             for (int i = 0; i <= segments; ++i) {
                 const qreal t = qreal(i) / segments;
-                const qreal shifted = qBound(0.0, t + travel, 1.0);
-                const qreal index = shifted * (bands.size() - 1);
-                qreal filtered = 0.0;
-                const qreal weights[] = {1.0, 2.0, 3.0, 2.0, 1.0};
-                qreal weightSum = 0.0;
-                for (int k = -2; k <= 2; ++k) {
-                    const qreal weight = weights[k + 2];
-                    filtered += sample(bands, index + k) * weight;
-                    weightSum += weight;
-                }
-                filtered = qBound(0.0, filtered / weightSum, 1.0);
-                // Square-root response gives quieter details a visible, soft swell.
-                const qreal edgeFade = qMin(qBound(0.0, t / 0.075, 1.0),
-                                             qBound(0.0, (1.0 - t) / 0.075, 1.0));
-                const qreal amplitude = maxH * 0.58 * qSqrt(filtered) * edgeFade;
-                maxEnvelope = qMax(maxEnvelope, amplitude);
                 const qreal x = startX + maxW * t;
+                const qreal normalized = (x - pulseCenter) /
+                    qMax<qreal>(1.0, pulseHalfWidth);
+                qreal shape = 0.0;
+                if (qAbs(normalized) < 1.0) {
+                    // Compact cosine bell: smooth at the shoulders and zero
+                    // outside a footprint whose full width is half the line.
+                    shape = 0.5 + 0.5 * qCos(M_PI * normalized);
+                    shape = shape * shape;
+                }
+                // Both endpoints are pinned to the same baseline so the two
+                // mirrored paths always close together at the line ends.
+                const qreal endpointFade = qPow(qMax<qreal>(0.0,
+                    qSin(M_PI * t)), 0.35);
+                const qreal amplitude = pulseAmplitude * shape * endpointFade;
                 upperPoints.push_back(QPointF(x, cy - amplitude));
                 lowerPoints.push_back(QPointF(x, cy + amplitude));
             }
-            auto makeSmoothPath = [](const QVector<QPointF> &points) {
+
+            auto makePulsePath = [](const QVector<QPointF> &points) {
                 QPainterPath path;
                 if (points.isEmpty()) return path;
                 path.moveTo(points.first());
@@ -348,34 +374,27 @@ public:
                 path.lineTo(points.last());
                 return path;
             };
-            const QPainterPath upper = makeSmoothPath(upperPoints);
-            const QPainterPath lower = makeSmoothPath(lowerPoints);
+            const QPainterPath upper = makePulsePath(upperPoints);
+            const QPainterPath lower = makePulsePath(lowerPoints);
             const QLinearGradient gradient = horizontalGradient();
 
-            // Fine center axis remains visible even when the music is silent.
-            QColor axisColor = bandColor(bands.size() / 2, bands.size(), s);
-            axisColor.setAlpha(qBound(70, qRound(axisColor.alpha() * 0.58), 180));
             p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(axisColor, qMax<qreal>(0.8, lineWidth * 0.62),
-                          Qt::SolidLine, Qt::RoundCap));
-            p.drawLine(QPointF(startX, cy), QPointF(startX + maxW, cy));
-
-            if (maxEnvelope > 0.15) {
-                if (s.glow > 0 && s.glowIntensity > 0) {
-                    QColor halo = bandColor(bands.size() / 2, bands.size(), s);
-                    halo.setAlpha(qBound(0, qRound(18.0 * s.glow *
-                        s.glowIntensity / 10000.0), 18));
-                    p.setPen(QPen(halo, lineWidth + 2.0 +
-                        5.0 * s.glowRadius / 100.0, Qt::SolidLine,
-                        Qt::RoundCap, Qt::RoundJoin));
-                    p.drawPath(upper);
-                    p.drawPath(lower);
-                }
-                p.setPen(QPen(gradient, lineWidth, Qt::SolidLine,
-                              Qt::RoundCap, Qt::RoundJoin));
+            p.setPen(QPen(gradient, lineWidth, Qt::SolidLine,
+                          Qt::RoundCap, Qt::RoundJoin));
+            if (s.glow > 0 && s.glowIntensity > 0) {
+                QColor halo = bandColor(bands.size() - 1, bands.size(), s);
+                halo.setAlpha(qBound(0, qRound(22.0 * s.glow *
+                    s.glowIntensity / 10000.0), 22));
+                p.setPen(QPen(halo, lineWidth + 2.0 +
+                    5.0 * s.glowRadius / 100.0, Qt::SolidLine,
+                    Qt::RoundCap, Qt::RoundJoin));
                 p.drawPath(upper);
                 p.drawPath(lower);
+                p.setPen(QPen(gradient, lineWidth, Qt::SolidLine,
+                              Qt::RoundCap, Qt::RoundJoin));
             }
+            p.drawPath(upper);
+            p.drawPath(lower);
         } else if (s.mode == 2) {
             const qreal radius = qMin(stage.width(), stage.height()) * 0.17 * s.scale / 72.0;
             const qreal barMax = qMin(stage.width(), stage.height()) * 0.12 *
