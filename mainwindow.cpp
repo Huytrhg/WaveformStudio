@@ -905,7 +905,7 @@ public:
             changed = true;
         }
         if (curveTravelSpeed > 0) {
-            curvePhase = std::fmod(curvePhase + seconds * curveTravelSpeed / 100.0 * 0.42, 2.0);
+            curvePhase = std::fmod(curvePhase + seconds * curveTravelSpeed / 100.0 * 0.42, 1.0);
             changed = true;
         }
         if (changed) update();
