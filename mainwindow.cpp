@@ -6,6 +6,7 @@
 #include "effectoverlays.h"
 #include "gpurenderer.h"
 #include "nativegpupresenter.h"
+#include "timelinewidget.h"
 
 #include <QPainter>
 #include <QPainterPath>
@@ -3574,154 +3575,18 @@ MainWindow::MainWindow(QWidget *parent)
     // The main workspace is inserted into the vertical splitter below.
 
     // =========================================================
-    // TIMELINE
-    // =========================================================
-
-    QFrame *timelinePanel = new QFrame;
-    timelinePanel->setObjectName("panel");
-    timelinePanel->setMinimumHeight(210);
-    timelinePanel->setMaximumHeight(420);
-
-    QVBoxLayout *timelineLayout =
-        new QVBoxLayout(timelinePanel);
-
-    timelineLayout->setContentsMargins(10, 8, 10, 10);
-    timelineLayout->setSpacing(8);
-
-    QHBoxLayout *timelineHeader =
-        new QHBoxLayout;
-
-    QLabel *timelineTitle =
-        new QLabel("TIMELINE");
-
-    timelineTitle->setObjectName("sectionTitle");
-
-    QPushButton *addTrackButton =
-        new QPushButton("+ Add Track");
-
-    QPushButton *zoomOutButton =
-        new QPushButton("−");
-
-    QPushButton *zoomInButton =
-        new QPushButton("+");
-
-    timelineHeader->addWidget(timelineTitle);
-    timelineHeader->addStretch();
-    timelineHeader->addWidget(addTrackButton);
-    timelineHeader->addWidget(zoomOutButton);
-    timelineHeader->addWidget(zoomInButton);
-
-    timelineLayout->addLayout(timelineHeader);
-
-    // Timeline ruler
-    QHBoxLayout *rulerLayout =
-        new QHBoxLayout;
-
-    rulerLayout->setSpacing(0);
-
-    QLabel *rulerLabel =
-        new QLabel("TRACK");
-
-    rulerLabel->setFixedWidth(110);
-
-    rulerLabel->setStyleSheet(
-        "color:#9AA0A6;font-size:8pt;"
-        );
-
-    rulerLayout->addWidget(rulerLabel);
-
-    QWidget *ruler = new QWidget;
-
-    QHBoxLayout *rulerTicks =
-        new QHBoxLayout(ruler);
-
-    rulerTicks->setContentsMargins(0, 0, 0, 0);
-    rulerTicks->setSpacing(0);
-
-    for (int i = 0; i <= 10; ++i) {
-        QLabel *tick =
-            new QLabel(QString("%1 s").arg(i * 5));
-
-        tick->setAlignment(
-            Qt::AlignLeft | Qt::AlignVCenter
-            );
-
-        tick->setStyleSheet(
-            "color:#9AA0A6;"
-            "font-size:8pt;"
-            "border-left:1px solid #45474C;"
-            "padding-left:3px;"
-            );
-
-        rulerTicks->addWidget(tick, 1);
-    }
-
-    rulerLayout->addWidget(ruler, 1);
-
-    timelineLayout->addLayout(rulerLayout);
-
-    auto createTrack =
-        [](const QString &name, const QString &color,
-           int startWeight, int clipWeight, const QString &clipText) {
-            QWidget *track = new QWidget;
-            track->setMinimumHeight(31);
-
-            QHBoxLayout *layout = new QHBoxLayout(track);
-            layout->setContentsMargins(0, 0, 0, 0);
-            layout->setSpacing(5);
-
-            QLabel *trackName = new QLabel(name);
-            trackName->setFixedWidth(105);
-            trackName->setStyleSheet("color:#E8EAED;font-size:9pt;");
-            layout->addWidget(trackName);
-
-            layout->addStretch(qMax(0, startWeight));
-
-            QFrame *clip = new QFrame;
-            clip->setMinimumHeight(25);
-            clip->setStyleSheet(QString(
-                "background-color:%1;"
-                "border:1px solid #55585E;"
-                "border-radius:3px;").arg(color));
-
-            QLabel *clipLabel = new QLabel(clipText);
-            clipLabel->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
-            clipLabel->setStyleSheet(
-                "color:white;background:transparent;border:none;"
-                "font-size:8pt;padding-left:7px;");
-
-            QHBoxLayout *clipLayout = new QHBoxLayout(clip);
-            clipLayout->setContentsMargins(3, 0, 3, 0);
-            clipLayout->addWidget(clipLabel);
-
-            layout->addWidget(clip, qMax(1, clipWeight));
-            layout->addStretch(qMax(0, 10 - startWeight - clipWeight));
-            return track;
-        };
-
-    timelineLayout->addWidget(
-        createTrack("Video", "#345B78", 0, 10, "Video clip · loaded media")
-        );
-    timelineLayout->addWidget(
-        createTrack("Spectrum", "#59478A", 0, 10, "Spectrum Analyzer")
-        );
-    timelineLayout->addWidget(
-        createTrack("Frame Effects", "#805A35", 1, 6, "Effect layers")
-        );
-    timelineLayout->addWidget(
-        createTrack("Audio", "#167E78", 0, 10, "Audio waveform · pending import")
-        );
-
-    // Put the workspace and timeline in a vertical splitter so the user can
-    // resize the Timeline like a video-editing application.
-    QSplitter *verticalWorkspaceSplitter = new QSplitter(Qt::Vertical);
-    verticalWorkspaceSplitter->setChildrenCollapsible(false);
-    verticalWorkspaceSplitter->addWidget(workspaceSplitter);
-    verticalWorkspaceSplitter->addWidget(timelinePanel);
-    verticalWorkspaceSplitter->setStretchFactor(0, 3);
-    verticalWorkspaceSplitter->setStretchFactor(1, 1);
-    verticalWorkspaceSplitter->setSizes({560, 250});
-    rootLayout->addWidget(verticalWorkspaceSplitter, 1);
+    // Editable multi-track timeline foundation.
+    QFrame *timelinePanel=new QFrame;timelinePanel->setObjectName("panel");timelinePanel->setMinimumHeight(210);timelinePanel->setMaximumHeight(310);
+    QVBoxLayout *timelineLayout=new QVBoxLayout(timelinePanel);timelineLayout->setContentsMargins(10,8,10,10);
+    QHBoxLayout *timelineHeader=new QHBoxLayout;QLabel *timelineTitle=new QLabel("TIMELINE");timelineTitle->setObjectName("sectionTitle");
+    QPushButton *addTrackButton=new QPushButton("+ Add Track"),*addClipButton=new QPushButton("+ Add Clip"),*zoomOutButton=new QPushButton("−"),*zoomInButton=new QPushButton("+");
+    timelineHeader->addWidget(timelineTitle);timelineHeader->addStretch();timelineHeader->addWidget(addClipButton);timelineHeader->addWidget(addTrackButton);timelineHeader->addWidget(zoomOutButton);timelineHeader->addWidget(zoomInButton);timelineLayout->addLayout(timelineHeader);
+    timelineWidget=new TimelineWidget;timelineScrollArea=new QScrollArea;timelineScrollArea->setWidget(timelineWidget);timelineScrollArea->setWidgetResizable(false);timelineScrollArea->setFrameShape(QFrame::NoFrame);timelineLayout->addWidget(timelineScrollArea,1);
+    rootLayout->addWidget(timelinePanel);
+    connect(addTrackButton,&QPushButton::clicked,this,[this](){bool ok=false;QString n=QInputDialog::getText(this,"Add Track","Track name:",QLineEdit::Normal,QString(),&ok);if(ok&&!n.trimmed().isEmpty())timelineWidget->addTrack(n.trimmed());});
+    connect(addClipButton,&QPushButton::clicked,this,[this](){QString path=QFileDialog::getOpenFileName(this,"Add Timeline Clip",QDir::homePath(),"Media Files (*.mp4 *.m4v *.mov *.mkv *.avi *.wmv *.mp3 *.wav *.aac);;All Files (*.*)");if(path.isEmpty())return;QString t=(path.endsWith(".mp3",Qt::CaseInsensitive)||path.endsWith(".wav",Qt::CaseInsensitive)||path.endsWith(".aac",Qt::CaseInsensitive))?"Audio":"Video";timelineWidget->addClip(t,QFileInfo(path).fileName(),player->duration()>0?player->duration():10000);});
+    connect(zoomInButton,&QPushButton::clicked,this,[this](){timelineWidget->zoomBy(1.25);});connect(zoomOutButton,&QPushButton::clicked,this,[this](){timelineWidget->zoomBy(0.8);});
+    connect(timelineWidget,&TimelineWidget::seekRequested,player,&QMediaPlayer::setPosition);
 
     statusBar()->showMessage(
         "Ready | WaveformStudio | Import a video to begin"
@@ -4847,9 +4712,6 @@ MainWindow::MainWindow(QWidget *parent)
         }
         );
 
-    Q_UNUSED(addTrackButton);
-    Q_UNUSED(zoomOutButton);
-    Q_UNUSED(zoomInButton);
     Q_UNUSED(editMenu);
     Q_UNUSED(viewMenu);
     // GPU foundation diagnostics; existing CPU video/Spectrum rendering stays intact.
@@ -4973,6 +4835,7 @@ void MainWindow::updatePosition(qint64 position)
     }
 
     updateTimeLabel(position, player->duration());
+    if (timelineWidget) timelineWidget->setPlayhead(position);
 }
 
 // =============================================================
@@ -4991,6 +4854,7 @@ void MainWindow::updateDuration(qint64 duration)
     positionSlider->setEnabled(duration > 0);
 
     updateTimeLabel(player->position(), duration);
+    if (timelineWidget) timelineWidget->setTimelineDuration(duration);
 }
 
 // =============================================================
