@@ -173,6 +173,7 @@ bool registerWaveformNativeHudClass()
 #include <QMouseEvent>
 #include <QSettings>
 #include <QInputDialog>
+#include <QLineEdit>
 #include <QApplication>
 #include <QClipboard>
 #include <QDialog>
