@@ -4,6 +4,7 @@
 #include <QKeyEvent>
 #include <QContextMenuEvent>
 #include <QMenu>
+#include <QKeySequence>
 #include <QSizePolicy>
 #include <QPolygon>
 #include <QtMath>
