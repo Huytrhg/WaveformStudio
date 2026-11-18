@@ -3576,24 +3576,34 @@ MainWindow::MainWindow(QWidget *parent)
     // The main workspace is inserted into the vertical splitter below.
 
     // =========================================================
-    // Editable multi-track timeline foundation.
-    QFrame *timelinePanel=new QFrame;timelinePanel->setObjectName("panel");timelinePanel->setMinimumHeight(210);timelinePanel->setMaximumHeight(310);
-    QVBoxLayout *timelineLayout=new QVBoxLayout(timelinePanel);timelineLayout->setContentsMargins(10,8,10,10);
-    QHBoxLayout *timelineHeader=new QHBoxLayout;QLabel *timelineTitle=new QLabel("TIMELINE");timelineTitle->setObjectName("sectionTitle");
-    QPushButton *addTrackButton=new QPushButton("+ Add Track"),*addClipButton=new QPushButton("+ Add Clip"),*zoomOutButton=new QPushButton("−"),*zoomInButton=new QPushButton("+");
-    timelineHeader->addWidget(timelineTitle);timelineHeader->addStretch();timelineHeader->addWidget(addClipButton);timelineHeader->addWidget(addTrackButton);timelineHeader->addWidget(zoomOutButton);timelineHeader->addWidget(zoomInButton);timelineLayout->addLayout(timelineHeader);
-    timelineWidget=new TimelineWidget;timelineScrollArea=new QScrollArea;timelineScrollArea->setWidget(timelineWidget);timelineScrollArea->setWidgetResizable(false);timelineScrollArea->setFrameShape(QFrame::NoFrame);timelineLayout->addWidget(timelineScrollArea,1);
-    rootLayout->addWidget(timelinePanel);
+    // Editable multi-track timeline. Keep the workspace and all following
+    // video/effect connections intact.
+    QFrame *timelinePanel=new QFrame;timelinePanel->setObjectName("panel");
+    timelinePanel->setMinimumHeight(210);timelinePanel->setMaximumHeight(310);
+    QVBoxLayout *timelineLayout=new QVBoxLayout(timelinePanel);
+    timelineLayout->setContentsMargins(10,8,10,10);
+    QHBoxLayout *timelineHeader=new QHBoxLayout;
+    QLabel *timelineTitle=new QLabel("TIMELINE");timelineTitle->setObjectName("sectionTitle");
+    QPushButton *addTrackButton=new QPushButton("+ Add Track"),*addClipButton=new QPushButton("+ Add Clip");
+    QPushButton *zoomOutButton=new QPushButton("−"),*zoomInButton=new QPushButton("+");
+    timelineHeader->addWidget(timelineTitle);timelineHeader->addStretch();
+    timelineHeader->addWidget(addClipButton);timelineHeader->addWidget(addTrackButton);
+    timelineHeader->addWidget(zoomOutButton);timelineHeader->addWidget(zoomInButton);
+    timelineLayout->addLayout(timelineHeader);
+    timelineWidget=new TimelineWidget;timelineScrollArea=new QScrollArea;
+    timelineScrollArea->setWidget(timelineWidget);timelineScrollArea->setWidgetResizable(false);
+    timelineScrollArea->setFrameShape(QFrame::NoFrame);timelineLayout->addWidget(timelineScrollArea,1);
+    QSplitter *verticalWorkspaceSplitter=new QSplitter(Qt::Vertical);
+    verticalWorkspaceSplitter->setChildrenCollapsible(false);
+    verticalWorkspaceSplitter->addWidget(workspaceSplitter);verticalWorkspaceSplitter->addWidget(timelinePanel);
+    verticalWorkspaceSplitter->setStretchFactor(0,3);verticalWorkspaceSplitter->setStretchFactor(1,1);
+    verticalWorkspaceSplitter->setSizes({560,250});rootLayout->addWidget(verticalWorkspaceSplitter,1);
     connect(addTrackButton,&QPushButton::clicked,this,[this](){bool ok=false;QString n=QInputDialog::getText(this,"Add Track","Track name:",QLineEdit::Normal,QString(),&ok);if(ok&&!n.trimmed().isEmpty())timelineWidget->addTrack(n.trimmed());});
     connect(addClipButton,&QPushButton::clicked,this,[this](){QString path=QFileDialog::getOpenFileName(this,"Add Timeline Clip",QDir::homePath(),"Media Files (*.mp4 *.m4v *.mov *.mkv *.avi *.wmv *.mp3 *.wav *.aac);;All Files (*.*)");if(path.isEmpty())return;QString t=(path.endsWith(".mp3",Qt::CaseInsensitive)||path.endsWith(".wav",Qt::CaseInsensitive)||path.endsWith(".aac",Qt::CaseInsensitive))?"Audio":"Video";timelineWidget->addClip(t,QFileInfo(path).fileName(),player->duration()>0?player->duration():10000);});
-    connect(zoomInButton,&QPushButton::clicked,this,[this](){timelineWidget->zoomBy(1.25);});connect(zoomOutButton,&QPushButton::clicked,this,[this](){timelineWidget->zoomBy(0.8);});
+    connect(zoomInButton,&QPushButton::clicked,this,[this](){timelineWidget->zoomBy(1.25);});
+    connect(zoomOutButton,&QPushButton::clicked,this,[this](){timelineWidget->zoomBy(0.8);});
     connect(timelineWidget,&TimelineWidget::seekRequested,player,&QMediaPlayer::setPosition);
 
-    statusBar()->showMessage(
-        "Ready | WaveformStudio | Import a video to begin"
-        );
-
-    // =========================================================
     // CONNECT VIDEO CONTROLS
     // =========================================================
 
@@ -4713,6 +4723,9 @@ MainWindow::MainWindow(QWidget *parent)
         }
         );
 
+    Q_UNUSED(addTrackButton);
+    Q_UNUSED(zoomOutButton);
+    Q_UNUSED(zoomInButton);
     Q_UNUSED(editMenu);
     Q_UNUSED(viewMenu);
     // GPU foundation diagnostics; existing CPU video/Spectrum rendering stays intact.
@@ -4836,7 +4849,6 @@ void MainWindow::updatePosition(qint64 position)
     }
 
     updateTimeLabel(position, player->duration());
-    if (timelineWidget) timelineWidget->setPlayhead(position);
 }
 
 // =============================================================
