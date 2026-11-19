@@ -10,8 +10,8 @@
 #include <QtMath>
 TimelineWidget::TimelineWidget(QWidget*p):QWidget(p){setMouseTracking(true);setFocusPolicy(Qt::StrongFocus);setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Minimum);addTrack("Video 1");addTrack("Audio 1");addTrack("Spectrum 1");addTrack("Overlay 1");history.clear();historyIndex=-1;recordHistory();resizeContent();}
 void TimelineWidget::addTrack(const QString&n){static const QColor cs[]={QColor("#345B78"),QColor("#386B55"),QColor("#59478A"),QColor("#805A35"),QColor("#476D78")};Track t;t.name=n.isEmpty()?QString("Track %1").arg(tracks.size()+1):n;t.color=cs[tracks.size()%5];tracks.append(t);recordHistory();resizeContent();update();}
-void TimelineWidget::addClip(const QString&t,const QString&n,qint64 d){int i=-1;for(int j=0;j<tracks.size();++j)if(tracks[j].name.startsWith(t,Qt::CaseInsensitive)){i=j;break;}if(i<0){addTrack(t);i=tracks.size()-1;}Clip c;c.name=n;c.duration=qMax<qint64>(500,d);c.color=tracks[i].color;tracks[i].clips.append(c);duration=qMax(duration,c.duration+10000);recordHistory();resizeContent();update();}
-void TimelineWidget::addImportedVideoClip(const QString&path,const QString&name,qint64 d){if(path.isEmpty()||d<=0)return;int i=-1;for(int j=0;j<tracks.size();++j)if(tracks[j].name.compare("Video 1",Qt::CaseInsensitive)==0){i=j;break;}if(i<0){addTrack("Video 1");i=tracks.size()-1;}for(const Clip&existing:tracks[i].clips)if(existing.sourcePath==path)return;Clip c;c.name=name;c.sourcePath=path;c.duration=qMax<qint64>(1,d);c.color=tracks[i].color;for(const Clip&existing:tracks[i].clips)c.start=qMax(c.start,existing.start+existing.duration);tracks[i].clips.append(c);duration=qMax(duration,c.start+c.duration+10000);recordHistory();resizeContent();update();}
+void TimelineWidget::addClip(const QString&t,const QString&n,qint64 d){int i=-1;for(int j=0;j<tracks.size();++j)if(tracks[j].name.startsWith(t,Qt::CaseInsensitive)){i=j;break;}if(i<0){addTrack(t);i=tracks.size()-1;}if(tracks[i].locked)return;Clip c;c.name=n;c.duration=qMax<qint64>(500,d);c.color=tracks[i].color;tracks[i].clips.append(c);duration=qMax(duration,c.duration+10000);recordHistory();resizeContent();update();}
+void TimelineWidget::addImportedVideoClip(const QString&path,const QString&name,qint64 d){if(path.isEmpty()||d<=0)return;int i=-1;for(int j=0;j<tracks.size();++j)if(tracks[j].name.compare("Video 1",Qt::CaseInsensitive)==0){i=j;break;}if(i<0){addTrack("Video 1");i=tracks.size()-1;}if(tracks[i].locked)return;for(const Clip&existing:tracks[i].clips)if(existing.sourcePath==path)return;Clip c;c.name=name;c.sourcePath=path;c.duration=qMax<qint64>(1,d);c.color=tracks[i].color;for(const Clip&existing:tracks[i].clips)c.start=qMax(c.start,existing.start+existing.duration);tracks[i].clips.append(c);duration=qMax(duration,c.start+c.duration+10000);recordHistory();resizeContent();update();}
 bool TimelineWidget::canUndo()const{return historyIndex>0;}
 bool TimelineWidget::canRedo()const{return historyIndex>=0&&historyIndex+1<history.size();}
 void TimelineWidget::recordHistory(){State s;s.tracks=tracks;s.duration=duration;if(historyIndex>=0&&historyIndex<history.size()){history.resize(historyIndex+1);}history.append(s);if(history.size()>100)history.removeFirst();historyIndex=history.size()-1;emit historyChanged(canUndo(),canRedo());}
@@ -25,7 +25,63 @@ qreal TimelineWidget::timeToX(qint64 t)const{return labelW+t/1000.0*scale;}qint6
 int TimelineWidget::trackAt(int y)const{int i=(y-rulerH)/rowH;return y>=rulerH&&i>=0&&i<tracks.size()?i:-1;}
 int TimelineWidget::clipAt(int x,int y)const{int r=trackAt(y);if(r<0)return -1;for(int i=tracks[r].clips.size()-1;i>=0;--i){auto c=tracks[r].clips[i];if(x>=timeToX(c.start)&&x<=timeToX(c.start+c.duration))return i;}return -1;}
 void TimelineWidget::resizeContent(){int w=qMax(900,qRound(timeToX(duration+30000)));setMinimumSize(w,rulerH+tracks.size()*rowH);resize(w,rulerH+tracks.size()*rowH);}
-void TimelineWidget::paintEvent(QPaintEvent*){QPainter p(this);p.fillRect(rect(),QColor("#17191E"));p.fillRect(QRect(0,0,width(),rulerH),QColor("#22252B"));p.fillRect(QRect(0,rulerH,labelW,height()),QColor("#202329"));p.setFont(QFont("Segoe UI",8));qint64 step=scale<28?10000:5000;for(qint64 t=0;t<=duration+30000;t+=step){int x=qRound(timeToX(t));p.setPen(QColor("#3A3E47"));p.drawLine(x,rulerH,x,height());p.setPen(QColor("#AAB1BC"));p.drawText(x+4,18,QString("%1s").arg(t/1000));}for(int r=0;r<tracks.size();++r){int y=rulerH+r*rowH;p.fillRect(QRect(0,y,labelW,rowH),QColor("#22262D"));p.fillRect(QRect(labelW,y,width()-labelW,rowH),QColor("#191C22"));p.setPen(QColor("#D9DEE7"));p.drawText(QRect(10,y,labelW-15,rowH),Qt::AlignVCenter,tracks[r].name);p.setPen(QColor("#30343D"));p.drawLine(0,y+rowH-1,width(),y+rowH-1);for(int j=0;j<tracks[r].clips.size();++j){auto c=tracks[r].clips[j];QRect b(qRound(timeToX(c.start)),y+5,qMax(8,qRound(c.duration/1000.0*scale)),rowH-10);p.setPen(QPen(r==selectedTrack&&j==selectedClip?Qt::white:c.color.lighter(140),1));p.setBrush(c.color);p.drawRoundedRect(b,4,4);p.setPen(Qt::white);p.drawText(b.adjusted(6,0,-6,0),Qt::AlignVCenter|Qt::AlignLeft,c.name);p.fillRect(QRect(b.left(),b.top(),4,b.height()),c.color.lighter(160));p.fillRect(QRect(b.right()-3,b.top(),4,b.height()),c.color.lighter(160));}}if(mode==1&&dragTargetTrack>=0&&dragTargetTrack<tracks.size()&&dragTargetTrack!=selectedTrack&&selectedTrack>=0&&selectedClip>=0&&selectedClip<tracks[selectedTrack].clips.size()){const Clip c=tracks[selectedTrack].clips[selectedClip];const int y=rulerH+dragTargetTrack*rowH;QRect ghost(qRound(timeToX(c.start)),y+5,qMax(8,qRound(c.duration/1000.0*scale)),rowH-10);p.save();p.setOpacity(0.62);p.setPen(QPen(tracks[dragTargetTrack].color.lighter(170),1,Qt::DashLine));p.setBrush(tracks[dragTargetTrack].color);p.drawRoundedRect(ghost,4,4);p.setPen(Qt::white);p.drawText(ghost.adjusted(6,0,-6,0),Qt::AlignVCenter|Qt::AlignLeft,c.name);p.restore();}int x=qRound(timeToX(playhead));p.setPen(QPen(QColor("#FF5D67"),2));p.drawLine(x,0,x,height());p.setBrush(QColor("#FF5D67"));p.drawPolygon(QPolygon({QPoint(x-6,0),QPoint(x+6,0),QPoint(x,9)}));}
+void TimelineWidget::paintEvent(QPaintEvent*)
+{
+ QPainter p(this);
+ p.fillRect(rect(),QColor("#17191E"));
+ p.fillRect(QRect(0,0,width(),rulerH),QColor("#22252B"));
+ p.fillRect(QRect(0,rulerH,labelW,height()),QColor("#202329"));
+ p.setFont(QFont("Segoe UI",8));
+ qint64 step=scale<28?10000:5000;
+ for(qint64 t=0;t<=duration+30000;t+=step){
+  int x=qRound(timeToX(t));p.setPen(QColor("#3A3E47"));p.drawLine(x,rulerH,x,height());
+  p.setPen(QColor("#AAB1BC"));p.drawText(x+4,18,QString("%1s").arg(t/1000));
+ }
+ for(int r=0;r<tracks.size();++r){
+  const Track &track=tracks[r];int y=rulerH+r*rowH;
+  p.fillRect(QRect(0,y,labelW,rowH),QColor("#22262D"));
+  p.fillRect(QRect(labelW,y,width()-labelW,rowH),QColor("#191C22"));
+  p.setPen(QColor("#D9DEE7"));
+  p.drawText(QRect(6,y,46,rowH),Qt::AlignVCenter|Qt::AlignLeft,
+             QFontMetrics(p.font()).elidedText(track.name,Qt::ElideRight,44));
+  auto control=[&p,y](int x,const QString &glyph,bool active){
+   QRect r(x,y+10,15,22);
+   p.setPen(QPen(active?QColor("#8AB4F8"):QColor("#59616D"),1));
+   p.setBrush(active?QColor("#303B4B"):QColor("#252A32"));
+   p.drawRoundedRect(r,3,3);
+   p.setPen(active?QColor("#DCE8FF"):QColor("#858D99"));
+   p.drawText(r,Qt::AlignCenter,glyph);
+  };
+  control(54,track.locked?QString("L"):QString("U"),track.locked);
+  control(74,track.visible?QString("V"):QString("H"),track.visible);
+  if(track.name.startsWith("Audio",Qt::CaseInsensitive))
+   control(94,track.enabled?QString("♪"):QString("×"),track.enabled);
+  p.setPen(QColor("#30343D"));p.drawLine(0,y+rowH-1,width(),y+rowH-1);
+  for(int j=0;j<track.clips.size();++j){
+   const Clip &clip=track.clips[j];
+   QRect b(qRound(timeToX(clip.start)),y+5,qMax(8,qRound(clip.duration/1000.0*scale)),rowH-10);
+   p.save();
+   if(!track.visible||!track.enabled)p.setOpacity(0.32);
+   p.setPen(QPen(r==selectedTrack&&j==selectedClip?Qt::white:clip.color.lighter(140),1));
+   p.setBrush(clip.color);p.drawRoundedRect(b,4,4);
+   p.setPen(Qt::white);p.drawText(b.adjusted(6,0,-6,0),Qt::AlignVCenter|Qt::AlignLeft,clip.name);
+   p.fillRect(QRect(b.left(),b.top(),4,b.height()),clip.color.lighter(160));
+   p.fillRect(QRect(b.right()-3,b.top(),4,b.height()),clip.color.lighter(160));
+   p.restore();
+  }
+ }
+ if(mode==1&&dragTargetTrack>=0&&dragTargetTrack<tracks.size()&&
+    !tracks[dragTargetTrack].locked&&dragTargetTrack!=selectedTrack&&
+    selectedTrack>=0&&selectedClip>=0&&selectedClip<tracks[selectedTrack].clips.size()){
+  const Clip clip=tracks[selectedTrack].clips[selectedClip];const int y=rulerH+dragTargetTrack*rowH;
+  QRect ghost(qRound(timeToX(clip.start)),y+5,qMax(8,qRound(clip.duration/1000.0*scale)),rowH-10);
+  p.save();p.setOpacity(0.62);p.setPen(QPen(tracks[dragTargetTrack].color.lighter(170),1,Qt::DashLine));
+  p.setBrush(tracks[dragTargetTrack].color);p.drawRoundedRect(ghost,4,4);
+  p.setPen(Qt::white);p.drawText(ghost.adjusted(6,0,-6,0),Qt::AlignVCenter|Qt::AlignLeft,clip.name);p.restore();
+ }
+ int x=qRound(timeToX(playhead));p.setPen(QPen(QColor("#FF5D67"),2));p.drawLine(x,0,x,height());
+ p.setBrush(QColor("#FF5D67"));p.drawPolygon(QPolygon({QPoint(x-6,0),QPoint(x+6,0),QPoint(x,9)}));
+}
 void TimelineWidget::mousePressEvent(QMouseEvent*e){
  if(e->button()!=Qt::LeftButton)return;
  setFocus(Qt::MouseFocusReason);
@@ -54,12 +110,21 @@ void TimelineWidget::mousePressEvent(QMouseEvent*e){
  }
 
  selectedTrack=trackAt(qRound(y));
+ if(selectedTrack>=0&&x<labelW){
+  Track &track=tracks[selectedTrack];
+  const int localX=qRound(x);
+  if(localX>=54&&localX<72)track.locked=!track.locked;
+  else if(localX>=74&&localX<92)track.visible=!track.visible;
+  else if(localX>=94&&localX<112&&track.name.startsWith("Audio",Qt::CaseInsensitive))track.enabled=!track.enabled;
+  else {selectedClip=-1;mode=0;update();return;}
+  selectedClip=-1;mode=0;recordHistory();update();return;
+ }
  selectedClip=clipAt(qRound(x),qRound(y));
  mode=0;
  if(selectedTrack>=0&&selectedClip>=0){
   auto c=tracks[selectedTrack].clips[selectedClip];
   qreal l=timeToX(c.start),r=timeToX(c.start+c.duration);
-  mode=x-l<8?2:(r-x<8?3:1);
+  mode=tracks[selectedTrack].locked?0:(x-l<8?2:(r-x<8?3:1));
   origin=e->pos();
   oldStart=c.start;
   oldDuration=c.duration;
@@ -78,7 +143,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent*e){
   update();
   return;
  }
- if(selectedTrack<0||selectedClip<0||!mode)return;
+ if(selectedTrack<0||selectedClip<0||!mode||tracks[selectedTrack].locked)return;
  Clip&c=tracks[selectedTrack].clips[selectedClip];
  qint64 d=qRound64((e->position().x()-origin.x())*1000/scale);
  if(mode==1){c.start=qMax<qint64>(0,oldStart+d);dragTargetTrack=trackAt(qRound(e->position().y()));}
@@ -89,7 +154,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent*e){
  update();
 }
 void TimelineWidget::mouseReleaseEvent(QMouseEvent*){
- if(mode==1&&dragTargetTrack>=0&&dragTargetTrack<tracks.size()&&dragTargetTrack!=selectedTrack&&selectedTrack>=0&&selectedTrack<tracks.size()&&selectedClip>=0&&selectedClip<tracks[selectedTrack].clips.size()){
+ if(mode==1&&dragTargetTrack>=0&&dragTargetTrack<tracks.size()&&!tracks[dragTargetTrack].locked&&dragTargetTrack!=selectedTrack&&selectedTrack>=0&&selectedTrack<tracks.size()&&selectedClip>=0&&selectedClip<tracks[selectedTrack].clips.size()){
   Clip moved=tracks[selectedTrack].clips.takeAt(selectedClip);
   moved.color=tracks[dragTargetTrack].color;
   tracks[dragTargetTrack].clips.append(moved);
@@ -103,7 +168,7 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent*){
 }
 
 void TimelineWidget::deleteSelectedClip(){
- if(selectedTrack<0||selectedTrack>=tracks.size()||selectedClip<0||selectedClip>=tracks[selectedTrack].clips.size())return;
+ if(selectedTrack<0||selectedTrack>=tracks.size()||tracks[selectedTrack].locked||selectedClip<0||selectedClip>=tracks[selectedTrack].clips.size())return;
  tracks[selectedTrack].clips.removeAt(selectedClip);
  recordHistory();
  selectedClip=-1;
@@ -122,6 +187,19 @@ void TimelineWidget::keyPressEvent(QKeyEvent*e){
 void TimelineWidget::contextMenuEvent(QContextMenuEvent*e){
  const int track=trackAt(e->pos().y());
  const int clip=clipAt(e->pos().x(),e->pos().y());
+ if(track>=0&&clip<0){
+  QMenu menu(this);QAction *lockAction=menu.addAction(tracks[track].locked?tr("Unlock Track"):tr("Lock Track"));
+  QAction *visibilityAction=menu.addAction(tracks[track].visible?tr("Hide Track"):tr("Show Track"));
+  QAction *audioAction=nullptr;
+  if(tracks[track].name.startsWith("Audio",Qt::CaseInsensitive))
+   audioAction=menu.addAction(tracks[track].enabled?tr("Disable Audio Track"):tr("Enable Audio Track"));
+  QAction *chosen=menu.exec(e->globalPos());
+  if(chosen==lockAction)tracks[track].locked=!tracks[track].locked;
+  else if(chosen==visibilityAction)tracks[track].visible=!tracks[track].visible;
+  else if(chosen==audioAction)tracks[track].enabled=!tracks[track].enabled;
+  else {e->accept();return;}
+  recordHistory();update();e->accept();return;
+ }
  if(track<0||clip<0){QWidget::contextMenuEvent(e);return;}
  selectedTrack=track;
  selectedClip=clip;
