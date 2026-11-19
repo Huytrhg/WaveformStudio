@@ -50,6 +50,7 @@ private:
     QLabel *analyzerStatusLabel;
     TimelineWidget *timelineWidget = nullptr;
     QScrollArea *timelineScrollArea = nullptr;
+    QString pendingTimelineVideoPath;
 
     bool isSeeking;
 
