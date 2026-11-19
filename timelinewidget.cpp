@@ -96,6 +96,7 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent*){
   selectedTrack=dragTargetTrack;
   selectedClip=tracks[selectedTrack].clips.size()-1;
  }
+ if(mode==1||mode==2||mode==3)recordHistory();
  mode=0;
  dragTargetTrack=-1;
  update();
@@ -104,12 +105,15 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent*){
 void TimelineWidget::deleteSelectedClip(){
  if(selectedTrack<0||selectedTrack>=tracks.size()||selectedClip<0||selectedClip>=tracks[selectedTrack].clips.size())return;
  tracks[selectedTrack].clips.removeAt(selectedClip);
+ recordHistory();
  selectedClip=-1;
  mode=0;
  dragTargetTrack=-1;
  update();
 }
 void TimelineWidget::keyPressEvent(QKeyEvent*e){
+ if(e->matches(QKeySequence::Undo)){undo();e->accept();return;}
+ if(e->matches(QKeySequence::Redo)||(e->key()==Qt::Key_Y&&(e->modifiers()&Qt::ControlModifier))){redo();e->accept();return;}
  if(e->key()==Qt::Key_Delete||e->key()==Qt::Key_Backspace){
   if(selectedTrack>=0&&selectedClip>=0){deleteSelectedClip();e->accept();return;}
  }
