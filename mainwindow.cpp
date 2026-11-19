@@ -4785,18 +4785,21 @@ void MainWindow::openVideo()
         const QString mediaName = QFileInfo(fileName).fileName();
         bool alreadyListed = false;
         for (int i = 0; i < mediaList->count(); ++i) {
-            if (mediaList->item(i)->text() == mediaName) {
+            if (mediaList->item(i)->data(Qt::UserRole).toString() == fileName) {
                 mediaList->setCurrentRow(i);
                 alreadyListed = true;
                 break;
             }
         }
         if (!alreadyListed) {
-            mediaList->addItem(mediaName);
-            mediaList->setCurrentRow(mediaList->count() - 1);
+            auto *item = new QListWidgetItem(mediaName, mediaList);
+            item->setData(Qt::UserRole, fileName);
+            item->setToolTip(fileName);
+            mediaList->setCurrentItem(item);
         }
     }
 
+    pendingTimelineVideoPath = fileName;
     player->setSource(QUrl::fromLocalFile(fileName));
 
     spectrumTimer->stop();
@@ -4867,6 +4870,16 @@ void MainWindow::updateDuration(qint64 duration)
     positionSlider->setEnabled(duration > 0);
 
     updateTimeLabel(player->position(), duration);
+
+    // Add each imported source to Video 1 only after Qt reports its real duration.
+    if (timelineWidget && duration > 0 && !pendingTimelineVideoPath.isEmpty() &&
+        player->source().toLocalFile() == pendingTimelineVideoPath) {
+        timelineWidget->addImportedVideoClip(
+            pendingTimelineVideoPath,
+            QFileInfo(pendingTimelineVideoPath).fileName(),
+            duration);
+        pendingTimelineVideoPath.clear();
+    }
     if (timelineWidget) timelineWidget->setTimelineDuration(duration);
 }
 
