@@ -3585,9 +3585,10 @@ MainWindow::MainWindow(QWidget *parent)
     QHBoxLayout *timelineHeader=new QHBoxLayout;
     QLabel *timelineTitle=new QLabel("TIMELINE");timelineTitle->setObjectName("sectionTitle");
     QPushButton *addTrackButton=new QPushButton("+ Add Track"),*addClipButton=new QPushButton("+ Add Clip");
+    QPushButton *undoTimelineButton=new QPushButton("Undo"),*redoTimelineButton=new QPushButton("Redo");
     QPushButton *zoomOutButton=new QPushButton("−"),*zoomInButton=new QPushButton("+");
     timelineHeader->addWidget(timelineTitle);timelineHeader->addStretch();
-    timelineHeader->addWidget(addClipButton);timelineHeader->addWidget(addTrackButton);
+    timelineHeader->addWidget(undoTimelineButton);timelineHeader->addWidget(redoTimelineButton);timelineHeader->addWidget(addClipButton);timelineHeader->addWidget(addTrackButton);
     timelineHeader->addWidget(zoomOutButton);timelineHeader->addWidget(zoomInButton);
     timelineLayout->addLayout(timelineHeader);
     timelineWidget=new TimelineWidget;timelineScrollArea=new QScrollArea;
@@ -3600,6 +3601,10 @@ MainWindow::MainWindow(QWidget *parent)
     verticalWorkspaceSplitter->setSizes({560,250});rootLayout->addWidget(verticalWorkspaceSplitter,1);
     connect(addTrackButton,&QPushButton::clicked,this,[this](){bool ok=false;QString n=QInputDialog::getText(this,"Add Track","Track name:",QLineEdit::Normal,QString(),&ok);if(ok&&!n.trimmed().isEmpty())timelineWidget->addTrack(n.trimmed());});
     connect(addClipButton,&QPushButton::clicked,this,[this](){QString path=QFileDialog::getOpenFileName(this,"Add Timeline Clip",QDir::homePath(),"Media Files (*.mp4 *.m4v *.mov *.mkv *.avi *.wmv *.mp3 *.wav *.aac);;All Files (*.*)");if(path.isEmpty())return;QString t=(path.endsWith(".mp3",Qt::CaseInsensitive)||path.endsWith(".wav",Qt::CaseInsensitive)||path.endsWith(".aac",Qt::CaseInsensitive))?"Audio":"Video";timelineWidget->addClip(t,QFileInfo(path).fileName(),player->duration()>0?player->duration():10000);});
+    undoTimelineButton->setEnabled(false);redoTimelineButton->setEnabled(false);
+    connect(undoTimelineButton,&QPushButton::clicked,timelineWidget,&TimelineWidget::undo);
+    connect(redoTimelineButton,&QPushButton::clicked,timelineWidget,&TimelineWidget::redo);
+    connect(timelineWidget,&TimelineWidget::historyChanged,this,[undoTimelineButton,redoTimelineButton](bool canUndo,bool canRedo){undoTimelineButton->setEnabled(canUndo);redoTimelineButton->setEnabled(canRedo);});
     connect(zoomInButton,&QPushButton::clicked,this,[this](){timelineWidget->zoomBy(1.25);});
     connect(zoomOutButton,&QPushButton::clicked,this,[this](){timelineWidget->zoomBy(0.8);});
     connect(timelineWidget,&TimelineWidget::seekRequested,player,&QMediaPlayer::setPosition);
