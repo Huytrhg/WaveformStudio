@@ -2598,6 +2598,7 @@ MainWindow::MainWindow(QWidget *parent)
     projectLayout->addWidget(projectImportVideoButton);
     QHBoxLayout *mediaActionsLayout = new QHBoxLayout;
     QPushButton *addMediaToTimelineButton = new QPushButton("Add to Timeline", projectPage);
+    addMediaToTimelineButton->setObjectName("addMediaToTimelineButton");
     QPushButton *removeProjectMediaButton = new QPushButton("Remove", projectPage);
     addMediaToTimelineButton->setEnabled(false);
     removeProjectMediaButton->setEnabled(false);
@@ -4944,6 +4945,10 @@ void MainWindow::updateDuration(qint64 duration)
             QListWidgetItem *item = mediaList->item(i);
             if (item->data(Qt::UserRole).toString() == currentPath) {
                 item->setData(Qt::UserRole + 1, duration);
+                if (item == mediaList->currentItem()) {
+                    if (QPushButton *addButton = findChild<QPushButton *>("addMediaToTimelineButton"))
+                        addButton->setEnabled(duration > 0);
+                }
                 break;
             }
         }
