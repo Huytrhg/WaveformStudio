@@ -2596,6 +2596,22 @@ MainWindow::MainWindow(QWidget *parent)
 
     QPushButton *projectImportVideoButton = new QPushButton("+ Import Video", projectPage);
     projectLayout->addWidget(projectImportVideoButton);
+    QHBoxLayout *mediaActionsLayout = new QHBoxLayout;
+    QPushButton *addMediaToTimelineButton = new QPushButton("Add to Timeline", projectPage);
+    QPushButton *removeProjectMediaButton = new QPushButton("Remove", projectPage);
+    addMediaToTimelineButton->setEnabled(false);
+    removeProjectMediaButton->setEnabled(false);
+    mediaActionsLayout->addWidget(addMediaToTimelineButton);
+    mediaActionsLayout->addWidget(removeProjectMediaButton);
+    projectLayout->addLayout(mediaActionsLayout);
+    auto updateMediaActionState = [projectMediaList, addMediaToTimelineButton, removeProjectMediaButton]() {
+        QListWidgetItem *item = projectMediaList->currentItem();
+        const bool valid = item && item->data(Qt::UserRole).isValid();
+        removeProjectMediaButton->setEnabled(valid);
+        addMediaToTimelineButton->setEnabled(valid && item->data(Qt::UserRole + 1).toLongLong() > 0);
+    };
+    connect(projectMediaList, &QListWidget::currentRowChanged, this,
+            [updateMediaActionState](int) { updateMediaActionState(); });
 
     QWidget *effectsPage = new QWidget(libraryTabs);
     QVBoxLayout *effectsPageLayout = new QVBoxLayout(effectsPage);
@@ -2631,6 +2647,48 @@ MainWindow::MainWindow(QWidget *parent)
 
     connect(projectImportVideoButton, &QPushButton::clicked,
             this, &MainWindow::openVideo);
+    const auto addSelectedProjectMediaToTimeline = [this, projectMediaList, updateMediaActionState]() {
+        QListWidgetItem *item = projectMediaList->currentItem();
+        if (!item || !item->data(Qt::UserRole).isValid()) return;
+        const QString path = item->data(Qt::UserRole).toString();
+        const qint64 mediaDuration = item->data(Qt::UserRole + 1).toLongLong();
+        if (mediaDuration <= 0) {
+            QMessageBox::warning(this, "Media not ready",
+                                 "The media duration is not available yet. Load the video first.");
+            return;
+        }
+        if (!timelineWidget->addMediaClip("Video", path, item->text(), mediaDuration)) {
+            QMessageBox::warning(this, "Track locked",
+                                 "Video 1 is locked. Unlock the track before adding media.");
+            return;
+        }
+        statusBar()->showMessage("Added to Timeline: " + item->text(), 4000);
+        updateMediaActionState();
+    };
+    connect(addMediaToTimelineButton, &QPushButton::clicked,
+            this, addSelectedProjectMediaToTimeline);
+    connect(projectMediaList, &QListWidget::itemDoubleClicked, this,
+            [addSelectedProjectMediaToTimeline](QListWidgetItem *) { addSelectedProjectMediaToTimeline(); });
+    connect(removeProjectMediaButton, &QPushButton::clicked, this,
+            [this, projectMediaList, updateMediaActionState]() {
+        QListWidgetItem *item = projectMediaList->currentItem();
+        if (!item || !item->data(Qt::UserRole).isValid()) return;
+        const QString path = item->data(Qt::UserRole).toString();
+        const QString name = item->text();
+        if (QMessageBox::question(this, "Remove Media",
+                "Remove \"" + name + "\" from this Project?\n\n"
+                "Files on disk and existing Timeline clips will not be deleted.",
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+            return;
+        if (pendingTimelineVideoPath == path) pendingTimelineVideoPath.clear();
+        delete projectMediaList->takeItem(projectMediaList->row(item));
+        if (projectMediaList->count() == 0) {
+            auto *placeholder = new QListWidgetItem("No media imported yet", projectMediaList);
+            placeholder->setFlags(Qt::NoItemFlags);
+        }
+        updateMediaActionState();
+        statusBar()->showMessage("Removed from Project: " + name, 4000);
+    });
 
     // ---------------------------------------------------------
     // CENTER: VIDEO PREVIEW
@@ -4792,6 +4850,7 @@ void MainWindow::openVideo()
         for (int i = 0; i < mediaList->count(); ++i) {
             if (mediaList->item(i)->data(Qt::UserRole).toString() == fileName) {
                 mediaList->setCurrentRow(i);
+                mediaList->item(i)->setData(Qt::UserRole + 2, QString("Video"));
                 alreadyListed = true;
                 break;
             }
@@ -4799,6 +4858,8 @@ void MainWindow::openVideo()
         if (!alreadyListed) {
             auto *item = new QListWidgetItem(mediaName, mediaList);
             item->setData(Qt::UserRole, fileName);
+            item->setData(Qt::UserRole + 1, qint64(0));
+            item->setData(Qt::UserRole + 2, QString("Video"));
             item->setToolTip(fileName);
             mediaList->setCurrentItem(item);
         }
@@ -4876,6 +4937,17 @@ void MainWindow::updateDuration(qint64 duration)
 
     updateTimeLabel(player->position(), duration);
 
+    // Cache the source duration on its Project Media item for later Timeline insertion.
+    if (QListWidget *mediaList = findChild<QListWidget *>("projectMediaList")) {
+        const QString currentPath = player->source().toLocalFile();
+        for (int i = 0; i < mediaList->count(); ++i) {
+            QListWidgetItem *item = mediaList->item(i);
+            if (item->data(Qt::UserRole).toString() == currentPath) {
+                item->setData(Qt::UserRole + 1, duration);
+                break;
+            }
+        }
+    }
     // Add each imported source to Video 1 only after Qt reports its real duration.
     if (timelineWidget && duration > 0 && !pendingTimelineVideoPath.isEmpty() &&
         player->source().toLocalFile() == pendingTimelineVideoPath) {
