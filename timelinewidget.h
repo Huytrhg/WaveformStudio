@@ -5,7 +5,7 @@
 #include <QVector>
 class TimelineWidget:public QWidget{
  Q_OBJECT
-public: explicit TimelineWidget(QWidget* p=nullptr); bool canUndo()const; bool canRedo()const; void undo(); void redo(); void addTrack(const QString& name=QString()); void addClip(const QString& track,const QString& name,qint64 duration); void addImportedVideoClip(const QString& sourcePath,const QString& name,qint64 duration); void setPlayhead(qint64); void setTimelineDuration(qint64); void zoomBy(qreal);
+public: explicit TimelineWidget(QWidget* p=nullptr); bool canUndo()const; bool canRedo()const; void undo(); void redo(); void addTrack(const QString& name=QString()); void addClip(const QString& track,const QString& name,qint64 duration); void addImportedVideoClip(const QString& sourcePath,const QString& name,qint64 duration); bool addMediaClip(const QString& track,const QString& sourcePath,const QString& name,qint64 duration); void setPlayhead(qint64); void setTimelineDuration(qint64); void zoomBy(qreal);
 signals: void seekRequested(qint64); void historyChanged(bool canUndo,bool canRedo);
 protected: void paintEvent(QPaintEvent*)override; void mousePressEvent(QMouseEvent*)override; void mouseMoveEvent(QMouseEvent*)override; void mouseReleaseEvent(QMouseEvent*)override; void keyPressEvent(QKeyEvent*)override; void contextMenuEvent(QContextMenuEvent*)override;
 private:
