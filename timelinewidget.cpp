@@ -12,6 +12,19 @@ TimelineWidget::TimelineWidget(QWidget*p):QWidget(p){setMouseTracking(true);setF
 void TimelineWidget::addTrack(const QString&n){static const QColor cs[]={QColor("#345B78"),QColor("#386B55"),QColor("#59478A"),QColor("#805A35"),QColor("#476D78")};Track t;t.name=n.isEmpty()?QString("Track %1").arg(tracks.size()+1):n;t.color=cs[tracks.size()%5];tracks.append(t);recordHistory();resizeContent();update();}
 void TimelineWidget::addClip(const QString&t,const QString&n,qint64 d){int i=-1;for(int j=0;j<tracks.size();++j)if(tracks[j].name.startsWith(t,Qt::CaseInsensitive)){i=j;break;}if(i<0){addTrack(t);i=tracks.size()-1;}if(tracks[i].locked)return;Clip c;c.name=n;c.duration=qMax<qint64>(500,d);c.color=tracks[i].color;tracks[i].clips.append(c);duration=qMax(duration,c.duration+10000);recordHistory();resizeContent();update();}
 void TimelineWidget::addImportedVideoClip(const QString&path,const QString&name,qint64 d){if(path.isEmpty()||d<=0)return;int i=-1;for(int j=0;j<tracks.size();++j)if(tracks[j].name.compare("Video 1",Qt::CaseInsensitive)==0){i=j;break;}if(i<0){addTrack("Video 1");i=tracks.size()-1;}if(tracks[i].locked)return;for(const Clip&existing:tracks[i].clips)if(existing.sourcePath==path)return;Clip c;c.name=name;c.sourcePath=path;c.duration=qMax<qint64>(1,d);c.color=tracks[i].color;for(const Clip&existing:tracks[i].clips)c.start=qMax(c.start,existing.start+existing.duration);tracks[i].clips.append(c);duration=qMax(duration,c.start+c.duration+10000);recordHistory();resizeContent();update();}
+bool TimelineWidget::addMediaClip(const QString&trackName,const QString&path,const QString&name,qint64 d){
+ if(path.isEmpty()||d<=0)return false;
+ int i=-1;
+ for(int j=0;j<tracks.size();++j)
+  if(tracks[j].name.startsWith(trackName,Qt::CaseInsensitive)){i=j;break;}
+ if(i<0){addTrack(trackName);i=tracks.size()-1;}
+ if(tracks[i].locked)return false;
+ Clip clip;clip.name=name;clip.sourcePath=path;clip.duration=qMax<qint64>(1,d);clip.color=tracks[i].color;
+ for(const Clip&existing:tracks[i].clips)clip.start=qMax(clip.start,existing.start+existing.duration);
+ tracks[i].clips.append(clip);duration=qMax(duration,clip.start+clip.duration+10000);
+ recordHistory();resizeContent();update();return true;
+}
+
 bool TimelineWidget::canUndo()const{return historyIndex>0;}
 bool TimelineWidget::canRedo()const{return historyIndex>=0&&historyIndex+1<history.size();}
 void TimelineWidget::recordHistory(){State s;s.tracks=tracks;s.duration=duration;if(historyIndex>=0&&historyIndex<history.size()){history.resize(historyIndex+1);}history.append(s);if(history.size()>100)history.removeFirst();historyIndex=history.size()-1;emit historyChanged(canUndo(),canRedo());}
